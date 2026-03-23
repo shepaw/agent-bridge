@@ -194,7 +194,21 @@ class ACPAgentServer:
             self._ws_host = f"localhost:{self._port}"
 
         print(f"[ACP] New WebSocket connection from {request.remote}")
+        
+        # Try to authenticate from HTTP Authorization header
+        # (Shepaw sends Authorization: Bearer <token> instead of auth.authenticate message)
         authenticated = False
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]  # Strip "Bearer " prefix
+            if self.token and token == self.token:
+                print(f"[ACP] Pre-authenticated via Authorization header")
+                authenticated = True
+            elif not self.token:
+                print(f"[ACP] No token required (server token is empty)")
+                authenticated = True
+            else:
+                print(f"[ACP] Authorization header token mismatch")
 
         try:
             async for msg in ws:
@@ -215,7 +229,10 @@ class ACPAgentServer:
                     if msg_id is not None and method is not None:
                         # Request from App
                         if method == "auth.authenticate":
-                            authenticated, response = self._handle_auth(msg_id, params)
+                            # Handle both: fresh auth or double-check from already-authenticated client
+                            new_auth, response = self._handle_auth(msg_id, params)
+                            if new_auth:
+                                authenticated = True
                             await ws.send_json(response)
                         elif method == "ping":
                             await ws.send_json(jsonrpc_response(msg_id, result={"pong": True}))
@@ -337,6 +354,7 @@ class ACPAgentServer:
         task_id = ctx.task_id
         session_id = ctx.session_id
         message = params.get("message", "")
+        print(f"[ACP] _run_chat_task started: task_id={task_id}, msg_len={len(message)}")
         history = params.get("history")
         is_history_supplement = params.get("history_supplement", False)
         additional_history = params.get("additional_history")
@@ -373,9 +391,11 @@ class ACPAgentServer:
 
         try:
             # task.started
+            print(f"[ACP] Sending task.started for task_id={task_id}")
             await ctx.started()
 
             # Call the user's on_chat implementation
+            print(f"[ACP] Calling on_chat for task_id={task_id}")
             await self.on_chat(
                 ctx,
                 message,
@@ -393,12 +413,14 @@ class ACPAgentServer:
             )
 
             # Send final text marker
+            print(f"[ACP] Sending final text for task_id={task_id}")
             await ctx.send_text_final()
 
             # task.completed
+            print(f"[ACP] Sending task.completed for task_id={task_id}")
             await ctx.completed()
 
-            print(f"  Task {task_id} completed successfully")
+            print(f"[ACP] Task {task_id} completed successfully")
 
         except asyncio.CancelledError:
             print(f"  Task {task_id} cancelled")
@@ -542,7 +564,7 @@ class ACPAgentServer:
         if self.tunnel_config:
             asyncio.run(self._run_async(app, host, port))
         else:
-            web.run_app(app, host=host, port=port, print=None)
+            web.run_app(app, host=host, port=port)
 
     def run_with_tunnel(
         self,
