@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/shepaw",
+  "version": "2026.3.13",
+  "description": "OpenClaw Shepaw channel plugin — remote LLM agent via ACP",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "shepaw",
+      "label": "Shepaw",
+      "selectionLabel": "Shepaw (Remote LLM Agent)",
+      "docsPath": "/channels/shepaw",
+      "blurb": "Connect OpenClaw as a remote LLM agent in the Shepaw app via ACP WebSocket.",
+      "order": 90
+    },
+    "install": {
+      "npmSpec": "@openclaw/shepaw",
+      "localPath": "extensions/shepaw",
+      "defaultChoice": "npm"
+    }
+  }
+}
