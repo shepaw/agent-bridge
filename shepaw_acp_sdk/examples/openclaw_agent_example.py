@@ -21,22 +21,26 @@ Architecture
 
 Usage
 -----
-1. Start OpenClaw Gateway (in a separate terminal)::
+1. Install::
+
+       pip install shepaw-acp-sdk
+
+2. Start OpenClaw Gateway (in a separate terminal)::
 
        openclaw gateway --port 18789
 
-2. Set environment variables (optional — defaults work for local setup)::
+3. Set environment variables (optional — defaults work for local setup)::
 
        export OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
        export OPENCLAW_GATEWAY_TOKEN=your-openclaw-token
        export OPENCLAW_SESSION_KEY=acp:shepaw-bridge   # optional
        export PAW_ACP_TOKEN=your-shepaw-agent-token    # optional
 
-3. Run this agent::
+4. Run this agent::
 
        python openclaw_agent_example.py
 
-4. Connect from the Shepaw app:
+5. Connect from the Shepaw app:
 
        WebSocket URL: ws://<your-local-ip>:8080/acp/ws
        Token:         (your PAW_ACP_TOKEN, or empty if not set)
