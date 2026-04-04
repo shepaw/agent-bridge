@@ -472,6 +472,7 @@ class OpenClawChannel:
         try:
             async for msg in self._ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    print(f"[OpenClaw][RAW] {msg.data[:300]}", flush=True)
                     try:
                         data = json.loads(msg.data)
                     except json.JSONDecodeError:
@@ -563,6 +564,7 @@ class OpenClawChannel:
                 # active queue when the gateway omits sessionKey in the payload.
                 session_key = payload.get("sessionKey", "")
                 queue = self._chat_queues.get(session_key)
+                print(f"[OpenClaw][CHAT] sessionKey={session_key!r} queues={list(self._chat_queues.keys())} matched={queue is not None}", flush=True)
                 if queue is None and self._chat_queues:
                     if len(self._chat_queues) == 1:
                         queue = next(iter(self._chat_queues.values()))
