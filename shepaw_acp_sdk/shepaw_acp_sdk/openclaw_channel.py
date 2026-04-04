@@ -237,7 +237,8 @@ class OpenClawChannel:
 
             # Wait for the "accepted" ack from the Gateway
             try:
-                await asyncio.wait_for(req_future, timeout=self.config.request_timeout)
+                ack = await asyncio.wait_for(req_future, timeout=self.config.request_timeout)
+                log.debug("[OpenClaw] chat.send ack: %s", ack)
             except asyncio.TimeoutError:
                 self._pending.pop(req_id, None)
                 raise RuntimeError(
@@ -558,10 +559,35 @@ class OpenClawChannel:
 
             if evt == "chat":
                 # Streaming chat reply
+                # Try exact session_key match first; fall back to the only
+                # active queue when the gateway omits sessionKey in the payload.
                 session_key = payload.get("sessionKey", "")
                 queue = self._chat_queues.get(session_key)
+                if queue is None and self._chat_queues:
+                    if len(self._chat_queues) == 1:
+                        queue = next(iter(self._chat_queues.values()))
+                        log.debug(
+                            "[OpenClaw] chat event sessionKey=%r not matched, "
+                            "routing to sole active queue",
+                            session_key,
+                        )
+                    else:
+                        log.warning(
+                            "[OpenClaw] chat event sessionKey=%r not matched "
+                            "among %d queues: %s",
+                            session_key,
+                            len(self._chat_queues),
+                            list(self._chat_queues.keys()),
+                        )
                 if queue is not None:
                     queue.put_nowait(payload)
+                else:
+                    log.warning(
+                        "[OpenClaw] chat event dropped — no active queue "
+                        "(sessionKey=%r, payload keys=%s)",
+                        session_key,
+                        list(payload.keys()),
+                    )
 
             elif evt == "tick":
                 # Heartbeat – nothing to do
@@ -572,7 +598,7 @@ class OpenClawChannel:
                 log.debug("[OpenClaw] Unexpected connect.challenge in recv_loop")
 
             else:
-                log.debug("[OpenClaw] Unhandled event: %s", evt)
+                log.debug("[OpenClaw] Unhandled event: %s payload=%r", evt, payload)
 
         else:
             log.debug("[OpenClaw] Unknown frame type: %s", frame_type)
