@@ -18,6 +18,12 @@ Architecture
                            ▼             ▼              ▼
                        Discord      Telegram      (other channels)
 
+With optional Channel tunnel (for public internet access):
+
+    Shepaw App  <──ACP WS──>  Channel Service  <──tunnel──>  This Agent
+                                                                   │
+                                                             OpenClaw Gateway
+
 
 Usage
 -----
@@ -29,12 +35,22 @@ Usage
 
        openclaw gateway --port 18789
 
-3. Set environment variables (optional — defaults work for local setup)::
+3. Set environment variables::
 
-       export OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+       # OpenClaw Gateway
+       export OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789   # default
        export OPENCLAW_GATEWAY_TOKEN=your-openclaw-token
-       export OPENCLAW_SESSION_KEY=acp:shepaw-bridge   # optional
-       export PAW_ACP_TOKEN=your-shepaw-agent-token    # optional
+       export OPENCLAW_SESSION_KEY=acp:shepaw-bridge       # optional
+
+       # ACP agent token (optional)
+       export PAW_ACP_TOKEN=your-shepaw-agent-token
+
+       # Channel tunnel for public internet access (optional)
+       # Leave unset to run in local-only mode
+       export PAW_ACP_TUNNEL_SERVER_URL=https://channel.example.com
+       export PAW_ACP_TUNNEL_CHANNEL_ID=ch_abc123
+       export PAW_ACP_TUNNEL_SECRET=ch_sec_xyz
+       export PAW_ACP_TUNNEL_ENDPOINT=myagent              # optional
 
 4. Run this agent::
 
@@ -42,8 +58,11 @@ Usage
 
 5. Connect from the Shepaw app:
 
+   Local mode:
        WebSocket URL: ws://<your-local-ip>:8080/acp/ws
-       Token:         (your PAW_ACP_TOKEN, or empty if not set)
+
+   Tunnel mode (public internet):
+       WebSocket URL: wss://channel.example.com/c/myagent/acp/ws
 
 Every message you send from Shepaw will be forwarded to OpenClaw, and the
 OpenClaw reply streams back in real time.
@@ -51,7 +70,7 @@ OpenClaw reply streams back in real time.
 
 import os
 
-from shepaw_acp_sdk import ACPAgentServer, TaskContext
+from shepaw_acp_sdk import ACPAgentServer, ChannelTunnelConfig, TaskContext
 from shepaw_acp_sdk.openclaw_channel import OpenClawChannel, OpenClawChannelConfig
 
 
@@ -119,6 +138,32 @@ def _openclaw_config_from_env() -> OpenClawChannelConfig:
     )
 
 
+def _tunnel_config_from_env() -> ChannelTunnelConfig | None:
+    """Build a :class:`ChannelTunnelConfig` from environment variables.
+
+    Required (all three must be set to enable tunnel):
+        PAW_ACP_TUNNEL_SERVER_URL  — Channel Service base URL
+        PAW_ACP_TUNNEL_CHANNEL_ID  — channel ID
+        PAW_ACP_TUNNEL_SECRET      — channel secret
+
+    Optional:
+        PAW_ACP_TUNNEL_ENDPOINT    — short-name endpoint shown in Shepaw UI
+    """
+    server_url = os.environ.get("PAW_ACP_TUNNEL_SERVER_URL", "")
+    channel_id = os.environ.get("PAW_ACP_TUNNEL_CHANNEL_ID", "")
+    secret = os.environ.get("PAW_ACP_TUNNEL_SECRET", "")
+
+    if not (server_url and channel_id and secret):
+        return None
+
+    return ChannelTunnelConfig(
+        server_url=server_url,
+        channel_id=channel_id,
+        secret=secret,
+        channel_endpoint=os.environ.get("PAW_ACP_TUNNEL_ENDPOINT", ""),
+    )
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -127,6 +172,7 @@ if __name__ == "__main__":
     TOKEN = os.environ.get("PAW_ACP_TOKEN", "")
 
     openclaw_config = _openclaw_config_from_env()
+    tunnel_config = _tunnel_config_from_env()
 
     print(f"[main] OpenClaw Gateway: {openclaw_config.gateway_url}")
     if openclaw_config.gateway_token:
@@ -139,5 +185,14 @@ if __name__ == "__main__":
         token=TOKEN,
         description="Bridges Shepaw users to an OpenClaw Gateway",
     )
+
+    if tunnel_config:
+        # Mode: OpenClaw channel + public tunnel
+        print("[main] Tunnel enabled — agent will be reachable from the internet.")
+        agent.tunnel_config = tunnel_config
+    else:
+        print("[main] No tunnel config — running in local-only mode.")
+        print("       Set PAW_ACP_TUNNEL_SERVER_URL, PAW_ACP_TUNNEL_CHANNEL_ID,")
+        print("       and PAW_ACP_TUNNEL_SECRET to enable public access.")
 
     agent.run_with_openclaw_channel(openclaw_config, port=PORT)
