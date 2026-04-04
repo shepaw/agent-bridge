@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shepaw-acp-sdk"
+version = "0.1.0"
+description = "Python SDK for building ACP agents that integrate with the Shepaw app"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Shepaw Team"},
+]
+keywords = [
+    "acp",
+    "agent",
+    "shepaw",
+    "websocket",
+    "llm",
+    "ai",
+    "chatbot",
+    "json-rpc",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Communications :: Chat",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+dependencies = [
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "build",
+    "twine",
+]
+openai = [
+    "openai>=1.0",
+]
+anthropic = [
+    "anthropic>=0.20",
+]
+
+[project.urls]
+Homepage = "https://github.com/shepaw/agent-bridge"
+Documentation = "https://github.com/shepaw/agent-bridge/blob/main/shepaw_acp_sdk/API_REFERENCE.md"
+Repository = "https://github.com/shepaw/agent-bridge"
+"Bug Tracker" = "https://github.com/shepaw/agent-bridge/issues"
+
+[tool.setuptools.packages.find]
+include = ["shepaw_acp_sdk*"]
+
+[tool.setuptools.package-data]
+shepaw_acp_sdk = ["py.typed"]

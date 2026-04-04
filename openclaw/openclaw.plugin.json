@@ -1,9 +1,0 @@
-{
-  "id": "shepaw",
-  "channels": ["shepaw"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

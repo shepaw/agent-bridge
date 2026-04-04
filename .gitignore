@@ -1,0 +1,25 @@
+# Secrets
+.secret
+*.env
+.env*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+
+# Node.js
+node_modules/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
