@@ -37,49 +37,43 @@ except ImportError:
     print("Error: aiohttp is required. Install it with: pip install aiohttp")
     sys.exit(1)
 
-# Reuse ACP infrastructure from acp_agent.py
-# Use importlib to load acp_agent without triggering its llm_agent dependency
-def _import_acp_agent():
-    """Import acp_agent.py, mocking its llm_agent dependency if needed."""
-    import importlib
-    import types
+# Add SDK to path if running from the claude_code/ directory
+_sdk_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shepaw_acp_sdk")
+if os.path.isdir(_sdk_dir) and _sdk_dir not in sys.path:
+    sys.path.insert(0, os.path.abspath(_sdk_dir))
 
-    # If llm_agent doesn't exist, create a stub so acp_agent can import
-    if "llm_agent" not in sys.modules:
-        try:
-            import llm_agent  # noqa: F401
-        except (ImportError, ModuleNotFoundError):
-            stub = types.ModuleType("llm_agent")
-            # Add stub classes/functions that acp_agent imports
-            stub.AgentConfig = type("AgentConfig", (), {})
-            stub.ConversationManager = type("ConversationManager", (), {})
-            stub.LLMProvider = type("LLMProvider", (), {})
-            stub.OpenAIProvider = type("OpenAIProvider", (), {})
-            stub.ClaudeProvider = type("ClaudeProvider", (), {})
-            stub.GLMProvider = type("GLMProvider", (), {})
-            stub.verify_token = lambda *a, **k: None
-            stub.resolve_api_key = lambda *a, **k: ""
-            stub.resolve_api_base = lambda *a, **k: ""
-            sys.modules["llm_agent"] = stub
+try:
+    from shepaw_acp_sdk import (
+        jsonrpc_response,
+        jsonrpc_notification,
+        jsonrpc_request,
+        ACPDirectiveStreamParser,
+        ACPTextChunk,
+        ACPDirective,
+        acp_directive_to_notification,
+    )
+except ImportError as e:
+    print(f"Error: shepaw_acp_sdk not found. Make sure it is installed or\n"
+          f"located at ../shepaw_acp_sdk relative to this file.\n"
+          f"Details: {e}")
+    sys.exit(1)
 
-    # Ensure demo directory is in path
-    demo_dir = os.path.dirname(os.path.abspath(__file__))
-    if demo_dir not in sys.path:
-        sys.path.insert(0, demo_dir)
+# Interactive system prompt: instructs Claude Code to use <<<directive>>> blocks
+# so the Flutter app can render rich UI components (buttons, forms, etc.).
+ACP_INTERACTIVE_SYSTEM_PROMPT = """You can embed interactive UI directives inside your replies using the following syntax:
 
-    import acp_agent
-    return acp_agent
+<<<directive
+{"type": "<directive_type>", ...}
+>>>
 
-_acp = _import_acp_agent()
-jsonrpc_response = _acp.jsonrpc_response
-jsonrpc_notification = _acp.jsonrpc_notification
-jsonrpc_request = _acp.jsonrpc_request
-ACPDirectiveStreamParser = _acp.ACPDirectiveStreamParser
-ACPTextChunk = _acp.ACPTextChunk
-ACPDirective = _acp.ACPDirective
-acp_directive_to_notification = _acp.acp_directive_to_notification
-ACP_INTERACTIVE_SYSTEM_PROMPT = _acp.ACP_INTERACTIVE_SYSTEM_PROMPT
-del _acp
+Supported directive types:
+- confirm: ask user to confirm an action  (fields: prompt, actions)
+- select:  present a list of choices       (fields: prompt, options)
+- form:    collect structured user input   (fields: title, fields)
+- file:    display / reference a file      (fields: filename, mime_type, url)
+
+Only use directives when you genuinely need structured input from the user.
+Outside of directive blocks, reply in normal Markdown."""
 
 
 # ==================== Configuration ====================
@@ -99,6 +93,7 @@ class ClaudeCodeConfig:
     system_prompt: str = ""
     interactive: bool = True
     max_history: int = 50
+    cli_path: str = ""  # Custom CLI executable (e.g. "claude-internal")
 
 
 # ==================== SDK Backend ====================
@@ -229,7 +224,8 @@ class ClaudeCodeCLIBackend:
         system_prompt: str = "",
     ) -> AsyncIterator[dict]:
         """Stream Claude Code CLI response by parsing stdout JSON stream."""
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json"]
+        cli = self.config.cli_path or "claude"
+        cmd = [cli, "-p", prompt, "--output-format", "stream-json"]
 
         if self.config.model:
             cmd.extend(["--model", self.config.model])
@@ -337,17 +333,27 @@ class ClaudeCodeProvider:
         except ImportError:
             pass
 
-        # Fallback to CLI
+        # Fallback to CLI: try configured path, then common names
         import shutil
-        if shutil.which("claude"):
-            backend = ClaudeCodeCLIBackend(self.config)
-            print(f"  Backend:   CLI (claude subprocess)")
-            return backend
+        cli_candidates = []
+        if self.config.cli_path:
+            cli_candidates.append(self.config.cli_path)
+        cli_candidates.extend(["claude", "claude-internal"])
+
+        for cli in cli_candidates:
+            if shutil.which(cli):
+                # Store resolved name back into config for CLIBackend to use
+                if not self.config.cli_path:
+                    self.config.cli_path = cli
+                backend = ClaudeCodeCLIBackend(self.config)
+                print(f"  Backend:   CLI ({cli})")
+                return backend
 
         raise RuntimeError(
             "Neither claude-agent-sdk nor claude CLI found.\n"
             "Install SDK: pip install claude-agent-sdk\n"
-            "Or install CLI: npm install -g @anthropic-ai/claude-code"
+            "Or install CLI: npm install -g @anthropic-ai/claude-code\n"
+            "Or specify custom CLI: --cli-path /path/to/claude-internal"
         )
 
     @property
@@ -832,6 +838,11 @@ Flutter app: Add ACP agent at ws://<IP>:8090/acp/ws
         "--no-interactive", action="store_true", default=False,
         help="Disable interactive directive parsing",
     )
+    parser.add_argument(
+        "--cli-path", default=os.getenv("CLAUDE_CLI_PATH", ""),
+        help="Path or name of the Claude Code CLI executable "
+             "(default: auto-detect 'claude' or 'claude-internal', or CLAUDE_CLI_PATH env var)",
+    )
 
     return parser.parse_args()
 
@@ -869,6 +880,7 @@ def main():
         agent_name=args.name,
         system_prompt=system_prompt,
         interactive=interactive,
+        cli_path=args.cli_path or "",
     )
 
     # Print startup info
