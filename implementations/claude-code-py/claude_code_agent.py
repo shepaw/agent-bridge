@@ -48,8 +48,15 @@ except ImportError:
     print("Error: aiohttp is required. Install it with: pip install aiohttp")
     sys.exit(1)
 
-# Add SDK to path if running from the claude_code/ directory
-_sdk_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shepaw_acp_sdk")
+# Add the sibling Python SDK to sys.path so the file runs directly from
+# `implementations/claude-code-py/` without `pip install`. New layout:
+#   agent-bridge/
+#     sdks/shepaw-acp-sdk-python/     ← package root
+#     implementations/claude-code-py/ ← this file
+_sdk_dir = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "..", "sdks", "shepaw-acp-sdk-python",
+)
 if os.path.isdir(_sdk_dir) and _sdk_dir not in sys.path:
     sys.path.insert(0, os.path.abspath(_sdk_dir))
 
@@ -65,7 +72,7 @@ try:
     )
 except ImportError as e:
     print(f"Error: shepaw_acp_sdk not found. Make sure it is installed or\n"
-          f"located at ../shepaw_acp_sdk relative to this file.\n"
+          f"located at ../../sdks/shepaw-acp-sdk-python relative to this file.\n"
           f"Details: {e}")
     sys.exit(1)
 

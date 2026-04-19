@@ -1,0 +1,19 @@
+# ========== Node ==========
+node_modules/
+
+# Build artefacts
+dist/
+.tsbuildinfo
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.vitest-cache/
+
+# tsup/turbo/bundler caches
+.turbo/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
