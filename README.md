@@ -14,6 +14,7 @@ agent-bridge/
 │
 ├── implementations/
 │   ├── claude-code-ts/               # Claude Code as a Shepaw agent (TS, current)
+│   ├── codebuddy-code/               # CodeBuddy Code as a Shepaw agent (TS)
 │   ├── claude-code-py/               # Claude Code as a Shepaw agent (Python, older)
 │   └── paw-agent-py/                 # Multi-platform OS control agent (Python, unmaintained)
 │
