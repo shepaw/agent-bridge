@@ -1,17 +1,32 @@
 /**
  * Route `canUseTool` from the Claude Agent SDK into Shepaw UI components.
  *
- * - `AskUserQuestion` → one `ui.singleSelect` / `ui.multiSelect` per question
- * - every other tool → one `ui.actionConfirmation`
- *
- * Responses from the phone come back via `agent.submitResponse` and are
- * resolved by `ctx.waitForResponse()` in the base SDK.
+ * Non-blocking flow:
+ *   - On cache miss, fire-and-forget a `ui.actionConfirmation` to the
+ *     phone, record the pending approval, and DENY the tool call so
+ *     Claude ends the current turn. When the user replies later, the
+ *     agent's `onChat` writes the verdict into `ApprovalCache` and
+ *     forwards the message to Claude, which retries the tool call;
+ *     this time the cache hit short-circuits to ALLOW.
+ *   - `AskUserQuestion` → fire-and-forget `ui.form` (with
+ *     `radio_group` / `checkbox_group` fields) and also DENY so the
+ *     current turn ends. When the user fills in the form Shepaw sends
+ *     a plain-text message ("用户选择了 TypeScript") which Claude
+ *     picks up on the next turn.
  */
 
 import type { TaskContext } from 'shepaw-acp-sdk';
 
+import {
+  ApprovalCache,
+  PendingApprovals,
+} from './approval-cache.js';
 import { log } from './debug.js';
 import { summarizeToolInput } from './tool-summary.js';
+
+export type PermissionDecision =
+  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
+  | { behavior: 'deny'; message: string };
 
 // ── AskUserQuestion input shape (per Claude Agent SDK docs) ─────────
 
@@ -32,146 +47,106 @@ interface AskUserQuestionInput {
   questions: AskUserQuestionItem[];
 }
 
-// ── Agent SDK permission result (narrow to what we return) ──────────
-
-export type PermissionDecision =
-  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-  | { behavior: 'deny'; message: string };
-
 // ── public API ──────────────────────────────────────────────────────
 
 export interface MakeCanUseToolOptions {
-  /** Per-tool approval timeout. Default 5 min. */
-  approvalTimeoutMs?: number;
-  /** Per-question timeout for AskUserQuestion. Default 10 min. */
-  questionTimeoutMs?: number;
-  /**
-   * If provided, values returned from the Shepaw app for
-   * `sendActionConfirmation` are interpreted as: any of these allows the
-   * tool to run; anything else denies.
-   *
-   * Default: `['allow', 'allow_always', 'y', 'yes']`.
-   */
-  allowValues?: ReadonlySet<string>;
+  /** Shepaw session the tool call belongs to — required for cache lookups. */
+  sessionId: string;
+  /** Shared approval cache (per-agent). */
+  cache: ApprovalCache;
+  /** Shared pending-approvals tracker (per-agent). */
+  pending: PendingApprovals;
 }
 
-const DEFAULT_ALLOW_VALUES: ReadonlySet<string> = new Set([
-  'allow',
-  'allow_always',
-  'y',
-  'yes',
-]);
+const DENY_MESSAGE_PENDING =
+  "The user is being asked to approve this action on their phone. " +
+  "End this turn now; when they reply I'll retry the same tool call.";
+const DENY_MESSAGE_QUESTION_SENT =
+  "I've sent a form to the user on their phone to gather the clarification. " +
+  "End this turn now; their reply will arrive as the next user message.";
+const DENY_MESSAGE_USER = 'User denied this action.';
 
-/** Build a `canUseTool` callback that proxies every approval to the phone. */
-export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions = {}) {
-  const approvalTimeoutMs = opts.approvalTimeoutMs ?? 5 * 60_000;
-  const questionTimeoutMs = opts.questionTimeoutMs ?? 10 * 60_000;
-  const allowValues = opts.allowValues ?? DEFAULT_ALLOW_VALUES;
-
+/**
+ * Build a `canUseTool` callback that proxies every approval to the phone
+ * in a non-blocking way (see module docstring).
+ */
+export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
   return async function canUseTool(
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<PermissionDecision> {
     if (toolName === 'AskUserQuestion') {
-      return handleAskUserQuestion(ctx, input as unknown as AskUserQuestionInput, {
-        questionTimeoutMs,
-      });
+      return handleAskUserQuestion(ctx, input as unknown as AskUserQuestionInput);
     }
 
+    // Cache hit → allow/deny immediately without asking again.
+    const cached = opts.cache.get(opts.sessionId, toolName, input);
+    if (cached === 'allow') {
+      log.gateway('approval cache HIT for %s — allowing', toolName);
+      return { behavior: 'allow', updatedInput: input };
+    }
+    if (cached === 'deny') {
+      log.gateway('approval cache HIT for %s — denying', toolName);
+      return { behavior: 'deny', message: DENY_MESSAGE_USER };
+    }
+
+    // Cache miss → fire-and-forget a confirmation and DENY so the turn ends.
     const summary = summarizeToolInput(toolName, input);
+    const displayPrompt = buildPrompt(toolName, summary);
     log.gateway('permission request: %s — %s', toolName, summary.slice(0, 80));
 
-    const confirmId = await ctx.sendActionConfirmation({
-      prompt: buildPrompt(toolName, summary),
+    await ctx.sendActionConfirmation({
+      prompt: displayPrompt,
       actions: [
         { label: 'Allow', value: 'allow' },
-        { label: 'Allow & remember', value: 'allow_always' },
         { label: 'Deny', value: 'deny' },
       ],
     });
+    opts.pending.push(opts.sessionId, {
+      toolName,
+      input,
+      displayPrompt,
+      requestedAt: Date.now(),
+    });
 
-    let response: Record<string, unknown>;
-    try {
-      response = await ctx.waitForResponse(confirmId, { timeoutMs: approvalTimeoutMs });
-    } catch (err) {
-      return { behavior: 'deny', message: `Approval failed: ${String(err)}` };
-    }
-
-    const rawValue =
-      typeof response.value === 'string'
-        ? (response.value as string)
-        : typeof response.action === 'string'
-          ? (response.action as string)
-          : '';
-    const value = rawValue.toLowerCase();
-
-    if (allowValues.has(value)) {
-      return { behavior: 'allow', updatedInput: input };
-    }
-    return { behavior: 'deny', message: 'User denied this action' };
+    return { behavior: 'deny', message: DENY_MESSAGE_PENDING };
   };
 }
 
-// ── AskUserQuestion handler ─────────────────────────────────────────
+// ── AskUserQuestion (fire-and-forget form) ──────────────────────────
 
 async function handleAskUserQuestion(
   ctx: TaskContext,
   input: AskUserQuestionInput,
-  opts: { questionTimeoutMs: number },
 ): Promise<PermissionDecision> {
-  const answers: Record<string, string> = {};
-
-  for (const q of input.questions ?? []) {
-    const uiOptions = q.options.map((o) => ({
+  // Pack all questions into a single ui.form — each question becomes a
+  // radio_group or checkbox_group field. If there's only one question
+  // the form has a single field; no UI change needed on the app side.
+  const fields = (input.questions ?? []).map((q, idx) => ({
+    name:
+      q.header !== undefined && q.header.length > 0 ? `q${idx}_${q.header}` : `q${idx}`,
+    label: q.question,
+    type: (q.multiSelect === true ? 'checkbox_group' : 'radio_group') as
+      | 'checkbox_group'
+      | 'radio_group',
+    required: true,
+    options: q.options.map((o) => ({
       label: o.label,
       value: o.label,
       description: o.description,
-    }));
+    })),
+  }));
 
-    const selectId = q.multiSelect
-      ? await ctx.sendMultiSelect({
-          prompt: q.question,
-          options: uiOptions,
-          minSelect: 1,
-        })
-      : await ctx.sendSingleSelect({
-          prompt: q.question,
-          options: uiOptions,
-        });
+  await ctx.sendForm({
+    title: 'Clarifying questions',
+    description: 'Claude needs your input to continue.',
+    fields,
+  });
 
-    let response: Record<string, unknown>;
-    try {
-      response = await ctx.waitForResponse(selectId, { timeoutMs: opts.questionTimeoutMs });
-    } catch (err) {
-      return { behavior: 'deny', message: `Question timed out: ${String(err)}` };
-    }
-
-    answers[q.question] = extractAnswer(response, Boolean(q.multiSelect));
-  }
-
-  return {
-    behavior: 'allow',
-    updatedInput: {
-      questions: input.questions,
-      answers,
-    },
-  };
+  return { behavior: 'deny', message: DENY_MESSAGE_QUESTION_SENT };
 }
 
-function extractAnswer(response: Record<string, unknown>, multi: boolean): string {
-  if (multi) {
-    const values = response.values;
-    if (Array.isArray(values)) {
-      return values.filter((v): v is string => typeof v === 'string').join(', ');
-    }
-    const value = response.value;
-    return typeof value === 'string' ? value : '';
-  }
-  const value = response.value;
-  if (typeof value === 'string') return value;
-  const label = response.label;
-  return typeof label === 'string' ? label : '';
-}
+// ── helpers ─────────────────────────────────────────────────────────
 
 function buildPrompt(toolName: string, summary: string): string {
   if (!summary) return `Claude wants to use ${toolName}`;

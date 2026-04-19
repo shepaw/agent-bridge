@@ -110,16 +110,28 @@ class TaskContext:
         select_id: Optional[str] = None,
         **extra,
     ) -> None:
-        """Send a ``ui.singleSelect`` notification."""
-        sid = select_id or f"select_{uuid.uuid4().hex[:8]}"
-        params: Dict[str, Any] = {
-            "task_id": self.task_id,
-            "select_id": sid,
-            "prompt": prompt,
-            "options": options,
+        """Send a single-choice prompt (deprecated wrapper around
+        :meth:`send_form`).
+
+        .. deprecated::
+            Use :meth:`send_form` with a ``radio_group`` field instead.
+            This method is kept for backward compatibility and now
+            internally forwards to ``send_form``.
+        """
+        await self.send_form(
+            title=prompt,
+            fields=[
+                {
+                    "name": "choice",
+                    "label": prompt,
+                    "type": "radio_group",
+                    "required": True,
+                    "options": options,
+                }
+            ],
+            form_id=select_id,
             **extra,
-        }
-        await self.ws.send_json(jsonrpc_notification("ui.singleSelect", params))
+        )
 
     async def send_multi_select(
         self,
@@ -130,18 +142,30 @@ class TaskContext:
         max_select: Optional[int] = None,
         **extra,
     ) -> None:
-        """Send a ``ui.multiSelect`` notification."""
-        sid = select_id or f"mselect_{uuid.uuid4().hex[:8]}"
-        params: Dict[str, Any] = {
-            "task_id": self.task_id,
-            "select_id": sid,
-            "prompt": prompt,
-            "options": options,
-            "min_select": min_select,
-            "max_select": max_select,
+        """Send a multi-choice prompt (deprecated wrapper around
+        :meth:`send_form`).
+
+        .. deprecated::
+            Use :meth:`send_form` with a ``checkbox_group`` field instead.
+            This method is kept for backward compatibility and now
+            internally forwards to ``send_form``. The ``min_select`` /
+            ``max_select`` bounds are dropped on the wire but recorded in
+            the form field as ``required``.
+        """
+        await self.send_form(
+            title=prompt,
+            fields=[
+                {
+                    "name": "choices",
+                    "label": prompt,
+                    "type": "checkbox_group",
+                    "required": min_select > 0,
+                    "options": options,
+                }
+            ],
+            form_id=select_id,
             **extra,
-        }
-        await self.ws.send_json(jsonrpc_notification("ui.multiSelect", params))
+        )
 
     async def send_file_upload(
         self,

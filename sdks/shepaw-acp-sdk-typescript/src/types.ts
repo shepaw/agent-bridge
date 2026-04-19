@@ -90,7 +90,9 @@ export type UIFormFieldType =
   | 'number'
   | 'checkbox'
   | 'select'
-  | 'textarea';
+  | 'textarea'
+  | 'radio_group'
+  | 'checkbox_group';
 
 export interface UIFormField {
   name: string;
@@ -99,7 +101,12 @@ export interface UIFormField {
   placeholder?: string;
   required?: boolean;
   default?: unknown;
-  options?: UIActionOption[];
+  /**
+   * For `select` / `radio_group` (pick one) and `checkbox_group` (pick many).
+   * Each option is a `{ label, value }` pair; an optional `description`
+   * can be shown beneath the label in the Shepaw app.
+   */
+  options?: UIChoiceOption[];
 }
 
 // ── Typed chat kwargs passed to `onChat` ───────────────────────────

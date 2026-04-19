@@ -30,11 +30,52 @@ Connect from Shepaw at `ws://<host>:8080/acp/ws` with token `my-secret`.
 | Class / function | Purpose |
 |---|---|
 | `ACPAgentServer` | Subclass and override `onChat`. Handles auth, heartbeat, chat dispatch, cancel, UI responses, rollback, agent-card, hub request tracking, conversation history. |
-| `TaskContext` | Per-task helper. `sendText`, `sendTextFinal`, `sendActionConfirmation`, `sendSingleSelect`, `sendMultiSelect`, `sendFileUpload`, `sendForm`, `sendFileMessage`, `sendMessageMetadata`, `hubRequest`, `waitForResponse`. |
+| `TaskContext` | Per-task helper. `sendText`, `sendTextFinal`, `sendActionConfirmation`, `sendForm`, `sendFileUpload`, `sendFileMessage`, `sendMessageMetadata`, `hubRequest`. `sendSingleSelect` / `sendMultiSelect` / `waitForResponse` still work but are deprecated — prefer the non-blocking pattern below. |
 | `ConversationManager` | Per-session message history with auto-trimming and TTL cleanup. |
 | `ACPDirectiveStreamParser` | Streaming parser for `<<<directive ... >>>` fence blocks in LLM output. |
 | `acpDirectiveToNotification` | Convert a parsed directive to a `ui.*` notification. |
 | `jsonrpcRequest` / `jsonrpcResponse` / `jsonrpcNotification` | JSON-RPC 2.0 builders. |
+
+## Non-blocking UI pattern (recommended)
+
+`waitForResponse` works — but it blocks the current `onChat` task until
+the user interacts. On a phone the user may take minutes or hours to
+respond, which ties up the WebSocket and looks frozen to them. The
+preferred pattern is **fire-and-forget**:
+
+```ts
+override async onChat(ctx, message) {
+  if (classify(message) === 'approval') {
+    // Treat this message as a response to an earlier UI component.
+    handleApproval(message);
+    return;
+  }
+  if (needsClarification(message)) {
+    // Send a form and return — no waitForResponse. The user's submission
+    // arrives as a new `agent.chat` message on the next turn.
+    await ctx.sendForm({
+      title: 'Which language?',
+      fields: [{
+        name: 'lang',
+        label: 'Language',
+        type: 'radio_group',        // new field types in v0.1
+        required: true,
+        options: [
+          { label: 'TypeScript', value: 'ts' },
+          { label: 'Python', value: 'py' },
+        ],
+      }],
+    });
+    return;
+  }
+  // normal work here…
+}
+```
+
+`radio_group` and `checkbox_group` fields are rendered in the Shepaw app
+as native radio / checkbox groups with per-option descriptions. The
+older `sendSingleSelect` / `sendMultiSelect` helpers still exist and
+transparently emit a single-field form, so pre-v0.1 code keeps working.
 
 ## Wire compatibility
 

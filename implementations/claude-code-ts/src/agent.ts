@@ -24,10 +24,32 @@ import {
   type TaskContext,
 } from 'shepaw-acp-sdk';
 
+import {
+  ApprovalCache,
+  type ApprovalCacheOptions,
+  PendingApprovals,
+} from './approval-cache.js';
+import { classifyApprovalMessage } from './approval-keywords.js';
 import { log } from './debug.js';
-import { makeCanUseTool, type MakeCanUseToolOptions } from './permission.js';
+import { makeCanUseTool } from './permission.js';
 import { SessionStore, type SessionStoreOptions } from './session-store.js';
 import { summarizeToolInput } from './tool-summary.js';
+
+/**
+ * Signature subset of `@anthropic-ai/claude-agent-sdk`'s `query` that the
+ * gateway actually consumes. Exposed as an option so tests and the
+ * `--mock` CLI flag can swap in a scripted implementation without
+ * needing `ANTHROPIC_API_KEY`.
+ *
+ * The iterable yields `unknown` rather than `SDKMessage` so scripted
+ * fakes can produce the small subset of fields the gateway reads
+ * (`type`, `subtype`, `message.content`, `session_id`) without
+ * satisfying the full schema.
+ */
+export type QueryFn = (params: {
+  prompt: string | AsyncIterable<unknown>;
+  options?: Options;
+}) => AsyncIterable<unknown>;
 
 export interface ClaudeCodeAgentOptions {
   /** Display name of this agent in the Shepaw card. Default 'Claude Code'. */
@@ -51,8 +73,8 @@ export interface ClaudeCodeAgentOptions {
   permissionMode?: Options['permissionMode'];
   /** Extra system prompt prepended to the default. */
   systemPrompt?: string;
-  /** Per-tool approval & question timeouts. See MakeCanUseToolOptions. */
-  permissionOptions?: MakeCanUseToolOptions;
+  /** Tuning for the approval cache (how long a granted approval stays valid). */
+  approvalCacheOptions?: ApprovalCacheOptions;
   /** Override session-store persistence path. */
   sessionStoreOptions?: SessionStoreOptions;
   /**
@@ -60,6 +82,13 @@ export interface ClaudeCodeAgentOptions {
    * Service so your phone can reach it from the public internet.
    */
   tunnelConfig?: ChannelTunnelConfig;
+  /**
+   * Override the `query()` implementation. Default: the real `query`
+   * from `@anthropic-ai/claude-agent-sdk`. Used by tests and the
+   * `--mock` CLI flag to exercise the full pipeline without calling
+   * the Claude API.
+   */
+  queryFn?: QueryFn;
 }
 
 export class ClaudeCodeAgent extends ACPAgentServer {
@@ -68,9 +97,12 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   > &
     Pick<
       ClaudeCodeAgentOptions,
-      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt' | 'permissionOptions'
+      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt'
     >;
   private readonly sessionStore: SessionStore;
+  private readonly queryFn: QueryFn;
+  private readonly approvalCache: ApprovalCache;
+  private readonly pendingApprovals = new PendingApprovals();
 
   constructor(opts: ClaudeCodeAgentOptions = {}) {
     super({
@@ -89,9 +121,10 @@ export class ClaudeCodeAgent extends ACPAgentServer {
       maxTurns: opts.maxTurns,
       allowedTools: opts.allowedTools,
       systemPrompt: opts.systemPrompt,
-      permissionOptions: opts.permissionOptions,
     };
     this.sessionStore = new SessionStore(opts.sessionStoreOptions);
+    this.queryFn = opts.queryFn ?? (query as unknown as QueryFn);
+    this.approvalCache = new ApprovalCache(opts.approvalCacheOptions);
   }
 
   async init(): Promise<void> {
@@ -126,6 +159,31 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     // `ACPAgentServer` exposes it via the `activeTasks` map (protected).
     const abortController = this.activeTasks.get(ctx.taskId) ?? new AbortController();
 
+    // If this message looks like an approval/deny reply, record the verdict
+    // for the most recent pending confirmation so the upcoming SDK turn's
+    // `canUseTool` lookup becomes a cache hit and proceeds without asking
+    // again. We still forward the message to Claude so it has context.
+    const verdict = classifyApprovalMessage(message);
+    if (verdict !== undefined) {
+      const pending = this.pendingApprovals.popMostRecent(ctx.sessionId);
+      if (pending !== undefined) {
+        this.approvalCache.set(
+          ctx.sessionId,
+          pending.toolName,
+          pending.input,
+          verdict,
+          pending.displayPrompt,
+          message,
+        );
+        log.gateway(
+          'recorded %s verdict for pending %s (session=%s)',
+          verdict,
+          pending.toolName,
+          ctx.sessionId,
+        );
+      }
+    }
+
     const resumeId = this.sessionStore.get(ctx.sessionId);
     if (resumeId) log.gateway('resume sdk session %s for shepaw session %s', resumeId, ctx.sessionId);
 
@@ -134,7 +192,11 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     const options: Options = {
       cwd: this.cfg.cwd,
       abortController,
-      canUseTool: makeCanUseTool(ctx, this.cfg.permissionOptions),
+      canUseTool: makeCanUseTool(ctx, {
+        sessionId: ctx.sessionId,
+        cache: this.approvalCache,
+        pending: this.pendingApprovals,
+      }),
       permissionMode: this.cfg.permissionMode,
     };
     if (this.cfg.model !== undefined) options.model = this.cfg.model;
@@ -146,7 +208,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     if (systemPrompt !== undefined) options.systemPrompt = systemPrompt;
 
     // canUseTool requires streaming input mode — wrap the prompt as an async iterable.
-    const stream = query({
+    const stream = this.queryFn({
       prompt: asyncUserPrompt(message),
       options,
     });

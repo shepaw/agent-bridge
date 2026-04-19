@@ -6,6 +6,7 @@ import { cac } from 'cac';
 import { ChannelTunnelConfig } from 'shepaw-acp-sdk';
 
 import { ClaudeCodeAgent } from './agent.js';
+import { mockQuery } from './mock-claude.js';
 
 const cli = cac('shepaw-claude-code');
 
@@ -47,6 +48,10 @@ cli
   .option('--tunnel-channel-id <id>', 'Channel ID (or PAW_ACP_TUNNEL_CHANNEL_ID)')
   .option('--tunnel-secret <secret>', 'Channel secret (or PAW_ACP_TUNNEL_SECRET)')
   .option('--tunnel-endpoint <name>', 'Optional short-name endpoint (or PAW_ACP_TUNNEL_ENDPOINT)')
+  .option(
+    '--mock',
+    'Use a scripted fake Claude (no ANTHROPIC_API_KEY required). Send "help" from the app for scenarios.',
+  )
   .action(async (opts) => {
     const port = Number(opts.port);
     const allowedTools =
@@ -94,7 +99,14 @@ cli
         ? { path: opts.sessionStorePath }
         : undefined,
       tunnelConfig,
+      queryFn: opts.mock ? mockQuery : undefined,
     });
+
+    if (opts.mock) {
+      console.log(
+        '\n[mock] Running without Claude API. Send "help" from the app to see scripted scenarios.\n',
+      );
+    }
 
     await agent.init();
     await agent.run({ host: opts.host, port });

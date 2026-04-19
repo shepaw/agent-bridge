@@ -201,6 +201,15 @@ export class TaskContext {
   }
 
   // ── UI interactive components ─────────────────────────────────
+  //
+  // These methods are all fire-and-forget: they send a `ui.*` notification
+  // and return the component id immediately. The agent's current `onChat`
+  // turn should end normally (via `sendTextFinal` + `task.completed`); the
+  // user's reply arrives **later as a new `agent.chat` message** which
+  // re-enters `onChat`.
+  //
+  // For the legacy "wait inside the same turn" behaviour, see the
+  // `waitForResponse` method below (deprecated).
 
   async sendActionConfirmation(opts: SendActionConfirmationOpts): Promise<string> {
     const cid = opts.confirmationId ?? `confirm_${randomUUID().slice(0, 8)}`;
@@ -216,34 +225,48 @@ export class TaskContext {
     return cid;
   }
 
+  /**
+   * @deprecated Use `sendForm` with a `radio_group` field instead. This
+   * method is kept for backward compatibility and internally forwards to
+   * `sendForm`.
+   */
   async sendSingleSelect(opts: SendSingleSelectOpts): Promise<string> {
-    const sid = opts.selectId ?? `select_${randomUUID().slice(0, 8)}`;
-    await this.sendRaw(
-      jsonrpcNotification('ui.singleSelect', {
-        ...(opts.extra ?? {}),
-        task_id: this.taskId,
-        select_id: sid,
-        prompt: opts.prompt,
-        options: opts.options,
-      }),
-    );
-    return sid;
+    return this.sendForm({
+      title: opts.prompt,
+      fields: [
+        {
+          name: 'choice',
+          label: opts.prompt,
+          type: 'radio_group',
+          required: true,
+          options: opts.options,
+        },
+      ],
+      formId: opts.selectId,
+      ...(opts.extra !== undefined ? { extra: opts.extra } : {}),
+    });
   }
 
+  /**
+   * @deprecated Use `sendForm` with a `checkbox_group` field instead. This
+   * method is kept for backward compatibility and internally forwards to
+   * `sendForm`.
+   */
   async sendMultiSelect(opts: SendMultiSelectOpts): Promise<string> {
-    const sid = opts.selectId ?? `mselect_${randomUUID().slice(0, 8)}`;
-    await this.sendRaw(
-      jsonrpcNotification('ui.multiSelect', {
-        ...(opts.extra ?? {}),
-        task_id: this.taskId,
-        select_id: sid,
-        prompt: opts.prompt,
-        options: opts.options,
-        min_select: opts.minSelect ?? 1,
-        max_select: opts.maxSelect ?? null,
-      }),
-    );
-    return sid;
+    return this.sendForm({
+      title: opts.prompt,
+      fields: [
+        {
+          name: 'choices',
+          label: opts.prompt,
+          type: 'checkbox_group',
+          required: (opts.minSelect ?? 1) > 0,
+          options: opts.options,
+        },
+      ],
+      formId: opts.selectId,
+      ...(opts.extra !== undefined ? { extra: opts.extra } : {}),
+    });
   }
 
   async sendFileUpload(opts: SendFileUploadOpts): Promise<string> {
@@ -328,9 +351,19 @@ export class TaskContext {
   }
 
   /**
-   * Wait for a user interactive response (button click, form submit, etc.).
-   * `componentId` should match the `confirmation_id`, `select_id`,
-   * `upload_id`, or `form_id` sent in the corresponding UI notification.
+   * Wait inside the current turn for an interactive response.
+   *
+   * @deprecated Do NOT use for human-in-the-loop flows that may take more
+   * than a few seconds. The recommended pattern is:
+   *
+   *   1. Call one of the `send*` methods above (fire-and-forget).
+   *   2. Finish the current `onChat` turn normally.
+   *   3. The user's reply arrives as a regular `agent.chat` message that
+   *      re-enters `onChat`; handle it there.
+   *
+   * This method is retained for niche use-cases where the agent really
+   * does want to block the current turn on a response (e.g. an in-process
+   * UI test harness). It still obeys the 300-second timeout.
    */
   async waitForResponse(
     componentId: string,
