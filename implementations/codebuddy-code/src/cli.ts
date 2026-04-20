@@ -25,6 +25,11 @@ cli
   .option('--agent-id <id>', 'Agent ID (default: auto-generated)')
   .option('--name <name>', 'Display name', { default: 'CodeBuddy Code' })
   .option('--model <model>', 'CodeBuddy model id (e.g. deepseek-v3.1)')
+  .option(
+    '--environment <env>',
+    'Auth environment: external | internal | ioa | cloudhosted. China `ck_…` API keys need `internal`. Falls back to CODEBUDDY_INTERNET_ENVIRONMENT.',
+  )
+  .option('--endpoint <url>', 'Custom endpoint URL (overrides --environment)')
   .option('--max-turns <n>', 'Maximum agentic turns per chat')
   .option(
     '--allowed-tools <list>',
@@ -91,6 +96,8 @@ cli
       agentId: opts.agentId,
       cwd: opts.cwd,
       model: opts.model,
+      environment: opts.environment,
+      endpoint: opts.endpoint,
       maxTurns: opts.maxTurns !== undefined ? Number(opts.maxTurns) : undefined,
       allowedTools,
       permissionMode: opts.permissionMode,

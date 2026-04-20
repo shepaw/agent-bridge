@@ -62,6 +62,16 @@ export interface CodeBuddyCodeAgentOptions {
   cwd?: string;
   /** CodeBuddy model id (e.g. 'deepseek-v3.1'). */
   model?: string;
+  /**
+   * Auth environment passed to the SDK. The `ck_…` API keys issued by
+   * the China-facing console require `'internal'`; the default
+   * `'external'` will reject them with a 401 from
+   * `https://copilot.tencent.com`. Falls back to the
+   * `CODEBUDDY_INTERNET_ENVIRONMENT` env var if unset.
+   */
+  environment?: Options['environment'];
+  /** Custom endpoint URL (overrides `environment`). */
+  endpoint?: string;
   /** Cap on agentic turns per chat. */
   maxTurns?: number;
   /** Optional allowlist of tool names. Empty → all tools allowed (with approval). */
@@ -96,7 +106,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   > &
     Pick<
       CodeBuddyCodeAgentOptions,
-      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt'
+      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt' | 'environment' | 'endpoint'
     >;
   private readonly sessionStore: SessionStore;
   private readonly queryFn: QueryFn;
@@ -120,6 +130,10 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
       maxTurns: opts.maxTurns,
       allowedTools: opts.allowedTools,
       systemPrompt: opts.systemPrompt,
+      environment:
+        opts.environment ??
+        (process.env.CODEBUDDY_INTERNET_ENVIRONMENT as Options['environment'] | undefined),
+      endpoint: opts.endpoint,
     };
     this.sessionStore = new SessionStore(opts.sessionStoreOptions);
     this.queryFn = opts.queryFn ?? (query as unknown as QueryFn);
@@ -205,6 +219,8 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
     }
     if (resumeId !== undefined) options.resume = resumeId;
     if (systemPrompt !== undefined) options.systemPrompt = systemPrompt;
+    if (this.cfg.environment !== undefined) options.environment = this.cfg.environment;
+    if (this.cfg.endpoint !== undefined) options.endpoint = this.cfg.endpoint;
 
     // canUseTool requires streaming input mode — wrap the prompt as an async iterable.
     const stream = this.queryFn({
