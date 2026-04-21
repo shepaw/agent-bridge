@@ -1,32 +1,33 @@
 /**
  * Route `canUseTool` from the Claude Agent SDK into Shepaw UI components.
  *
- * Non-blocking flow:
- *   - On cache miss, fire-and-forget a `ui.actionConfirmation` to the
- *     phone, record the pending approval, and DENY the tool call so
- *     Claude ends the current turn. When the user replies later, the
- *     agent's `onChat` writes the verdict into `ApprovalCache` and
- *     forwards the message to Claude, which retries the tool call;
- *     this time the cache hit short-circuits to ALLOW.
- *   - `AskUserQuestion` → fire-and-forget `ui.form` (with
- *     `radio_group` / `checkbox_group` fields) and also DENY so the
- *     current turn ends. When the user fills in the form Shepaw sends
- *     a plain-text message ("用户选择了 TypeScript") which Claude
- *     picks up on the next turn.
+ * Blocking flow:
+ *   - On cache miss, fire `ui.actionConfirmation` to the phone and
+ *     AWAIT the user's reply. The SDK's turn stays open. When the user
+ *     taps Allow / Deny (or types an approval keyword in a new chat
+ *     message) the onChat handler calls `pending.resolveAll(...)`, our
+ *     Promise resolves, `canUseTool` returns, and the same SDK turn
+ *     proceeds with the tool call. No retry, no second query(), no
+ *     "deny and hope the model tries again" leakage.
+ *   - `AskUserQuestion` → fire `ui.form` and AWAIT the user's form
+ *     submission. Same round-trip; the answers come back in a
+ *     follow-up chat message ("Form submitted: ...").
+ *   - Cache hit (allow) → return immediately without a UI prompt.
+ *   - Cache hit (deny) → return deny immediately.
+ *   - Task cancel (abort signal) → any in-flight wait resolves to deny.
  */
 
 import type { TaskContext } from 'shepaw-acp-sdk';
 
-import {
-  ApprovalCache,
-  PendingApprovals,
-} from './approval-cache.js';
+import { ApprovalCache } from './approval-cache.js';
 import { log } from './debug.js';
+import {
+  PendingConfirmations,
+  type PermissionDecision,
+} from './pending-confirmations.js';
 import { summarizeToolInput } from './tool-summary.js';
 
-export type PermissionDecision =
-  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-  | { behavior: 'deny'; message: string };
+export type { PermissionDecision };
 
 // ── AskUserQuestion input shape (per Claude Agent SDK docs) ─────────
 
@@ -52,37 +53,32 @@ interface AskUserQuestionInput {
 export interface MakeCanUseToolOptions {
   /** Shepaw session the tool call belongs to — required for cache lookups. */
   sessionId: string;
-  /** Shared approval cache (per-agent). */
+  /** Cross-turn approval cache (allow/deny decisions that persist). */
   cache: ApprovalCache;
-  /** Shared pending-approvals tracker (per-agent). */
-  pending: PendingApprovals;
+  /** In-flight confirmation tracker — await these from canUseTool. */
+  pending: PendingConfirmations;
 }
 
-const DENY_MESSAGE_PENDING =
-  "Waiting on the user to approve this exact tool call on their phone. " +
-  "Do NOT retry with different arguments, do NOT paraphrase, do NOT try a " +
-  "workaround. End this turn immediately with a short message like " +
-  "'waiting for approval' — when the user replies I will re-issue the " +
-  "identical tool call and it will succeed.";
-const DENY_MESSAGE_QUESTION_SENT =
-  "I've sent a form to the user on their phone to gather the clarification. " +
-  "End this turn now; their reply will arrive as the next user message.";
 const DENY_MESSAGE_USER = 'User denied this action.';
 
+interface CanUseToolOptions {
+  signal: AbortSignal;
+}
+
 /**
- * Build a `canUseTool` callback that proxies every approval to the phone
- * in a non-blocking way (see module docstring).
+ * Build a `canUseTool` callback that blocks the SDK turn until the
+ * user replies on their phone.
  */
 export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
   return async function canUseTool(
     toolName: string,
     input: Record<string, unknown>,
+    sdkOpts: CanUseToolOptions,
   ): Promise<PermissionDecision> {
     if (toolName === 'AskUserQuestion') {
-      return handleAskUserQuestion(ctx, input as unknown as AskUserQuestionInput);
+      return handleAskUserQuestion(ctx, opts, sdkOpts, input as unknown as AskUserQuestionInput);
     }
 
-    // Cache hit → allow/deny immediately without asking again.
     const cached = opts.cache.get(opts.sessionId, toolName, input);
     if (cached === 'allow') {
       log.gateway('approval cache HIT for %s — allowing', toolName);
@@ -93,10 +89,9 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
       return { behavior: 'deny', message: DENY_MESSAGE_USER };
     }
 
-    // Cache miss → fire-and-forget a confirmation and DENY so the turn ends.
     const summary = summarizeToolInput(toolName, input);
     const displayPrompt = buildPrompt(toolName, summary);
-    log.gateway('permission request: %s — %s', toolName, summary.slice(0, 80));
+    log.gateway('permission request: %s — %s (waiting)', toolName, summary.slice(0, 80));
 
     await ctx.sendActionConfirmation({
       prompt: displayPrompt,
@@ -105,26 +100,27 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
         { label: 'Deny', value: 'deny' },
       ],
     });
-    opts.pending.push(opts.sessionId, {
+
+    const decision = await opts.pending.wait({
+      sessionId: opts.sessionId,
       toolName,
       input,
       displayPrompt,
-      requestedAt: Date.now(),
+      signal: sdkOpts.signal,
     });
-
-    return { behavior: 'deny', message: DENY_MESSAGE_PENDING };
+    log.gateway('permission resolved: %s — %s', toolName, decision.behavior);
+    return decision;
   };
 }
 
-// ── AskUserQuestion (fire-and-forget form) ──────────────────────────
+// ── AskUserQuestion (blocking form) ─────────────────────────────────
 
 async function handleAskUserQuestion(
   ctx: TaskContext,
+  opts: MakeCanUseToolOptions,
+  sdkOpts: CanUseToolOptions,
   input: AskUserQuestionInput,
 ): Promise<PermissionDecision> {
-  // Pack all questions into a single ui.form — each question becomes a
-  // radio_group or checkbox_group field. If there's only one question
-  // the form has a single field; no UI change needed on the app side.
   const fields = (input.questions ?? []).map((q, idx) => ({
     name:
       q.header !== undefined && q.header.length > 0 ? `q${idx}_${q.header}` : `q${idx}`,
@@ -146,7 +142,15 @@ async function handleAskUserQuestion(
     fields,
   });
 
-  return { behavior: 'deny', message: DENY_MESSAGE_QUESTION_SENT };
+  const decision = await opts.pending.wait({
+    sessionId: opts.sessionId,
+    toolName: 'AskUserQuestion',
+    input: input as unknown as Record<string, unknown>,
+    displayPrompt: 'Clarifying questions form',
+    signal: sdkOpts.signal,
+  });
+  log.gateway('AskUserQuestion resolved: %s', decision.behavior);
+  return decision;
 }
 
 // ── helpers ─────────────────────────────────────────────────────────

@@ -1,19 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { ApprovalCache, PendingApprovals } from '../src/approval-cache.js';
+import { ApprovalCache } from '../src/approval-cache.js';
+import { PendingConfirmations } from '../src/pending-confirmations.js';
 import { makeCanUseTool } from '../src/permission.js';
 
 /**
- * Hand-rolled TaskContext double for the non-blocking permission flow.
+ * Blocking permission flow tests.
  *
- * The protocol has the gateway *fire-and-forget* a UI component
- * (ui.actionConfirmation or ui.form) and then immediately return
- * `{behavior: 'deny', ...}` to the Agent SDK so the current turn ends.
- * No `waitForResponse` round-trip happens here — the user's reply
- * arrives later as a plain `agent.chat` message and the gateway writes
- * the verdict into the ApprovalCache. On the next turn, `canUseTool`
- * sees a cache hit and short-circuits to `allow`.
+ * The gateway now holds the SDK turn open: `canUseTool` fires a UI
+ * component AND awaits `PendingConfirmations.wait(...)`. The user's
+ * reply (simulated here via `resolveAll`) unblocks the Promise and
+ * the SDK turn continues.
  */
+
 class FakeCtx {
   readonly sent: Array<{ method: string; args: Record<string, unknown> }> = [];
   readonly taskId = 't-test';
@@ -52,15 +51,18 @@ class FakeCtx {
   }
 }
 
-// canUseTool returns a narrowed shape we don't have nominal types for; use
-// `any` here rather than re-declare @tencent-ai/agent-sdk's internals.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type CanUseTool = (toolName: string, input: Record<string, unknown>) => Promise<any>;
+type CanUseTool = (
+  toolName: string,
+  input: Record<string, unknown>,
+  opts: { signal: AbortSignal },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+) => Promise<any>;
 
 function makeHarness() {
   const ctx = new FakeCtx();
   const cache = new ApprovalCache();
-  const pending = new PendingApprovals();
+  const pending = new PendingConfirmations();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const can = makeCanUseTool(ctx as any, {
     sessionId: ctx.sessionId,
@@ -70,13 +72,15 @@ function makeHarness() {
   return { ctx, cache, pending, can };
 }
 
-describe('makeCanUseTool — ordinary tool approval (non-blocking)', () => {
-  it('on cache miss, sends ui.actionConfirmation, records pending, and denies the turn', async () => {
+describe('makeCanUseTool — blocking ordinary tool approval', () => {
+  it('on cache miss, sends ui.actionConfirmation, blocks until resolveAll(allow)', async () => {
     const { ctx, pending, can } = makeHarness();
+    const abort = new AbortController();
 
-    const decision = await can('Bash', { command: 'ls -la' });
+    const decisionP = can('Bash', { command: 'ls -la' }, { signal: abort.signal });
 
-    // Exactly one ui.actionConfirmation emitted.
+    // Let the confirmation actually get sent before we resolve.
+    await new Promise((r) => setImmediate(r));
     expect(ctx.sent).toHaveLength(1);
     expect(ctx.sent[0]?.method).toBe('ui.actionConfirmation');
     const args = ctx.sent[0]!.args as {
@@ -85,69 +89,111 @@ describe('makeCanUseTool — ordinary tool approval (non-blocking)', () => {
     };
     expect(args.prompt).toContain('Bash');
     expect(args.prompt).toContain('ls -la');
-    // Only two actions in v1 (allow_always is not yet wired up).
     expect(args.actions.map((a) => a.value)).toEqual(['allow', 'deny']);
 
-    // SDK is told to deny so the turn ends — user will reply later.
-    expect(decision.behavior).toBe('deny');
-    expect(typeof decision.message).toBe('string');
+    // Still waiting.
+    expect(pending.size('s-test')).toBe(1);
 
-    // A pending approval is now tracked for this session.
-    const top = pending.peekMostRecent('s-test');
-    expect(top?.toolName).toBe('Bash');
-    expect(top?.input).toEqual({ command: 'ls -la' });
+    // User replies "allow" → resolveAll.
+    const resolved = pending.resolveAll('s-test', 'allow');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.toolName).toBe('Bash');
+
+    const decision = await decisionP;
+    expect(decision).toEqual({ behavior: 'allow', updatedInput: { command: 'ls -la' } });
+    expect(pending.size('s-test')).toBe(0);
+  });
+
+  it('on resolveAll(deny), the blocked canUseTool returns deny', async () => {
+    const { pending, can } = makeHarness();
+    const abort = new AbortController();
+
+    const decisionP = can('Write', { file_path: '/a' }, { signal: abort.signal });
+    await new Promise((r) => setImmediate(r));
+
+    pending.resolveAll('s-test', 'deny');
+    const decision = await decisionP;
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toMatch(/denied/i);
   });
 
   it('on cache hit (allow), skips the UI and returns allow immediately', async () => {
     const { ctx, cache, can } = makeHarness();
     cache.set('s-test', 'Bash', { command: 'ls -la' }, 'allow', 'prompt', 'user msg');
 
-    const decision = await can('Bash', { command: 'ls -la' });
+    const decision = await can(
+      'Bash',
+      { command: 'ls -la' },
+      { signal: new AbortController().signal },
+    );
 
     expect(ctx.sent).toHaveLength(0);
     expect(decision).toEqual({ behavior: 'allow', updatedInput: { command: 'ls -la' } });
   });
 
-  it('on cache hit (deny), skips the UI and returns deny with user message', async () => {
+  it('on cache hit (deny), skips the UI and returns deny immediately', async () => {
     const { ctx, cache, can } = makeHarness();
     cache.set('s-test', 'Edit', { file_path: '/a' }, 'deny', 'prompt', 'user msg');
 
-    const decision = await can('Edit', { file_path: '/a' });
+    const decision = await can(
+      'Edit',
+      { file_path: '/a' },
+      { signal: new AbortController().signal },
+    );
 
     expect(ctx.sent).toHaveLength(0);
     expect(decision.behavior).toBe('deny');
     expect(decision.message).toMatch(/denied/i);
   });
+
+  it('on task cancel (abort signal), the blocked canUseTool returns deny', async () => {
+    const { can } = makeHarness();
+    const abort = new AbortController();
+
+    const decisionP = can('Bash', { command: 'x' }, { signal: abort.signal });
+    await new Promise((r) => setImmediate(r));
+
+    abort.abort();
+    const decision = await decisionP;
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toMatch(/cancel/i);
+  });
 });
 
-describe('makeCanUseTool — AskUserQuestion branch (non-blocking)', () => {
-  it('packs all questions into a single ui.form with radio_group / checkbox_group fields and denies the turn', async () => {
-    const { ctx, can } = makeHarness();
+describe('makeCanUseTool — blocking AskUserQuestion', () => {
+  it('packs all questions into a single ui.form and blocks until resolved', async () => {
+    const { ctx, pending, can } = makeHarness();
+    const abort = new AbortController();
 
-    const decision = await can('AskUserQuestion', {
-      questions: [
-        {
-          question: 'Which language?',
-          header: 'Lang',
-          options: [
-            { label: 'TypeScript', description: 'TS' },
-            { label: 'Python', description: 'PY' },
-          ],
-          multiSelect: false,
-        },
-        {
-          question: 'Pick sections',
-          header: 'Secs',
-          options: [
-            { label: 'A', description: 'a' },
-            { label: 'B', description: 'b' },
-          ],
-          multiSelect: true,
-        },
-      ],
-    });
+    const decisionP = can(
+      'AskUserQuestion',
+      {
+        questions: [
+          {
+            question: 'Which language?',
+            header: 'Lang',
+            options: [
+              { label: 'TypeScript', description: 'TS' },
+              { label: 'Python', description: 'PY' },
+            ],
+            multiSelect: false,
+          },
+          {
+            question: 'Pick sections',
+            header: 'Secs',
+            options: [
+              { label: 'A', description: 'a' },
+              { label: 'B', description: 'b' },
+            ],
+            multiSelect: true,
+          },
+        ],
+      },
+      { signal: abort.signal },
+    );
+    await new Promise((r) => setImmediate(r));
 
-    // One form, two fields — not two separate select notifications.
+    // One form, two fields.
     expect(ctx.sent).toHaveLength(1);
     expect(ctx.sent[0]?.method).toBe('ui.form');
     const args = ctx.sent[0]!.args as {
@@ -158,7 +204,19 @@ describe('makeCanUseTool — AskUserQuestion branch (non-blocking)', () => {
     expect(args.fields[0]?.label).toBe('Which language?');
     expect(args.fields[1]?.type).toBe('checkbox_group');
 
-    // Turn is ended; user will fill the form and reply with a plain chat message.
-    expect(decision.behavior).toBe('deny');
+    // Still blocked.
+    expect(pending.size('s-test')).toBe(1);
+
+    // User submits form → agent calls resolveAllWith.
+    pending.resolveAllWith('s-test', (p) => ({
+      behavior: 'allow',
+      updatedInput: { ...p.input, answers: { _raw: 'Lang: TypeScript' } },
+    }));
+
+    const decision = await decisionP;
+    expect(decision.behavior).toBe('allow');
+    expect((decision.updatedInput as { answers: { _raw: string } }).answers._raw).toBe(
+      'Lang: TypeScript',
+    );
   });
 });

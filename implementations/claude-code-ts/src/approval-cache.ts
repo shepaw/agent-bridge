@@ -117,12 +117,13 @@ function canonicalJson(value: unknown): string {
   });
 }
 
-// ── Pending-approval tracker ─────────────────────────────────────────
+// ── Pending-approval tracker (deprecated) ────────────────────────────
 //
-// Per-session ordered list of outstanding confirmations. When a user
-// message comes in and matches an "approval keyword" but doesn't
-// explicitly name which tool, we resolve against the most recent pending
-// confirmation in the session.
+// The legacy `PendingApprovals` class (fire-and-forget + deny-and-retry)
+// has been replaced by the blocking `PendingConfirmations` tracker in
+// ./pending-confirmations.ts. We keep the PendingApproval snapshot type
+// because it's still a handy plain-data shape, but nothing in the agent
+// uses the old class anymore.
 
 export interface PendingApproval {
   toolName: string;
@@ -130,52 +131,4 @@ export interface PendingApproval {
   displayPrompt: string;
   /** When this confirmation was sent (ms epoch). */
   requestedAt: number;
-}
-
-export class PendingApprovals {
-  private readonly bySession = new Map<string, PendingApproval[]>();
-
-  push(sessionId: string, approval: PendingApproval): void {
-    let list = this.bySession.get(sessionId);
-    if (list === undefined) {
-      list = [];
-      this.bySession.set(sessionId, list);
-    }
-    list.push(approval);
-    // Keep only the last 10 to bound memory.
-    if (list.length > 10) list.splice(0, list.length - 10);
-  }
-
-  /** Pop the most recent pending approval for a session, if any. */
-  popMostRecent(sessionId: string): PendingApproval | undefined {
-    const list = this.bySession.get(sessionId);
-    if (list === undefined || list.length === 0) return undefined;
-    return list.pop();
-  }
-
-  /**
-   * Pop ALL pending approvals for a session, oldest first.
-   *
-   * Called when the user replies with an approval keyword — we apply
-   * that verdict to every confirmation that's still in flight, so
-   * multi-tool-call turns (e.g. Claude fires 3 different `git diff`
-   * variants in one turn) don't leave zombie pendings that the user
-   * would have to approve one-by-one.
-   */
-  popAll(sessionId: string): PendingApproval[] {
-    const list = this.bySession.get(sessionId);
-    if (list === undefined || list.length === 0) return [];
-    this.bySession.set(sessionId, []);
-    return list;
-  }
-
-  peekMostRecent(sessionId: string): PendingApproval | undefined {
-    const list = this.bySession.get(sessionId);
-    if (list === undefined || list.length === 0) return undefined;
-    return list[list.length - 1];
-  }
-
-  clear(sessionId: string): void {
-    this.bySession.delete(sessionId);
-  }
 }

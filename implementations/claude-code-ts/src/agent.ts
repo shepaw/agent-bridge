@@ -4,10 +4,15 @@
  * Wraps `@anthropic-ai/claude-agent-sdk`'s `query()` and routes:
  *   - Assistant text blocks → `ui.textContent` (streaming)
  *   - Tool use blocks → a `ui.messageMetadata` header + a `ui.textContent` summary
- *   - `canUseTool` callback → `ui.actionConfirmation` (or `ui.singleSelect`
- *     for `AskUserQuestion`); reply collected via `agent.submitResponse`
+ *   - `canUseTool` callback → `ui.actionConfirmation` (or `ui.form` for
+ *     `AskUserQuestion`), then BLOCKS until the user replies on their
+ *     phone; the reply arrives as a new `agent.chat` message and
+ *     `onChat` calls `pendingConfirmations.resolveAll(verdict)`, which
+ *     unblocks the in-flight SDK turn. See the comment at the top of
+ *     `onChat` for the full decision matrix.
  *   - Captured `session_id` from `SDKSystemMessage` → SessionStore for resume
- *   - `agent.cancelTask` → AbortController.abort() on the active query
+ *   - `agent.cancelTask` → AbortController.abort() propagates into
+ *     canUseTool's wait() and resolves any pending as deny
  */
 
 import {
@@ -27,11 +32,11 @@ import {
 import {
   ApprovalCache,
   type ApprovalCacheOptions,
-  PendingApprovals,
 } from './approval-cache.js';
 import { classifyApprovalMessage } from './approval-keywords.js';
 import { log } from './debug.js';
 import { makeCanUseTool } from './permission.js';
+import { PendingConfirmations } from './pending-confirmations.js';
 import { SessionStore, type SessionStoreOptions } from './session-store.js';
 import { summarizeToolInput } from './tool-summary.js';
 
@@ -40,16 +45,19 @@ import { summarizeToolInput } from './tool-summary.js';
  * gateway actually consumes. Exposed as an option so tests and the
  * `--mock` CLI flag can swap in a scripted implementation without
  * needing `ANTHROPIC_API_KEY`.
- *
- * The iterable yields `unknown` rather than `SDKMessage` so scripted
- * fakes can produce the small subset of fields the gateway reads
- * (`type`, `subtype`, `message.content`, `session_id`) without
- * satisfying the full schema.
  */
 export type QueryFn = (params: {
   prompt: string | AsyncIterable<unknown>;
   options?: Options;
 }) => AsyncIterable<unknown>;
+
+/**
+ * Shepaw's form-submission messages start with this marker. Everything
+ * after the prefix is a flat "<label>: <value>" blob; we forward it
+ * verbatim as the `answers._raw` field on AskUserQuestion's
+ * `updatedInput`.
+ */
+const FORM_SUBMISSION_PREFIX = 'Form submitted:';
 
 export interface ClaudeCodeAgentOptions {
   /** Display name of this agent in the Shepaw card. Default 'Claude Code'. */
@@ -102,7 +110,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   private readonly sessionStore: SessionStore;
   private readonly queryFn: QueryFn;
   private readonly approvalCache: ApprovalCache;
-  private readonly pendingApprovals = new PendingApprovals();
+  private readonly pendingConfirmations = new PendingConfirmations();
 
   constructor(opts: ClaudeCodeAgentOptions = {}) {
     super({
@@ -154,36 +162,79 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     message: string,
     _kwargs: ChatKwargs,
   ): Promise<void> {
-    // Re-use the same AbortController the base class created for this task so
-    // that `agent.cancelTask` → `abortController.abort()` stops the SDK query.
-    // `ACPAgentServer` exposes it via the `activeTasks` map (protected).
-    const abortController = this.activeTasks.get(ctx.taskId) ?? new AbortController();
+    // Decision matrix when a new agent.chat message arrives:
+    //
+    //  pending?   message kind            action
+    //  ─────────  ─────────────────────   ────────────────────────────────
+    //  YES        verdict=allow           resolveAll(allow); return (no query)
+    //  YES        verdict=deny            resolveAll(deny);  return (no query)
+    //  YES        "Form submitted: …"     resolveAll(allow with raw text
+    //                                     in updatedInput.answers); return
+    //  YES        anything else           resolveAll(deny) to unblock the
+    //                                     stale SDK turn, then open a new
+    //                                     query() for the user's message.
+    //  NO         verdict=allow/deny      fall through to new query()
+    //                                     (the verdict got dropped, but
+    //                                     that's fine — nothing to resolve)
+    //  NO         anything else           open a new query() as usual
+    //
+    // The invariant we maintain is that at most one SDK turn is live
+    // per session, so the pending tracker shouldn't hold entries from
+    // a previous query() beyond the next user message.
 
-    // If this message looks like an approval/deny reply, apply the verdict
-    // to EVERY pending confirmation in this session — not just the most
-    // recent one. A single Claude turn can fire multiple tool_use blocks
-    // (e.g. three `git diff` variants), and we'd rather not make the user
-    // tap Allow N times for what they meant as one decision. The upcoming
-    // SDK turn's `canUseTool` lookups then all hit the cache and proceed
-    // without re-prompting.
-    const verdict = classifyApprovalMessage(message);
-    if (verdict !== undefined) {
-      const pendings = this.pendingApprovals.popAll(ctx.sessionId);
-      for (const pending of pendings) {
-        this.approvalCache.set(
-          ctx.sessionId,
-          pending.toolName,
-          pending.input,
-          verdict,
-          pending.displayPrompt,
-          message,
-        );
-      }
-      if (pendings.length > 0) {
+    const abortController =
+      this.activeTasks.get(ctx.taskId) ?? new AbortController();
+
+    const hasPending = this.pendingConfirmations.size(ctx.sessionId) > 0;
+    const isFormSubmission = message.trimStart().startsWith(FORM_SUBMISSION_PREFIX);
+    const verdict = isFormSubmission ? undefined : classifyApprovalMessage(message);
+
+    if (hasPending) {
+      if (verdict === 'allow' || verdict === 'deny') {
+        const resolved = this.pendingConfirmations.resolveAll(ctx.sessionId, verdict);
+        for (const p of resolved) {
+          this.approvalCache.set(
+            ctx.sessionId,
+            p.toolName,
+            p.input,
+            verdict,
+            p.displayPrompt,
+            message,
+          );
+        }
         log.gateway(
-          'recorded %s verdict for %d pending approval(s) (session=%s)',
+          'resolved %d pending confirmation(s) as %s (session=%s); skipping new query',
+          resolved.length,
           verdict,
-          pendings.length,
+          ctx.sessionId,
+        );
+        return;
+      }
+
+      if (isFormSubmission) {
+        const resolved = this.pendingConfirmations.resolveAllWith(
+          ctx.sessionId,
+          (p) => ({
+            behavior: 'allow',
+            updatedInput: {
+              ...p.input,
+              answers: { _raw: message.slice(FORM_SUBMISSION_PREFIX.length).trim() },
+            },
+          }),
+        );
+        log.gateway(
+          'resolved %d pending form submission(s) (session=%s); skipping new query',
+          resolved,
+          ctx.sessionId,
+        );
+        return;
+      }
+
+      const stale = this.pendingConfirmations.resolveAll(ctx.sessionId, 'deny');
+      if (stale.length > 0) {
+        log.gateway(
+          'denied %d stale pending confirmation(s) to unblock prior SDK turn (session=%s)',
+          stale.length,
           ctx.sessionId,
         );
       }
@@ -200,7 +251,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
       canUseTool: makeCanUseTool(ctx, {
         sessionId: ctx.sessionId,
         cache: this.approvalCache,
-        pending: this.pendingApprovals,
+        pending: this.pendingConfirmations,
       }),
       permissionMode: this.cfg.permissionMode,
     };

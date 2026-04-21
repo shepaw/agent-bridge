@@ -333,62 +333,11 @@ describe('CodeBuddyCodeAgent (mocked SDK)', () => {
     expect(scenario.calls[1]?.options).toMatchObject({ resume: 'sess-B' });
   });
 
-  it('canUseTool: first turn emits ui.actionConfirmation + denies; second turn with "allow" hits the cache', async () => {
-    // First turn: CodeBuddy tries to use Write. canUseTool denies because
-    // no approval is cached yet, and fires off a ui.actionConfirmation.
-    scenario.messages = [
-      { type: 'system', subtype: 'init', session_id: 'sess-C' },
-      {
-        _triggerCanUseTool: { toolName: 'Write', input: { file_path: '/a', content: 'hi' } },
-      },
-      {
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'waiting for approval' }] },
-      },
-      { type: 'result', subtype: 'success' },
-    ];
-    // Capture the decision returned by canUseTool so we can assert it
-    // was a deny on the first turn and an allow on the second.
-    const decisions: Array<{ toolName: string; behavior: string }> = [];
-    scenario.onCanUseTool = async (toolName, _input) => {
-      // We can't see the return value directly from within the generator;
-      // instead, peek at the agent's pending tracker after each turn.
-      decisions.push({ toolName, behavior: 'recorded' });
-    };
-
-    await startAgent();
-    const client = new TestClient(port);
-    await client.ready();
-
-    // ── Turn 1 ────────────────────────────────────────────────────
-    client.send('agent.chat', {
-      task_id: 't-ct-1',
-      session_id: 's-ct',
-      message: 'please write the file',
-    });
-
-    const confirm = await client.waitFor((m) => m.method === 'ui.actionConfirmation');
-    const prompt = (confirm.params as { prompt: string }).prompt;
-    expect(prompt).toContain('Write');
-    expect(prompt).toContain('/a');
-
-    await client.waitFor(
-      (m) =>
-        m.method === 'task.completed' &&
-        (m.params as Record<string, unknown>).task_id === 't-ct-1',
-    );
-
-    // A pending approval should now be tracked for this session.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const agentRef = agent as unknown as {
-      pendingApprovals: { peekMostRecent(sid: string): { toolName: string } | undefined };
-      approvalCache: { get(sid: string, t: string, i: unknown): string | undefined };
-    };
-    expect(agentRef.pendingApprovals.peekMostRecent('s-ct')?.toolName).toBe('Write');
-
-    // ── Turn 2: user types "allow" (approval keyword) ─────────────
-    // onChat should record allow into the cache, then query() fires again
-    // with the same tool_use; canUseTool hits the cache and returns allow.
+  it('canUseTool: blocks the SDK turn; a follow-up "allow" message resolves it without opening a new query', async () => {
+    // Single turn: CodeBuddy calls Write via canUseTool. canUseTool
+    // blocks (ui.actionConfirmation goes out) until onChat receives a
+    // second chat message with an approval keyword, which resolves the
+    // pending confirmation and lets this same query() continue.
     scenario.messages = [
       { type: 'system', subtype: 'init', session_id: 'sess-C' },
       {
@@ -401,14 +350,48 @@ describe('CodeBuddyCodeAgent (mocked SDK)', () => {
       { type: 'result', subtype: 'success' },
     ];
 
+    await startAgent();
+    const client = new TestClient(port);
+    await client.ready();
+
+    // ── Turn 1: starts, fires confirmation, then blocks inside the SDK ──
     client.send('agent.chat', {
-      task_id: 't-ct-2',
-      session_id: 's-ct',
+      task_id: 't-block-1',
+      session_id: 's-block',
+      message: 'please write the file',
+    });
+
+    const confirm = await client.waitFor((m) => m.method === 'ui.actionConfirmation');
+    const prompt = (confirm.params as { prompt: string }).prompt;
+    expect(prompt).toContain('Write');
+    expect(prompt).toContain('/a');
+
+    // Turn 1 is NOT yet completed — the SDK is blocked waiting.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const agentRef = agent as unknown as {
+      pendingConfirmations: { size(sid: string): number };
+      approvalCache: { get(sid: string, t: string, i: unknown): string | undefined };
+    };
+    expect(agentRef.pendingConfirmations.size('s-block')).toBe(1);
+
+    // ── Turn 2: user says "allow" — resolves the pending wait ──────────
+    // The second chat message arrives while turn 1's SDK call is still
+    // mid-flight. onChat resolves the pending confirmation and returns
+    // without opening a new query(); turn 1 resumes and emits "done".
+    client.send('agent.chat', {
+      task_id: 't-block-2',
+      session_id: 's-block',
       message: 'allow',
     });
 
-    // The second turn should complete with CodeBuddy's "done" text and
-    // WITHOUT emitting another ui.actionConfirmation.
+    // The second agent.chat has no SDK work; it just completes.
+    await client.waitFor(
+      (m) =>
+        m.method === 'task.completed' &&
+        (m.params as Record<string, unknown>).task_id === 't-block-2',
+    );
+
+    // Turn 1 now unblocks, emits "done", and completes.
     await client.waitFor(
       (m) =>
         m.method === 'ui.textContent' &&
@@ -417,21 +400,22 @@ describe('CodeBuddyCodeAgent (mocked SDK)', () => {
     await client.waitFor(
       (m) =>
         m.method === 'task.completed' &&
-        (m.params as Record<string, unknown>).task_id === 't-ct-2',
+        (m.params as Record<string, unknown>).task_id === 't-block-1',
     );
 
-    // Cache now has the allow verdict.
-    expect(agentRef.approvalCache.get('s-ct', 'Write', { file_path: '/a', content: 'hi' })).toBe(
-      'allow',
-    );
-    // Exactly one confirmation was ever emitted (first turn only).
+    // Cache now has the allow verdict (mirrored on resolveAll).
+    expect(
+      agentRef.approvalCache.get('s-block', 'Write', { file_path: '/a', content: 'hi' }),
+    ).toBe('allow');
+    // Exactly one confirmation was ever emitted.
     const confirmations = client.allMessages.filter(
       (m) => m.method === 'ui.actionConfirmation',
     );
     expect(confirmations).toHaveLength(1);
+    // And query() was called exactly once — the "allow" message did
+    // NOT open a second query.
+    expect(scenario.calls).toHaveLength(1);
 
     await client.close();
-    // Silence unused-var lint.
-    void decisions;
   });
 });
