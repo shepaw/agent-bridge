@@ -159,14 +159,17 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     // `ACPAgentServer` exposes it via the `activeTasks` map (protected).
     const abortController = this.activeTasks.get(ctx.taskId) ?? new AbortController();
 
-    // If this message looks like an approval/deny reply, record the verdict
-    // for the most recent pending confirmation so the upcoming SDK turn's
-    // `canUseTool` lookup becomes a cache hit and proceeds without asking
-    // again. We still forward the message to Claude so it has context.
+    // If this message looks like an approval/deny reply, apply the verdict
+    // to EVERY pending confirmation in this session — not just the most
+    // recent one. A single Claude turn can fire multiple tool_use blocks
+    // (e.g. three `git diff` variants), and we'd rather not make the user
+    // tap Allow N times for what they meant as one decision. The upcoming
+    // SDK turn's `canUseTool` lookups then all hit the cache and proceed
+    // without re-prompting.
     const verdict = classifyApprovalMessage(message);
     if (verdict !== undefined) {
-      const pending = this.pendingApprovals.popMostRecent(ctx.sessionId);
-      if (pending !== undefined) {
+      const pendings = this.pendingApprovals.popAll(ctx.sessionId);
+      for (const pending of pendings) {
         this.approvalCache.set(
           ctx.sessionId,
           pending.toolName,
@@ -175,10 +178,12 @@ export class ClaudeCodeAgent extends ACPAgentServer {
           pending.displayPrompt,
           message,
         );
+      }
+      if (pendings.length > 0) {
         log.gateway(
-          'recorded %s verdict for pending %s (session=%s)',
+          'recorded %s verdict for %d pending approval(s) (session=%s)',
           verdict,
-          pending.toolName,
+          pendings.length,
           ctx.sessionId,
         );
       }

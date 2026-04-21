@@ -59,8 +59,11 @@ export interface MakeCanUseToolOptions {
 }
 
 const DENY_MESSAGE_PENDING =
-  "The user is being asked to approve this action on their phone. " +
-  "End this turn now; when they reply I'll retry the same tool call.";
+  "Waiting on the user to approve this exact tool call on their phone. " +
+  "Do NOT retry with different arguments, do NOT paraphrase, do NOT try a " +
+  "workaround. End this turn immediately with a short message like " +
+  "'waiting for approval' — when the user replies I will re-issue the " +
+  "identical tool call and it will succeed.";
 const DENY_MESSAGE_QUESTION_SENT =
   "I've sent a form to the user on their phone to gather the clarification. " +
   "End this turn now; their reply will arrive as the next user message.";

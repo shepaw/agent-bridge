@@ -23,6 +23,8 @@ const ALLOW_TOKENS: readonly string[] = [
   'sure',
   'confirm',
   'confirmed',
+  'submit',
+  'submitted',
   'go ahead',
   '同意',
   '允许',
@@ -32,6 +34,9 @@ const ALLOW_TOKENS: readonly string[] = [
   '行',
   '是',
   '批准',
+  '确认',
+  '确定',
+  '提交',
 ];
 
 const DENY_TOKENS: readonly string[] = [

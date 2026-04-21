@@ -153,6 +153,22 @@ export class PendingApprovals {
     return list.pop();
   }
 
+  /**
+   * Pop ALL pending approvals for a session, oldest first.
+   *
+   * Called when the user replies with an approval keyword — we apply
+   * that verdict to every confirmation that's still in flight, so
+   * multi-tool-call turns (e.g. CodeBuddy fires 3 different `git diff`
+   * variants in one turn) don't leave zombie pendings that the user
+   * would have to approve one-by-one.
+   */
+  popAll(sessionId: string): PendingApproval[] {
+    const list = this.bySession.get(sessionId);
+    if (list === undefined || list.length === 0) return [];
+    this.bySession.set(sessionId, []);
+    return list;
+  }
+
   peekMostRecent(sessionId: string): PendingApproval | undefined {
     const list = this.bySession.get(sessionId);
     if (list === undefined || list.length === 0) return undefined;
