@@ -5,9 +5,16 @@
  * Run:
  *   tsx examples/echo-agent.ts
  *
- * Then from the Shepaw app (or the Python `test_agent.py` in this repo):
- *   Address: ws://<your-ip>:8080/acp/ws
- *   Token:   my-secret
+ * On first start a fresh X25519 identity is written to
+ * `~/.config/shepaw-cb-gateway/identity.json`, and an empty allowlist appears
+ * at `authorized_peers.json` alongside it. Authorize your Shepaw app's public
+ * key by copying it from the app's "Add remote agent" screen and running the
+ * gateway CLI:
+ *
+ *   shepaw-codebuddy-code peers add <base64-pubkey> --label "my phone"
+ *
+ * Then from the Shepaw app:
+ *   Address: ws://<your-ip>:8080/acp/ws#fp=<fingerprint-from-banner>
  */
 
 import { ACPAgentServer, TaskContext } from '../src/index.js';
@@ -19,4 +26,4 @@ class EchoAgent extends ACPAgentServer {
 }
 
 const port = Number(process.env.PORT ?? '8080');
-await new EchoAgent({ name: 'Echo Agent', token: 'my-secret' }).run({ port });
+await new EchoAgent({ name: 'Echo Agent' }).run({ port });

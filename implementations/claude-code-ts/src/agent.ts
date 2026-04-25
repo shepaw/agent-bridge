@@ -62,10 +62,18 @@ const FORM_SUBMISSION_PREFIX = 'Form submitted:';
 export interface ClaudeCodeAgentOptions {
   /** Display name of this agent in the Shepaw card. Default 'Claude Code'. */
   name?: string;
-  /** Auth token required by the Shepaw app. Empty string disables auth. Default ''. */
-  token?: string;
-  /** Agent id. Auto-generated if not provided. */
-  agentId?: string;
+  /**
+   * Override the authorized-peers allowlist path. Defaults to the SDK
+   * resolution order (`SHEPAW_PEERS_PATH` env var, XDG, or `~/.config/`).
+   */
+  peersPath?: string;
+  /**
+   * Override the enrollments (pairing-code) store path. Defaults to the SDK
+   * resolution order (`SHEPAW_ENROLLMENTS_PATH` env var, XDG, or `~/.config/`).
+   * The file is auto-created as empty; tokens are minted via the `enroll`
+   * CLI subcommand and consumed on first handshake.
+   */
+  enrollmentsPath?: string;
   /** Working directory for Claude Code. Default `process.cwd()`. */
   cwd?: string;
   /** Claude model id (e.g. 'claude-opus-4-7'). */
@@ -115,8 +123,8 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   constructor(opts: ClaudeCodeAgentOptions = {}) {
     super({
       name: opts.name ?? 'Claude Code',
-      token: opts.token ?? '',
-      agentId: opts.agentId,
+      peersPath: opts.peersPath,
+      enrollmentsPath: opts.enrollmentsPath,
       description:
         'Bridge Claude Code to Shepaw — approve tool calls from your phone',
       systemPrompt: opts.systemPrompt ?? '',

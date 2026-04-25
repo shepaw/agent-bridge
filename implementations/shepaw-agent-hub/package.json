@@ -1,7 +1,7 @@
 {
-  "name": "shepaw-acp-sdk",
+  "name": "shepaw-agent-hub",
   "version": "0.1.0",
-  "description": "TypeScript SDK for building Shepaw ACP agents (WebSocket JSON-RPC 2.0). Wire-compatible with the Python shepaw_acp_sdk.",
+  "description": "Supervisor CLI for running multiple Shepaw ACP agents on one host — each project gets its own X25519 identity and authorized-peers list, managed through a single `shepaw-hub` command.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -13,6 +13,9 @@
       "require": "./dist/index.cjs"
     }
   },
+  "bin": {
+    "shepaw-hub": "./dist/cli.js"
+  },
   "files": [
     "dist",
     "README.md",
@@ -22,34 +25,32 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
-    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist .turbo node_modules/.cache",
-    "example:echo": "tsx examples/echo-agent.ts"
+    "clean": "rm -rf dist"
   },
   "keywords": [
     "shepaw",
-    "acp",
-    "agent-client-protocol",
     "agent",
-    "websocket",
-    "json-rpc"
+    "hub",
+    "supervisor",
+    "multi-agent"
   ],
-  "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "noise-protocol": "^3.0.2",
-    "ws": "^8.18.0"
+    "cac": "^6.7.14",
+    "qrcode-terminal": "^0.12.0",
+    "rotating-file-stream": "^3.2.3",
+    "shepaw-acp-sdk": "*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/ws": "^8.5.13",
+    "@types/qrcode-terminal": "^0.12.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },
   "engines": {
-    "node": ">=18.17.0"
+    "node": ">=18.20.0"
   }
 }

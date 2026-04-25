@@ -387,9 +387,75 @@ export class TaskContext {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
+import type { NoiseSession } from './noise.js';
+import { encodeFrame, MAX_FRAME_AGENT_TO_APP } from './envelope.js';
+
+/**
+ * WebSocket objects we manage carry an optional NoiseSession used to encrypt
+ * outgoing frames once the v2 handshake completes. We attach it as a property
+ * on the ws object itself, which is the `ws` library's standard pattern for
+ * per-connection state. This keeps `wsSend` stateless w.r.t. connection IDs.
+ */
+export interface ShepawWebSocket extends WebSocket {
+  /**
+   * The Noise session for this connection. Present after the handshake
+   * completes and used by `wsSend` to encrypt outgoing JSON-RPC messages.
+   * Absent means "still in handshake" — `wsSend` will send raw (which should
+   * only happen for the handshake response itself; regular JSON-RPC sending
+   * after handshake without a session indicates a bug).
+   */
+  noiseSession?: NoiseSession;
+  /**
+   * v2.1: the authorized peer entry this connection handshook as. Populated
+   * right after `readHandshake1` resolved the peer's static public key and
+   * the server matched it against `authorized_peers.json`. Used later when
+   * processing `peer.unregister` (the peer identity comes from here, not from
+   * untrusted RPC params) and when `reloadPeers()` needs to boot any session
+   * whose peer has been revoked from the allowlist.
+   */
+  authorizedPeer?: import('./peers.js').AuthorizedPeer;
+  /**
+   * WS close codes in the 4000 range mean "application-level" — setting this
+   * flag prevents the server from trying to send further frames on an
+   * already-closing connection.
+   */
+  v2Closing?: boolean;
+}
+
+/**
+ * Send a JSON-RPC message. If the WS has a ready `NoiseSession` attached,
+ * the payload is encrypted into a `data` frame (v2 protocol). Otherwise the
+ * message is serialized raw (used only during the v2 handshake preamble).
+ */
 export async function wsSend(ws: WebSocket, message: unknown): Promise<void> {
+  const sws = ws as ShepawWebSocket;
+  if (sws.v2Closing === true) {
+    // Silently drop — peer was already told we're closing.
+    return;
+  }
+  const json = JSON.stringify(message);
+  let payload: string;
+  if (sws.noiseSession !== undefined && sws.noiseSession.ready) {
+    const ct = sws.noiseSession.encrypt(Buffer.from(json, 'utf-8'));
+    if (ct.length > MAX_FRAME_AGENT_TO_APP) {
+      // Hard-close rather than silently truncate. Caller is responsible for
+      // staying under MAX_FRAME_AGENT_TO_APP per message.
+      sws.v2Closing = true;
+      try {
+        ws.close(4402, 'frame too large');
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`wsSend: encrypted frame ${ct.length} exceeds limit`);
+    }
+    payload = encodeFrame({ t: 'data', payload: ct });
+  } else {
+    // Pre-handshake — message is already a handshake envelope or a pre-auth
+    // error. Emit as-is.
+    payload = json;
+  }
   await new Promise<void>((resolve, reject) => {
-    ws.send(JSON.stringify(message), (err) => {
+    ws.send(payload, (err) => {
       if (err) reject(err);
       else resolve();
     });

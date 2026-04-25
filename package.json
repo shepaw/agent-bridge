@@ -6,7 +6,8 @@
   "workspaces": [
     "sdks/shepaw-acp-sdk-typescript",
     "implementations/claude-code-ts",
-    "implementations/codebuddy-code"
+    "implementations/codebuddy-code",
+    "implementations/shepaw-agent-hub"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

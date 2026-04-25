@@ -11,11 +11,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer as createHttpServer } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+
+import noiseLib from 'noise-protocol';
 
 import { ACPAgentServer } from '../src/server.js';
 import { TaskContext } from '../src/task-context.js';
+import { addPeer } from '../src/peers.js';
 import { ChannelTunnelConfig } from '../src/tunnel.js';
+import { V2TestClient } from './v2-test-client.js';
 
 // ── Mock Channel Service ────────────────────────────────────────────
 
@@ -154,6 +161,9 @@ describe('Tunnel e2e', () => {
   let agent: EchoAgent;
   let agentPort: number;
   let publicUrl: string;
+  let peersPath: string;
+  let workdir: string;
+  let clientKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
 
   beforeAll(async () => {
     channel = new MockChannelService();
@@ -171,7 +181,15 @@ describe('Tunnel e2e', () => {
       channelEndpoint: 'myagent',
     });
 
-    agent = new EchoAgent({ name: 'Echo', token: '', tunnelConfig });
+    // Authorize the test client's static public key up front so the v2.1
+    // allowlist check passes on first connection.
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-tunnel-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    const kp = noiseLib.keygen();
+    clientKeypair = { publicKey: kp.publicKey, privateKey: kp.secretKey };
+    addPeer(peersPath, Buffer.from(clientKeypair.publicKey).toString('base64'), 'tunnel-test');
+
+    agent = new EchoAgent({ name: 'Echo', peersPath, tunnelConfig });
     await agent.run({ host: '127.0.0.1', port: agentPort });
 
     await channel.waitForControl();
@@ -183,38 +201,27 @@ describe('Tunnel e2e', () => {
   afterAll(async () => {
     await agent.close();
     await channel.stop();
+    rmSync(workdir, { recursive: true, force: true });
   });
 
   it('routes a full chat turn through the mock Channel Service', async () => {
-    const client = new WebSocket(publicUrl);
-    await new Promise<void>((resolve, reject) => {
-      client.once('open', resolve);
-      client.once('error', reject);
-    });
-
-    const received: Record<string, unknown>[] = [];
-    client.on('message', (raw) => {
-      received.push(JSON.parse(raw.toString('utf-8')) as Record<string, unknown>);
-    });
-
-    // Send agent.chat through the tunnel.
-    client.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'c1',
-        method: 'agent.chat',
-        params: { task_id: 't1', session_id: 's1', message: 'hello through tunnel' },
-      }),
+    const client = new V2TestClient(
+      publicUrl,
+      agent.identity.staticPublicKey,
+      { staticKeypair: clientKeypair },
     );
+    await client.waitReady();
 
-    // Wait up to 5s for task.completed.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      const hasCompleted = received.some((m) => m.method === 'task.completed');
-      if (hasCompleted) break;
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await client.request('agent.chat', {
+      task_id: 't1',
+      session_id: 's1',
+      message: 'hello through tunnel',
+    });
 
+    // Wait for task.completed.
+    await client.waitForNotification('task.completed', 5000);
+
+    const received = client.allMessages;
     const methods = received
       .map((m) => (typeof m.method === 'string' ? m.method : null))
       .filter((m): m is string => m !== null);
@@ -232,6 +239,6 @@ describe('Tunnel e2e', () => {
       'Echo: hello through tunnel',
     );
 
-    client.close();
+    await client.close();
   });
 });

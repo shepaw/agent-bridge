@@ -1,144 +1,73 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { WebSocket } from 'ws';
+/**
+ * ACPAgentServer v2.1 integration tests.
+ *
+ * Exercises the full v2.1 handshake + transport flow: client drives Noise IK,
+ * server checks the client's static public key against the authorized-peers
+ * allowlist, JSON-RPC subsequently flows encrypted. Any behavior that
+ * survived from v1 / v2 (task lifecycle, UI components, cancellation) is
+ * re-verified here now that it runs atop the new auth model.
+ */
 
-import type { AddressInfo } from 'node:net';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import noiseLib from 'noise-protocol';
 
 import { ACPAgentServer } from '../src/server.js';
 import { TaskContext } from '../src/task-context.js';
-import type { JsonRpcNotification, JsonRpcResponse } from '../src/types.js';
+import { WS_CLOSE } from '../src/envelope.js';
+import { addPeer, removePeerByFingerprint } from '../src/peers.js';
+import type { JsonRpcNotification } from '../src/types.js';
+
+import { startAgent, V2TestClient } from './v2-test-client.js';
+
+// ── helpers ────────────────────────────────────────────────────────
 
 /**
- * Minimal WS client helper that captures every incoming message.
- * Matches how the Shepaw app talks to an agent.
+ * Generate a fresh static keypair for a test client and (optionally) authorize
+ * it on the agent. Returns both the raw keypair (so `V2TestClient` can reuse
+ * it via `opts.staticKeypair`) and the base64 pubkey (in case you want to do
+ * it yourself). This is the v2.1 equivalent of "give your client the right
+ * token" — only now there is no shared secret, just a pubkey registration.
  */
-class TestClient {
-  private readonly ws: WebSocket;
-  private readonly messages: Array<Record<string, unknown>> = [];
-  private nextId = 1;
-  private closed = false;
-
-  constructor(url: string, token?: string) {
-    const headers: Record<string, string> = {};
-    if (token !== undefined) headers.Authorization = `Bearer ${token}`;
-    this.ws = new WebSocket(url, { headers });
-    this.ws.on('message', (data) => {
-      const msg = JSON.parse(data.toString('utf-8')) as Record<string, unknown>;
-      this.messages.push(msg);
-    });
-    this.ws.on('close', () => {
-      this.closed = true;
-    });
-  }
-
-  async ready(): Promise<void> {
-    if (this.ws.readyState === WebSocket.OPEN) return;
-    await new Promise<void>((resolve, reject) => {
-      this.ws.once('open', resolve);
-      this.ws.once('error', reject);
-    });
-  }
-
-  sendRaw(msg: unknown): void {
-    this.ws.send(JSON.stringify(msg));
-  }
-
-  async request<T = unknown>(
-    method: string,
-    params?: Record<string, unknown>,
-  ): Promise<JsonRpcResponse & { result?: T }> {
-    const id = this.nextId++;
-    this.sendRaw({ jsonrpc: '2.0', id, method, params });
-    return (await this.waitFor(
-      (m) => typeof m.id === 'number' && m.id === id,
-    )) as unknown as JsonRpcResponse & { result?: T };
-  }
-
-  notify(method: string, params?: Record<string, unknown>): void {
-    this.sendRaw({ jsonrpc: '2.0', method, params });
-  }
-
-  async waitFor(pred: (msg: Record<string, unknown>) => boolean, timeoutMs = 3000): Promise<Record<string, unknown>> {
-    // Return an existing message if one matches.
-    const existing = this.messages.find(pred);
-    if (existing !== undefined) return existing;
-    return await new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`Client.waitFor timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      );
-      const handler = (data: WebSocket.RawData) => {
-        const msg = JSON.parse(data.toString('utf-8')) as Record<string, unknown>;
-        if (pred(msg)) {
-          clearTimeout(timer);
-          this.ws.off('message', handler);
-          resolve(msg);
-        }
-      };
-      this.ws.on('message', handler);
-    });
-  }
-
-  async waitForNotification(method: string, timeoutMs = 3000): Promise<JsonRpcNotification> {
-    return (await this.waitFor(
-      (m) => m.method === method && m.id === undefined,
-      timeoutMs,
-    )) as unknown as JsonRpcNotification;
-  }
-
-  get allMessages(): ReadonlyArray<Record<string, unknown>> {
-    return this.messages;
-  }
-
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.ws.close();
-    await new Promise<void>((resolve) => this.ws.once('close', resolve));
-  }
-}
-
-async function startAgent(
-  agent: ACPAgentServer,
-): Promise<{ port: number; stop: () => Promise<void> }> {
-  const { httpServer, wsServer } = agent.createServer();
-
-  httpServer.on('upgrade', () => {
-    // already wired by createServer
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(0, '127.0.0.1', () => {
-      httpServer.off('error', reject);
-      resolve();
-    });
-  });
-
-  const port = (httpServer.address() as AddressInfo).port;
-
+function makePeerKeypair(): {
+  publicKey: Uint8Array;
+  privateKey: Uint8Array;
+  publicKeyB64: string;
+} {
+  const kp = noiseLib.keygen();
   return {
-    port,
-    stop: async () => {
-      await new Promise<void>((resolve) => wsServer.close(() => resolve()));
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-      await agent.close().catch(() => undefined);
-    },
+    publicKey: kp.publicKey,
+    privateKey: kp.secretKey,
+    publicKeyB64: Buffer.from(kp.publicKey).toString('base64'),
   };
 }
 
-// ────────────────────────────────────────────────────────────────────
+// ── Echo flow ──────────────────────────────────────────────────────
 
-describe('ACPAgentServer — echo flow', () => {
+describe('ACPAgentServer v2.1 — echo flow', () => {
   class EchoAgent extends ACPAgentServer {
     override async onChat(ctx: TaskContext, message: string): Promise<void> {
       await ctx.sendText(`Echo: ${message}`);
     }
   }
 
+  let agent: EchoAgent;
   let port: number;
   let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
 
   beforeAll(async () => {
-    const agent = new EchoAgent({ name: 'Echo', token: 'secret' });
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new EchoAgent({ name: 'Echo', peersPath });
     const handle = await startAgent(agent);
     port = handle.port;
     stop = handle.stop;
@@ -146,11 +75,16 @@ describe('ACPAgentServer — echo flow', () => {
 
   afterAll(async () => {
     await stop();
+    rmSync(workdir, { recursive: true, force: true });
   });
 
   it('completes a chat with task.started → ui.textContent → task.completed', async () => {
-    const client = new TestClient(`ws://127.0.0.1:${port}/acp/ws`, 'secret');
-    await client.ready();
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { agentId: agent.agentId, staticKeypair: authorized },
+    );
+    await client.waitReady();
 
     const ack = await client.request<{ task_id: string; status: string }>('agent.chat', {
       task_id: 't1',
@@ -186,34 +120,164 @@ describe('ACPAgentServer — echo flow', () => {
     await client.close();
   });
 
-  it('rejects bad token with -32000', async () => {
-    const client = new TestClient(`ws://127.0.0.1:${port}/acp/ws`); // no Authorization header
-    await client.ready();
-    const authResp = await client.request('auth.authenticate', { token: 'wrong' });
-    expect(authResp).toMatchObject({ error: { code: -32000 } });
-    await client.close();
-  });
-
-  it('ping works even before auth', async () => {
-    const client = new TestClient(`ws://127.0.0.1:${port}/acp/ws`);
-    await client.ready();
+  it('ping (post-handshake) returns pong', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
     const pong = await client.request('ping');
     expect(pong.result).toEqual({ pong: true });
     await client.close();
   });
+});
 
-  it('rejects unauthenticated method calls', async () => {
-    const client = new TestClient(`ws://127.0.0.1:${port}/acp/ws`);
-    await client.ready();
-    const resp = await client.request('agent.getCard');
-    expect(resp).toMatchObject({ error: { code: -32000 } });
-    await client.close();
+// ── Handshake rejection paths ──────────────────────────────────────
+
+describe('ACPAgentServer v2.1 — handshake rejection', () => {
+  class EchoAgent extends ACPAgentServer {
+    override async onChat(ctx: TaskContext, message: string): Promise<void> {
+      await ctx.sendText(`Echo: ${message}`);
+    }
+  }
+
+  let agent: EchoAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-reject-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new EchoAgent({ name: 'Echo', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('rejects unauthorized peer (not on allowlist) with close code 4405', async () => {
+    // Fresh keypair never added to the allowlist — handshake completes but
+    // the server aborts before activating the session.
+    const stranger = makePeerKeypair();
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: stranger },
+    );
+    await expect(client.waitReady()).rejects.toThrow();
+    const code = await client.waitForClose();
+    expect(code).toBe(WS_CLOSE.PEER_NOT_AUTHORIZED);
+  });
+
+  it('rejects wrong pinned peer public key (MITM) with close during handshake', async () => {
+    // Simulating a client that tried to handshake against a responder with a
+    // different static key than what the agent actually has — Noise decryption
+    // fails. (Authorized-peer check never runs because handshake aborts first.)
+    const wrongPub = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) wrongPub[i] = i;
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      wrongPub,
+      { staticKeypair: authorized },
+    );
+    await expect(client.waitReady()).rejects.toThrow();
+    const code = await client.waitForClose();
+    // HANDSHAKE_FAILED comes from the server's Noise decrypt failure.
+    expect(code).toBe(WS_CLOSE.HANDSHAKE_FAILED);
+  });
+
+  it('rejects claimed agentId mismatch with close code 4404', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { agentId: 'acp_agent_bogus', staticKeypair: authorized },
+    );
+    await expect(client.waitReady()).rejects.toThrow();
+    const code = await client.waitForClose();
+    expect(code).toBe(WS_CLOSE.AGENTID_MISMATCH);
   });
 });
 
-// ────────────────────────────────────────────────────────────────────
+// ── peer.unregister flow ──────────────────────────────────────────
 
-describe('ACPAgentServer — cancel + UI interaction', () => {
+describe('ACPAgentServer v2.1 — peer.unregister', () => {
+  class EchoAgent extends ACPAgentServer {
+    override async onChat(ctx: TaskContext, message: string): Promise<void> {
+      await ctx.sendText(`Echo: ${message}`);
+    }
+    // Expose the allowlist so the test can assert the entry is gone.
+    // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+    get peersForTest() {
+      return this.peers;
+    }
+  }
+
+  let agent: EchoAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+
+  beforeEach(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-unreg-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    agent = new EchoAgent({ name: 'Echo', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterEach(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('removes the peer from the allowlist and closes with 4411', async () => {
+    const kp = makePeerKeypair();
+    addPeer(peersPath, kp.publicKeyB64, 'revocable');
+    agent['reloadPeers']();  // pick up the new entry before connecting
+
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: kp },
+    );
+    await client.waitReady();
+    expect(agent.peersForTest.peers.length).toBe(1);
+
+    // Fire-and-forget notification — no id, no response.
+    client.sendRaw({ jsonrpc: '2.0', method: 'peer.unregister' });
+
+    const code = await client.waitForClose(2000);
+    expect(code).toBe(WS_CLOSE.UNREGISTERED);
+    expect(agent.peersForTest.peers.length).toBe(0);
+
+    // Reconnecting with the same keypair now fails at the allowlist check.
+    const retry = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: kp },
+    );
+    await expect(retry.waitReady()).rejects.toThrow();
+    const retryCode = await retry.waitForClose();
+    expect(retryCode).toBe(WS_CLOSE.PEER_NOT_AUTHORIZED);
+  });
+});
+
+// ── Cancel + UI ───────────────────────────────────────────────────
+
+describe('ACPAgentServer v2.1 — cancel + UI interaction', () => {
   let resolveConfirm: ((value: Record<string, unknown>) => void) | undefined;
 
   class InteractiveAgent extends ACPAgentServer {
@@ -232,11 +296,20 @@ describe('ACPAgentServer — cancel + UI interaction', () => {
     }
   }
 
+  let agent: InteractiveAgent;
   let port: number;
   let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
 
   beforeAll(async () => {
-    const agent = new InteractiveAgent({ name: 'Interactive', token: '' }); // no auth
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-ui-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new InteractiveAgent({ name: 'Interactive', peersPath });
     const handle = await startAgent(agent);
     port = handle.port;
     stop = handle.stop;
@@ -244,11 +317,16 @@ describe('ACPAgentServer — cancel + UI interaction', () => {
 
   afterAll(async () => {
     await stop();
+    rmSync(workdir, { recursive: true, force: true });
   });
 
   it('routes agent.submitResponse back to waitForResponse', async () => {
-    const client = new TestClient(`ws://127.0.0.1:${port}/acp/ws`);
-    await client.ready();
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
 
     const received = new Promise<Record<string, unknown>>((r) => (resolveConfirm = r));
 
@@ -288,21 +366,29 @@ describe('ACPAgentServer — cancel + UI interaction', () => {
   });
 });
 
-// ────────────────────────────────────────────────────────────────────
+// ── Cancellation ──────────────────────────────────────────────────
 
-describe('ACPAgentServer — cancellation', () => {
+describe('ACPAgentServer v2.1 — cancellation', () => {
   class StallAgent extends ACPAgentServer {
     override async onChat(ctx: TaskContext): Promise<void> {
-      // Wait for a confirmation that will never come; rely on cancel.
       await ctx.waitForResponse('never_confirmed', { timeoutMs: 60_000 });
     }
   }
 
+  let agent: StallAgent;
   let port: number;
   let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
 
   beforeAll(async () => {
-    const agent = new StallAgent({ name: 'Stall', token: '' });
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-cancel-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new StallAgent({ name: 'Stall', peersPath });
     const handle = await startAgent(agent);
     port = handle.port;
     stop = handle.stop;
@@ -310,11 +396,16 @@ describe('ACPAgentServer — cancellation', () => {
 
   afterAll(async () => {
     await stop();
+    rmSync(workdir, { recursive: true, force: true });
   });
 
   it('sends task.error with code -32008 on agent.cancelTask', async () => {
-    const client = new TestClient(`ws://127.0.0.1:${port}/acp/ws`);
-    await client.ready();
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
 
     await client.request('agent.chat', { task_id: 't3', session_id: 's3', message: 'stall' });
     await client.waitForNotification('task.started');
@@ -328,3 +419,6 @@ describe('ACPAgentServer — cancellation', () => {
     await client.close();
   });
 });
+
+// eliminate unused-import lint warning
+void removePeerByFingerprint;

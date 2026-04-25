@@ -58,16 +58,25 @@ export class ChannelTunnelConfig {
   }
 
   /** Public WebSocket URL the Shepaw app should paste into the "remote agent" field. */
-  getPublicEndpoint(opts: { token?: string; agentId?: string } = {}): string {
+  getPublicEndpoint(
+    opts: { agentId?: string; fingerprint?: string } = {},
+  ): string {
     const base = this.serverUrl.replace(/\/+$/, '');
     const wsBase = base.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
     const path = this.channelEndpoint
       ? `/c/${this.channelEndpoint}/acp/ws`
       : `/proxy/${this.channelId}/acp/ws`;
     const params: string[] = [];
-    if (opts.token) params.push(`token=${encodeURIComponent(opts.token)}`);
+    // v2.1: no `token=` here. Authorization is per-peer public key (see
+    // `authorized_peers.json` on the agent side); the pairing URL carries only
+    // the agentId (as a routing/UX hint) and the fingerprint (to pin the
+    // server's static public key at handshake time).
     if (opts.agentId) params.push(`agentId=${encodeURIComponent(opts.agentId)}`);
-    return params.length > 0 ? `${wsBase}${path}?${params.join('&')}` : `${wsBase}${path}`;
+    const query = params.length > 0 ? `?${params.join('&')}` : '';
+    // Fingerprint goes in the URI fragment so it is NOT sent to the Channel Service
+    // in the WebSocket upgrade request — fragments are client-side only.
+    const fragment = opts.fingerprint ? `#fp=${encodeURIComponent(opts.fingerprint)}` : '';
+    return `${wsBase}${path}${query}${fragment}`;
   }
 
   toDict(): Record<string, unknown> {
@@ -144,6 +153,7 @@ export class TunnelClient {
   private stopRequested = false;
   private ws: WebSocket | undefined;
   private loopTask: Promise<void> | undefined;
+  private keepaliveTimer: NodeJS.Timeout | undefined;
 
   /** per-stream queues: stream_id → per-stream message buffer & resolver */
   private readonly wsStreams = new Map<number, StreamQueue>();
@@ -219,7 +229,7 @@ export class TunnelClient {
       const onOpen = () => {
         ws.off('error', onError);
         this.ws = ws;
-        // Apply a 30-second keepalive once connected.
+        // Respond to server pings.
         ws.on('ping', () => {
           try {
             ws.pong();
@@ -227,6 +237,10 @@ export class TunnelClient {
             /* ignore */
           }
         });
+        // Send a JSON-level `ping` every 20s so the tunnel stays alive even
+        // through NAT/proxy paths that drop idle WS connections silently.
+        // Matches the 30s server-side ping cadence but with margin.
+        this.startKeepalive();
         resolve();
       };
       ws.once('open', onOpen);
@@ -235,6 +249,7 @@ export class TunnelClient {
   }
 
   private async disconnect(): Promise<void> {
+    this.stopKeepalive();
     // Drain per-stream queues so their forwarders exit.
     for (const [, q] of this.wsStreams) {
       q.push({ type: 'ws_close' });
@@ -249,6 +264,28 @@ export class TunnelClient {
       }
     }
     this.ws = undefined;
+  }
+
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      const ws = this.ws;
+      if (ws === undefined || ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      } catch {
+        /* ignore — reconnect loop will handle a dead socket */
+      }
+    }, 20_000);
+    // Don't keep the Node event loop alive just for the keepalive.
+    this.keepaliveTimer.unref?.();
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer !== undefined) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = undefined;
+    }
   }
 
   // ── main listen loop ────────────────────────────────────────
@@ -394,6 +431,12 @@ export class TunnelClient {
     } else if (this.config.channelEndpoint) {
       const shortPrefix = `/c/${this.config.channelEndpoint}`;
       if (path.startsWith(shortPrefix)) path = path.slice(shortPrefix.length);
+    } else {
+      // No `channelEndpoint` configured, but the relay may still route this
+      // channel via a short-name slug it assigned. Strip any `/c/<slug>` prefix
+      // so local path matching ("/acp/ws") still works.
+      const m = /^\/c\/[^/]+/.exec(path);
+      if (m !== null) path = path.slice(m[0].length);
     }
     const localWsUrl = `ws://${this.localHost}:${this.localPort}${path}`;
 
@@ -498,7 +541,7 @@ export class TunnelClient {
     if (ws === undefined || ws.readyState !== WebSocket.OPEN) return;
     await new Promise<void>((resolve) => {
       ws.send(JSON.stringify(msg), (err) => {
-        if (err !== undefined) this.log(`[Tunnel] send failed: ${formatErr(err)}`);
+        if (err) this.log(`[Tunnel] send failed: ${formatErr(err)}`);
         resolve();
       });
     });

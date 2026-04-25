@@ -11,7 +11,9 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./cli": "./dist/cli.js",
+    "./package.json": "./package.json"
   },
   "bin": {
     "shepaw-claude-code": "./dist/cli.js"
@@ -40,11 +42,13 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.111",
     "cac": "^6.7.14",
     "debug": "^4.4.0",
+    "qrcode-terminal": "^0.12.0",
     "shepaw-acp-sdk": "*"
   },
   "devDependencies": {
     "@types/debug": "^4.1.12",
     "@types/node": "^22.10.0",
+    "@types/qrcode-terminal": "^0.12.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

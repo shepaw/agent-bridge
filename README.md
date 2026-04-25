@@ -15,6 +15,7 @@ agent-bridge/
 ├── implementations/
 │   ├── claude-code-ts/               # Claude Code as a Shepaw agent (TS, current)
 │   ├── codebuddy-code/               # CodeBuddy Code as a Shepaw agent (TS)
+│   ├── shepaw-agent-hub/             # Multi-project supervisor CLI (TS) — see below
 │   ├── claude-code-py/               # Claude Code as a Shepaw agent (Python, older)
 │   └── paw-agent-py/                 # Multi-platform OS control agent (Python, unmaintained)
 │
@@ -27,6 +28,17 @@ TypeScript agent are interchangeable from the Shepaw app's point of view.
 JSON field names stay `snake_case` in both, method names match exactly,
 and Tunnel / Channel-Service framing is byte-for-byte identical.
 
+> **Note on protocol v2.1 (April 2026):** the TypeScript SDK and the
+> Shepaw Flutter app speak a Noise-IK-encrypted wire protocol with a
+> **per-device public-key allowlist** — there is no shared `token`.
+> Pairing URLs include a `#fp=<fingerprint>` fragment; authorization
+> is done out of band by running `<gateway> peers add <pubkey>` on the
+> agent host with the pubkey shown in the app's "Add agent" screen.
+> v2.1 is a **hard cutover** from v2 (prologue changed); both sides
+> must be on v2.1. The Python SDK here is still v1 and is not
+> interoperable with v2.1 apps until ported. See [`SECURITY.md`](SECURITY.md)
+> for the full threat model and pairing walkthrough.
+
 ## Quick start
 
 ### Run Claude Code on your phone (TypeScript gateway)
@@ -35,12 +47,34 @@ and Tunnel / Channel-Service framing is byte-for-byte identical.
 cd implementations/claude-code-ts
 npm install && npm run build
 export ANTHROPIC_API_KEY=sk-ant-...
-node dist/cli.js serve --cwd ~/your-project --port 8090 --token dev
-# Add ws://<host>:8090/acp/ws (token: dev) as a remote agent in Shepaw.
+node dist/cli.js serve --cwd ~/your-project --port 8090
+# The banner prints your agent's fingerprint + "Authorized peers: 0".
+# Copy your Shepaw app's public key from the "Add agent" screen, then run:
+node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
+# Paste the banner's ws:// URL (including #fp=...) into Shepaw to connect.
 ```
 
 For external access via the Shepaw Channel Service, see
 [`implementations/claude-code-ts/README.md`](implementations/claude-code-ts/README.md).
+
+### Run multiple agents from one CLI (`shepaw-agent-hub`)
+
+One host, many projects — each with its own identity and authorized-peers
+list. `shepaw-hub` is a cross-platform supervisor that spawns the unmodified
+gateway binaries with per-project configuration:
+
+```sh
+cd implementations/shepaw-agent-hub
+npm install && npm run build
+
+shepaw-hub init
+shepaw-hub project add work-api --engine codebuddy --cwd ~/code/work-api \
+    --base-url "wss://channel.shepaw.com/c/work-api"
+shepaw-hub start work-api
+shepaw-hub pair work-api --label "My iPhone"   # prints QR + short code
+```
+
+See [`implementations/shepaw-agent-hub/README.md`](implementations/shepaw-agent-hub/README.md) for the full command reference and Windows notes.
 
 ### Build a custom agent (Python)
 
@@ -75,7 +109,7 @@ class MyAgent extends ACPAgentServer {
   }
 }
 
-await new MyAgent({ name: 'My Agent', token: 'secret' }).run({ port: 8080 });
+await new MyAgent({ name: 'My Agent' }).run({ port: 8080 });
 ```
 
 ## Development
