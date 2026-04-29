@@ -78,6 +78,19 @@ export interface ClaudeCodeAgentOptions {
   cwd?: string;
   /** Claude model id (e.g. 'claude-opus-4-7'). */
   model?: string;
+  /**
+   * API key for the LLM provider. Passed as `ANTHROPIC_API_KEY` env var
+   * to the Claude Agent SDK subprocess. Use this to supply an OpenRouter
+   * key or any other Anthropic-compatible provider key without setting a
+   * global env var.
+   */
+  apiKey?: string;
+  /**
+   * Base URL for the LLM provider API. Passed as `ANTHROPIC_BASE_URL` env
+   * var to the Claude Agent SDK subprocess. For OpenRouter, set this to
+   * `https://openrouter.ai/api/v1`.
+   */
+  apiBaseUrl?: string;
   /** Cap on agentic turns per chat. */
   maxTurns?: number;
   /** Optional allowlist of tool names. Empty → all tools allowed (with approval). */
@@ -113,7 +126,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   > &
     Pick<
       ClaudeCodeAgentOptions,
-      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt'
+      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt' | 'apiKey' | 'apiBaseUrl'
     >;
   private readonly sessionStore: SessionStore;
   private readonly queryFn: QueryFn;
@@ -137,6 +150,8 @@ export class ClaudeCodeAgent extends ACPAgentServer {
       maxTurns: opts.maxTurns,
       allowedTools: opts.allowedTools,
       systemPrompt: opts.systemPrompt,
+      apiKey: opts.apiKey,
+      apiBaseUrl: opts.apiBaseUrl,
     };
     this.sessionStore = new SessionStore(opts.sessionStoreOptions);
     this.queryFn = opts.queryFn ?? (query as unknown as QueryFn);
@@ -253,6 +268,14 @@ export class ClaudeCodeAgent extends ACPAgentServer {
 
     const systemPrompt = this.cfg.systemPrompt ? this.cfg.systemPrompt : undefined;
 
+    // Build env overrides for the Claude Agent SDK subprocess.
+    // When apiKey / apiBaseUrl are set (e.g. for OpenRouter), inject them
+    // as ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL so the subprocess picks
+    // them up without requiring global env vars on the host.
+    const envOverrides: Record<string, string> = {};
+    if (this.cfg.apiKey) envOverrides.ANTHROPIC_API_KEY = this.cfg.apiKey;
+    if (this.cfg.apiBaseUrl) envOverrides.ANTHROPIC_BASE_URL = this.cfg.apiBaseUrl;
+
     const options: Options = {
       cwd: this.cfg.cwd,
       abortController,
@@ -262,6 +285,9 @@ export class ClaudeCodeAgent extends ACPAgentServer {
         pending: this.pendingConfirmations,
       }),
       permissionMode: this.cfg.permissionMode,
+      ...(Object.keys(envOverrides).length > 0 && {
+        env: { ...process.env, ...envOverrides },
+      }),
     };
     if (this.cfg.model !== undefined) options.model = this.cfg.model;
     if (this.cfg.maxTurns !== undefined) options.maxTurns = this.cfg.maxTurns;

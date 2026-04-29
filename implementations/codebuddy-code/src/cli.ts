@@ -276,7 +276,12 @@ cli
     let pairUrl: string | undefined;
     if (opts.baseUrl) {
       const base = opts.baseUrl.replace(/\/$/, '');
-      pairUrl = `${base}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
+      const pkB64 = Buffer.from(identity.staticPublicKey).toString('base64');
+      // Percent-encode the base64 `+`/`/`/`=` so that URL parsers on the
+      // client side (Dart `Uri.splitQueryString`) round-trip it cleanly
+      // back to the original base64. Otherwise `+` decodes to a space.
+      const pkEncoded = encodeURIComponent(pkB64);
+      pairUrl = `${base}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}&pk=${pkEncoded}`;
     }
 
     // shepaw:// deep-link that bundles URL + fp + code in one QR. The app's

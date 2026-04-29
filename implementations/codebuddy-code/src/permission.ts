@@ -96,7 +96,7 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
     const displayPrompt = buildPrompt(toolName, summary);
     log.gateway('permission request: %s — %s (waiting)', toolName, summary.slice(0, 80));
 
-    await ctx.sendActionConfirmation({
+    const cid = await ctx.sendActionConfirmation({
       prompt: displayPrompt,
       actions: [
         { label: 'Allow', value: 'allow' },
@@ -104,13 +104,67 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
       ],
     });
 
-    const decision = await opts.pending.wait({
+    // Race two reply paths:
+    //   (A) legacy chat-verdict: user types "allow"/"deny" as a new chat
+    //       message. `onChat` calls `pendingConfirmations.resolveAll(...)`
+    //       which settles our `wait()`.
+    //   (B) in-band `agent.submitResponse` carrying `confirmation_id=cid`.
+    //       SDK's `handleSubmitResponse` resolves the `pendingResponses`
+    //       deferred, which `ctx.waitForResponse(cid)` returns.
+    //
+    // Path B is preferred — it keeps the reply on the same task_id as the
+    // outstanding SDK turn, so the Shepaw app doesn't have to open a fresh
+    // task (which would race the existing taskCompleter and show an
+    // empty "Task completed" placeholder). Path A is kept because older
+    // apps / test harnesses still rely on sending the verdict as chat text.
+    //
+    // NB: when B wins, we still have an entry parked in
+    // `opts.pending.bySession[sessionId]`. If we leave it there, the *next*
+    // ordinary chat message from the user would trip `hasPending=true` in
+    // `onChat` and get swallowed as a stale verdict. So on B-wins we clear
+    // the pending list explicitly — with 'allow' so any in-flight A-branch
+    // observer sees a matching verdict rather than a deny surprise.
+    const waitForChat = opts.pending.wait({
       sessionId: opts.sessionId,
       toolName,
       input,
       displayPrompt,
       signal: sdkOpts.signal,
     });
+    const waitForInBand = ctx
+      .waitForResponse(cid)
+      .then<PermissionDecision>((resp) => {
+        // The Shepaw app's action-confirmation widget reads `id` off the
+        // action list and reports it back as `selected_action_id`. Our
+        // outbound actions (see the `sendActionConfirmation` call above)
+        // set `value: 'allow' | 'deny'`, NOT `id`, so older apps end up
+        // posting `selected_action_id: ''` with the human label in
+        // `selected_action_label`. Accept both shapes: normalise every
+        // known field to lowercase and look for an allow-ish keyword.
+        const candidates: string[] = [];
+        for (const key of ['selected_action_id', 'selected_action_label'] as const) {
+          const v = resp[key];
+          if (typeof v === 'string' && v.length > 0) candidates.push(v.toLowerCase());
+        }
+        const text = candidates.join(' ');
+        const looksAllow = /\b(allow|approve|approved|yes|ok|confirm)\b/.test(text)
+          || text.includes('同意')
+          || text.includes('允许')
+          || text.includes('确认')
+          || text.includes('确定');
+        const verdict: PermissionDecision = looksAllow
+          ? { behavior: 'allow', updatedInput: input }
+          : { behavior: 'deny', message: DENY_MESSAGE_USER };
+        // Drain the chat-verdict queue so the next unrelated user message
+        // isn't misread as a stale confirmation reply.
+        opts.pending.resolveAll(opts.sessionId, looksAllow ? 'allow' : 'deny');
+        return verdict;
+      })
+      // `waitForResponse` throws on timeout; convert to a pending Promise
+      // (never settles) so the other branch wins if chat-verdict arrives.
+      .catch(() => new Promise<PermissionDecision>(() => {}));
+
+    const decision = await Promise.race([waitForChat, waitForInBand]);
     log.gateway('permission resolved: %s — %s', toolName, decision.behavior);
     return decision;
   };

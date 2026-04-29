@@ -27,6 +27,7 @@
  */
 
 import { Buffer } from 'node:buffer';
+import { createHmac, randomBytes } from 'node:crypto';
 
 import { WebSocket } from 'ws';
 
@@ -213,10 +214,21 @@ export class TunnelClient {
   private connect(): Promise<void> {
     const base = this.config.serverUrl.replace(/\/+$/, '');
     const wsBase = base.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+
+    // HMAC-SHA256 签名认证（密钥不上线）
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = randomBytes(16).toString('hex');
+    const signingString = `${this.config.channelId}\n${timestamp}\n${nonce}`;
+    const signature = createHmac('sha256', this.config.secret)
+      .update(signingString)
+      .digest('hex');
+
     const url =
       `${wsBase}/tunnel/connect` +
       `?channel_id=${encodeURIComponent(this.config.channelId)}` +
-      `&secret=${encodeURIComponent(this.config.secret)}`;
+      `&timestamp=${encodeURIComponent(timestamp)}` +
+      `&nonce=${encodeURIComponent(nonce)}` +
+      `&signature=${encodeURIComponent(signature)}`;
 
     return new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url, {

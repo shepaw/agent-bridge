@@ -1152,10 +1152,21 @@ export class ACPAgentServer {
     const displayHost = host === '0.0.0.0' || host === '::' || host === '' ? 'localhost' : host;
     const fp = this.identity.fingerprint;
     const peerCount = this.peers.peers.length;
-    // Shepaw requires #fp=<fingerprint> on every pairing URL — LAN included —
-    // because the client-side Noise handshake pins it before trusting any
-    // agent public key. v2.1 drops the token query param: authentication is
-    // now per-peer public-key allowlist (see authorized_peers.json).
+    // Shepaw requires #fp=<fingerprint>&pk=<base64pubkey> on every pairing URL
+    // — LAN included — because the client-side Noise IK handshake needs the
+    // responder's full static public key upfront. The fingerprint is a
+    // commitment (first 8 bytes of sha256(pubkey)); the full key is needed so
+    // the IK initiator can encrypt its first message to the responder.
+    // v2.1 drops the token query param: authentication is now per-peer
+    // public-key allowlist (see authorized_peers.json).
+    //
+    // IMPORTANT: base64 contains `+`, `/`, `=` which are NOT safe in URL
+    // fragments parsed as application/x-www-form-urlencoded (`+` becomes a
+    // space). We percent-encode those three chars so clients that split the
+    // fragment with standard URI helpers (Dart `Uri.splitQueryString`,
+    // JS `URLSearchParams`) round-trip cleanly back to the original base64.
+    const pkB64 = Buffer.from(this.identity.staticPublicKey).toString('base64');
+    const pkEncoded = encodeURIComponent(pkB64);
     const banner = [
       '='.repeat(60),
       `  ${this.name} (ACP Agent Server)`,
@@ -1167,7 +1178,7 @@ export class ACPAgentServer {
       `  Peers file:       ${this.peers.path}`,
       `  History:          ${this.convMgr.maxHistory} turns per session`,
       '-'.repeat(60),
-      `  ACP WS:           ws://${displayHost}:${port}/acp/ws?agentId=${this.agentId}#fp=${fp}`,
+      `  ACP WS:           ws://${displayHost}:${port}/acp/ws?agentId=${this.agentId}#fp=${fp}&pk=${pkEncoded}`,
       `  Health:           http://${displayHost}:${port}/health`,
       '='.repeat(60),
     ];

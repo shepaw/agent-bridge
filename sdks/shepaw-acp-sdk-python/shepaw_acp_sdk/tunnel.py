@@ -32,8 +32,12 @@ Protocol messages (JSON):
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -287,9 +291,21 @@ class TunnelClient:
         ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
         channel_id = self.config.channel_id
         secret = self.config.secret
+
+        # HMAC-SHA256 签名认证（密钥不上线）
+        timestamp = str(int(time.time()))
+        nonce = os.urandom(16).hex()
+        signing_string = f"{channel_id}\n{timestamp}\n{nonce}"
+        signature = hmac.new(
+            secret.encode(), signing_string.encode(), hashlib.sha256
+        ).hexdigest()
+
         ws_url = (
             f"{ws_base}/tunnel/connect"
-            f"?channel_id={channel_id}&secret={secret}"
+            f"?channel_id={channel_id}"
+            f"&timestamp={timestamp}"
+            f"&nonce={nonce}"
+            f"&signature={signature}"
         )
         log.debug("[Tunnel] Connecting to %s", ws_base + "/tunnel/connect")
         assert self._session is not None

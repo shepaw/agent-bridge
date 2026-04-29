@@ -59,6 +59,8 @@ cli
   .option('--host <host>', 'Host to bind to', { default: '0.0.0.0' })
   .option('--name <name>', 'Display name', { default: 'Claude Code' })
   .option('--model <model>', 'Claude model id (e.g. claude-opus-4-7)')
+  .option('--api-key <key>', 'API key for the LLM provider (sets ANTHROPIC_API_KEY for the subprocess)')
+  .option('--api-base-url <url>', 'Base URL for the LLM provider API (sets ANTHROPIC_BASE_URL; e.g. https://openrouter.ai/api/v1)')
   .option('--max-turns <n>', 'Maximum agentic turns per chat')
   .option(
     '--allowed-tools <list>',
@@ -132,6 +134,8 @@ cli
       enrollmentsPath: opts.enrollmentsPath,
       cwd: opts.cwd,
       model: opts.model,
+      apiKey: opts.apiKey,
+      apiBaseUrl: opts.apiBaseUrl,
       maxTurns: opts.maxTurns !== undefined ? Number(opts.maxTurns) : undefined,
       allowedTools,
       permissionMode: opts.permissionMode,
