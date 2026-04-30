@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SessionStore } from '../src/session-store.js';
+import { SessionStore } from 'shepaw-acp-sdk';
 
 let dir: string;
 let storePath: string;

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ApprovalCache } from '../src/approval-cache.js';
-import { PendingConfirmations } from '../src/pending-confirmations.js';
-import { makeCanUseTool } from '../src/permission.js';
+import { ApprovalCache, PendingConfirmations, makeCanUseTool } from 'shepaw-acp-sdk';
 
 /**
  * Blocking permission flow tests.

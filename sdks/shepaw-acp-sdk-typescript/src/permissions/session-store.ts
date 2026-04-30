@@ -1,24 +1,27 @@
 /**
- * Persist Shepaw-session → Claude Code SDK session mapping so the gateway
- * can resume a conversation across process restarts.
+ * Persist Shepaw-session → agent SDK session mapping so the gateway can
+ * resume a conversation across process restarts.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 
-import { log } from './debug.js';
-
-const DEFAULT_PATH = join(homedir(), '.config', 'shepaw-cc-gateway', 'sessions.json');
+import { sessionsPath, type GatewayStorageConfig } from '../storage-paths.js';
+import { log } from './log.js';
 
 export interface SessionStoreOptions {
-  /** Override the persistence path. Default `~/.config/shepaw-cc-gateway/sessions.json`. */
+  /**
+   * Storage configuration. Provide either a full `path` override or a
+   * `gatewayDirName` (via {@link GatewayStorageConfig}) to compute the
+   * default `~/.config/<gatewayDirName>/sessions.json`.
+   */
   path?: string;
+  gatewayDirName?: string;
 }
 
 interface PersistedShape {
   version: 1;
-  /** shepaw session_id → claude-agent-sdk session_id */
+  /** shepaw session_id → agent-sdk session_id */
   map: Record<string, string>;
 }
 
@@ -28,7 +31,16 @@ export class SessionStore {
   private writeTimer: NodeJS.Timeout | undefined;
 
   constructor(opts: SessionStoreOptions = {}) {
-    this.path = opts.path ?? DEFAULT_PATH;
+    if (opts.path !== undefined) {
+      this.path = opts.path;
+    } else if (opts.gatewayDirName !== undefined) {
+      const cfg: GatewayStorageConfig = { gatewayDirName: opts.gatewayDirName };
+      this.path = sessionsPath(cfg);
+    } else {
+      throw new Error(
+        'SessionStore requires either `path` or `gatewayDirName` in its options.',
+      );
+    }
   }
 
   async load(): Promise<void> {

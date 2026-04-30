@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { summarizeToolInput } from '../src/tool-summary.js';
+import { summarizeToolInput } from 'shepaw-acp-sdk';
 
 describe('summarizeToolInput', () => {
   it('Read → file_path', () => {

@@ -31,26 +31,27 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import {
   ACPAgentServer,
+  ApprovalCache,
+  type ApprovalCacheOptions,
+  classifyApprovalMessage,
+  FormAnswerStage,
+  makeCanUseTool,
+  PendingConfirmations,
+  PendingMarkerStore,
+  type PendingMarkerOptions,
+  SessionStore,
+  type SessionStoreOptions,
+  summarizeToolInput,
   type ChannelTunnelConfig,
   type ChatKwargs,
   type TaskContext,
 } from 'shepaw-acp-sdk';
 
-import {
-  ApprovalCache,
-  type ApprovalCacheOptions,
-} from './approval-cache.js';
-import { classifyApprovalMessage } from './approval-keywords.js';
 import { log } from './debug.js';
-import { makeCanUseTool } from './permission.js';
-import { FormAnswerStage } from './permission.js';
-import { PendingConfirmations } from './pending-confirmations.js';
-import {
-  PendingMarkerStore,
-  type PendingMarkerOptions,
-} from './pending-marker.js';
-import { SessionStore, type SessionStoreOptions } from './session-store.js';
-import { summarizeToolInput } from './tool-summary.js';
+
+/** Gateway directory name — keeps our on-disk state isolated from other bridges. */
+const GATEWAY_DIR_NAME = 'shepaw-cc-gateway';
+const AGENT_DISPLAY_NAME = 'Claude';
 
 /**
  * Signature subset of `@anthropic-ai/claude-agent-sdk`'s `query` that the
@@ -192,10 +193,12 @@ export class ClaudeCodeAgent extends ACPAgentServer {
       authToken: opts.authToken,
       apiBaseUrl: opts.apiBaseUrl,
     };
-    this.sessionStore = new SessionStore(opts.sessionStoreOptions);
+    this.sessionStore = new SessionStore(opts.sessionStoreOptions ?? { gatewayDirName: GATEWAY_DIR_NAME });
     this.queryFn = opts.queryFn ?? (query as unknown as QueryFn);
     this.approvalCache = new ApprovalCache(opts.approvalCacheOptions);
-    this.pendingMarkerStore = new PendingMarkerStore(opts.pendingMarkerOptions);
+    this.pendingMarkerStore = new PendingMarkerStore(
+      opts.pendingMarkerOptions ?? { gatewayDirName: GATEWAY_DIR_NAME },
+    );
   }
 
   async init(): Promise<void> {
@@ -415,6 +418,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
         pending: this.pendingConfirmations,
         pendingMarker: this.pendingMarkerStore,
         formAnswers: this.formAnswers,
+        agentDisplayName: AGENT_DISPLAY_NAME,
       }),
       permissionMode: this.cfg.permissionMode,
       ...(Object.keys(envOverrides).length > 0 && {

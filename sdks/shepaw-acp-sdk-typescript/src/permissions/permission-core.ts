@@ -1,5 +1,6 @@
 /**
- * Route `canUseTool` from the CodeBuddy Agent SDK into Shepaw UI components.
+ * Route `canUseTool` from an agent SDK (Claude Code, CodeBuddy Code, …)
+ * into Shepaw UI components.
  *
  * Async-confirmation flow (default):
  *   - On cache miss, fire `ui.actionConfirmation` to the phone, record a
@@ -30,10 +31,10 @@
  * the retry turn, after all.
  */
 
-import type { TaskContext } from 'shepaw-acp-sdk';
+import type { TaskContext } from '../task-context.js';
 
 import { ApprovalCache } from './approval-cache.js';
-import { log } from './debug.js';
+import { log } from './log.js';
 import {
   PendingConfirmations,
   type PermissionDecision,
@@ -43,7 +44,7 @@ import { summarizeToolInput } from './tool-summary.js';
 
 export type { PermissionDecision };
 
-// ── AskUserQuestion input shape (per CodeBuddy Agent SDK types) ─────
+// ── AskUserQuestion input shape (common to Claude / CodeBuddy SDKs) ──
 
 interface AskUserQuestionOption {
   label: string;
@@ -116,6 +117,11 @@ export interface MakeCanUseToolOptions {
   pendingMarker: PendingMarkerStore;
   /** Staging slot for AskUserQuestion answers keyed by sessionId. */
   formAnswers: FormAnswerStage;
+  /**
+   * Human-readable agent name used in user-facing prompts, e.g. "Claude" or
+   * "CodeBuddy". Appears as `"<agentDisplayName> wants to use Bash: npm test"`.
+   */
+  agentDisplayName: string;
 }
 
 const DENY_MESSAGE_USER = 'User denied this action.';
@@ -180,7 +186,7 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
 
     // Cache miss → emit confirmation and defer.
     const summary = summarizeToolInput(toolName, input);
-    const displayPrompt = buildPrompt(toolName, summary);
+    const displayPrompt = buildPrompt(opts.agentDisplayName, toolName, summary);
     log.gateway(
       'permission request: %s — %s (deferring; user will respond in a follow-up turn)',
       toolName,
@@ -262,7 +268,7 @@ async function handleAskUserQuestion(
 
   const formId = await ctx.sendForm({
     title: 'Clarifying questions',
-    description: 'CodeBuddy needs your input to continue.',
+    description: `${opts.agentDisplayName} needs your input to continue.`,
     fields,
   });
 
@@ -294,7 +300,7 @@ async function handleAskUserQuestion(
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-function buildPrompt(toolName: string, summary: string): string {
-  if (!summary) return `CodeBuddy wants to use ${toolName}`;
-  return `CodeBuddy wants to use \`${toolName}\`:\n${summary}`;
+function buildPrompt(agentDisplayName: string, toolName: string, summary: string): string {
+  if (!summary) return `${agentDisplayName} wants to use ${toolName}`;
+  return `${agentDisplayName} wants to use \`${toolName}\`:\n${summary}`;
 }

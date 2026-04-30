@@ -38,10 +38,12 @@
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
+    "debug": "^4.4.0",
     "noise-protocol": "^3.0.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/debug": "^4.1.12",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
     "tsup": "^8.3.5",

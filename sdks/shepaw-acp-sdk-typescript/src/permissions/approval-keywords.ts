@@ -73,3 +73,5 @@ export function classifyApprovalMessage(message: string): ApprovalDecision | und
   if (hasAllow) return 'allow';
   return undefined;
 }
+
+export { ALLOW_TOKENS, DENY_TOKENS };

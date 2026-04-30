@@ -4,13 +4,20 @@
 
 export { ClaudeCodeAgent } from './agent.js';
 export type { ClaudeCodeAgentOptions } from './agent.js';
-export { makeCanUseTool, type MakeCanUseToolOptions } from './permission.js';
+
+// Re-exported from shepaw-acp-sdk so existing downstream consumers don't
+// have to change their import paths after the SDK migration.
 export {
+  makeCanUseTool,
+  type MakeCanUseToolOptions,
   PendingConfirmations,
   type PendingConfirmation,
   type PermissionDecision,
-} from './pending-confirmations.js';
-export { ApprovalCache, type ApprovalCacheOptions } from './approval-cache.js';
-export { summarizeToolInput } from './tool-summary.js';
-export { SessionStore, type SessionStoreOptions } from './session-store.js';
+  ApprovalCache,
+  type ApprovalCacheOptions,
+  summarizeToolInput,
+  SessionStore,
+  type SessionStoreOptions,
+} from 'shepaw-acp-sdk';
+
 export { log, wrapForDebug } from './debug.js';

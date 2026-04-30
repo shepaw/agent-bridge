@@ -98,3 +98,47 @@ export type {
   ChannelTunnelConfigInit,
   TunnelClientOptions,
 } from './tunnel.js';
+
+// ── Permissions / approval routing ──────────────────────────────────
+
+export {
+  type GatewayStorageConfig,
+  gatewayDir,
+  sessionsPath,
+  pendingApprovalsPath,
+  approvalRulesPath,
+} from './storage-paths.js';
+export {
+  ApprovalCache,
+  type ApprovalCacheOptions,
+  type ApprovalDecision,
+  type PendingApproval,
+} from './permissions/approval-cache.js';
+export {
+  classifyApprovalMessage,
+  ALLOW_TOKENS,
+  DENY_TOKENS,
+} from './permissions/approval-keywords.js';
+export {
+  PendingConfirmations,
+  type PermissionDecision,
+  type PendingConfirmation,
+  type PendingConfirmationsOptions,
+  type WaitParams,
+} from './permissions/pending-confirmations.js';
+export {
+  PendingMarkerStore,
+  type PendingMarker,
+  type PendingMarkerOptions,
+} from './permissions/pending-marker.js';
+export {
+  SessionStore,
+  type SessionStoreOptions,
+} from './permissions/session-store.js';
+export { summarizeToolInput } from './permissions/tool-summary.js';
+export {
+  FormAnswerStage,
+  type StagedFormAnswer,
+  makeCanUseTool,
+  type MakeCanUseToolOptions,
+} from './permissions/permission-core.js';

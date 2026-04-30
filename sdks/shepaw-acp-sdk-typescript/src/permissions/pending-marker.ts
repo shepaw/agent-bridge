@@ -2,7 +2,7 @@
  * Persist the "pending tool-use approval" state for the async-confirmation
  * flow across gateway restarts.
  *
- * Context: in the async-confirmation model, when a CodeBuddy Agent SDK turn
+ * Context: in the async-confirmation model, when an agent SDK turn
  * requests a tool we can't auto-approve, `canUseTool` emits a
  * `ui.actionConfirmation` to the phone and immediately returns `deny` to
  * unblock the SDK turn (the turn ends right after, so the app stops seeing
@@ -21,22 +21,26 @@
  *     SDK thinks is "pending" — the SDK itself doesn't record approval
  *     state, it just replays history.
  *
- * Storage: `~/.config/shepaw-cc-gateway/pending-approvals.json`, keyed by
+ * Storage: `~/.config/<gatewayDirName>/pending-approvals.json`, keyed by
  * Shepaw sessionId. At most one pending marker per session at any time —
  * the SDK only allows one tool_use in flight per turn.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 
-import { log } from './debug.js';
-
-const DEFAULT_PATH = join(homedir(), '.config', 'shepaw-cc-gateway', 'pending-approvals.json');
+import { pendingApprovalsPath, type GatewayStorageConfig } from '../storage-paths.js';
+import { log } from './log.js';
 
 export interface PendingMarkerOptions {
-  /** Override the persistence path. Default `~/.config/shepaw-cc-gateway/pending-approvals.json`. */
+  /**
+   * Full override for the persistence file path. If unset, the default is
+   * computed from `gatewayDirName` as
+   * `~/.config/<gatewayDirName>/pending-approvals.json`.
+   */
   path?: string;
+  /** Gateway directory name under `~/.config/`. Required if `path` is not set. */
+  gatewayDirName?: string;
 }
 
 /** What the user is being asked to approve. */
@@ -65,7 +69,16 @@ export class PendingMarkerStore {
   private writeTimer: NodeJS.Timeout | undefined;
 
   constructor(opts: PendingMarkerOptions = {}) {
-    this.path = opts.path ?? DEFAULT_PATH;
+    if (opts.path !== undefined) {
+      this.path = opts.path;
+    } else if (opts.gatewayDirName !== undefined) {
+      const cfg: GatewayStorageConfig = { gatewayDirName: opts.gatewayDirName };
+      this.path = pendingApprovalsPath(cfg);
+    } else {
+      throw new Error(
+        'PendingMarkerStore requires either `path` or `gatewayDirName` in its options.',
+      );
+    }
   }
 
   async load(): Promise<void> {
