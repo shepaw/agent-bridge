@@ -35,9 +35,12 @@ import {
   classifyApprovalMessage,
   FormAnswerStage,
   makeCanUseTool,
+  PatternRuleStore,
+  type PatternRuleStoreOptions,
   PendingConfirmations,
   PendingMarkerStore,
   type PendingMarkerOptions,
+  resolvePendingApproval,
   SessionStore,
   type SessionStoreOptions,
   summarizeToolInput,
@@ -118,6 +121,12 @@ export interface CodeBuddyCodeAgentOptions {
   /** Override pending-marker persistence path (async-confirmation state). */
   pendingMarkerOptions?: PendingMarkerOptions;
   /**
+   * Override the "Allow All Similar" pattern-rule store paths. When
+   * unset we derive both session-rules and global-rules paths from
+   * `GATEWAY_DIR_NAME`.
+   */
+  patternRuleStoreOptions?: PatternRuleStoreOptions;
+  /**
    * When set, the gateway opens a reverse tunnel to the Shepaw Channel
    * Service so your phone can reach it from the public internet.
    */
@@ -143,6 +152,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   private readonly approvalCache: ApprovalCache;
   private readonly pendingConfirmations = new PendingConfirmations();
   private readonly pendingMarkerStore: PendingMarkerStore;
+  private readonly patternRuleStore: PatternRuleStore;
   /**
    * Single-shot staging for AskUserQuestion form answers. When the user
    * submits a form, `onChat` writes the answers here; on the next
@@ -179,11 +189,15 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
     this.pendingMarkerStore = new PendingMarkerStore(
       opts.pendingMarkerOptions ?? { gatewayDirName: GATEWAY_DIR_NAME },
     );
+    this.patternRuleStore = new PatternRuleStore(
+      opts.patternRuleStoreOptions ?? { gatewayDirName: GATEWAY_DIR_NAME },
+    );
   }
 
   async init(): Promise<void> {
     await this.sessionStore.load();
     await this.pendingMarkerStore.load();
+    await this.patternRuleStore.load();
   }
 
   override getAgentCard() {
@@ -246,82 +260,28 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
       this.activeTasks.get(ctx.taskId) ?? new AbortController();
 
     const isFormSubmission = message.trimStart().startsWith(FORM_SUBMISSION_PREFIX);
-    const verdict = isFormSubmission ? undefined : classifyApprovalMessage(message);
+    // `classifyApprovalMessage` returns `{verdict, scope}`. Scope
+    // decides between one-shot cache ('once') and pattern-rule
+    // ('pattern') writes inside `resolvePendingApproval`; `verdict` is
+    // also needed below for the legacy blocking-fallback branch.
+    const classification = isFormSubmission ? undefined : classifyApprovalMessage(message);
+    const verdict = classification?.verdict;
 
     // ── async-confirmation path: pendingMarker + verdict/form submission ──
-    const marker = this.pendingMarkerStore.get(ctx.sessionId);
-    let promptMessage = message;
-    const isAskUserQuestionMarker =
-      marker !== undefined && marker.toolName === 'AskUserQuestion';
-
-    if (marker && isAskUserQuestionMarker && isFormSubmission) {
-      // Stage the user's raw form-submission text under `updatedInput.answers._raw`
-      // so that the next --resume turn's `canUseTool(AskUserQuestion)` returns
-      // `{allow, updatedInput}` and the SDK treats the tool as having executed
-      // successfully with those answers.
-      const rawAnswers = message.slice(FORM_SUBMISSION_PREFIX.length).trim();
-      this.formAnswers.set(ctx.sessionId, {
-        toolName: 'AskUserQuestion',
-        updatedInput: {
-          ...marker.input,
-          answers: { _raw: rawAnswers },
-        },
-        stagedAtMs: Date.now(),
-      });
-      this.pendingMarkerStore.delete(ctx.sessionId);
-      log.gateway(
-        'AskUserQuestion form answer staged (session=%s, %d chars); resuming SDK',
-        ctx.sessionId,
-        rawAnswers.length,
-      );
-      // Swap the raw "Form submitted: ..." for a prompt that tells the model
-      // the user answered. On --resume the AskUserQuestion canUseTool hits the
-      // stage and returns the answers, so the SDK sees the tool's result.
-      promptMessage =
-        `The user answered the clarifying questions. Please continue based on their input.`;
-    } else if (marker && isAskUserQuestionMarker && verdict === 'deny') {
-      // User explicitly declined to answer the questions. Drop the marker
-      // WITHOUT staging; canUseTool on resume will send another form, OR
-      // the model may give up. We return an explicit decline so the model
-      // chooses to move on rather than looping.
-      this.formAnswers.delete(ctx.sessionId);
-      this.pendingMarkerStore.delete(ctx.sessionId);
-      log.gateway(
-        'AskUserQuestion declined by user (session=%s); resuming SDK with decline prompt',
-        ctx.sessionId,
-      );
-      promptMessage =
-        'The user declined to answer the clarifying questions. Please proceed with a reasonable default or move on.';
-    } else if (marker && !isAskUserQuestionMarker && (verdict === 'allow' || verdict === 'deny')) {
-      // Tool-use marker + allow/deny verdict → ApprovalCache.
-      this.approvalCache.set(
-        ctx.sessionId,
-        marker.toolName,
-        marker.input,
-        verdict,
-        marker.displayPrompt,
-        message,
-      );
-      this.pendingMarkerStore.delete(ctx.sessionId);
-      log.gateway(
-        'async-confirmation %s for %s (session=%s); resuming SDK with synthetic prompt',
-        verdict,
-        marker.toolName,
-        ctx.sessionId,
-      );
-      promptMessage =
-        verdict === 'allow'
-          ? `The user approved the previous \`${marker.toolName}\` request. Please retry it now.`
-          : `The user denied the previous \`${marker.toolName}\` request. Please acknowledge the denial and do not retry.`;
-    } else if (marker) {
-      // Non-verdict, non-form-submission message while a marker is live —
-      // leave the marker in place; the user may still respond later.
-      log.gateway(
-        'non-verdict message while pendingMarker is live (session=%s, tool=%s); keeping marker and opening new query',
-        ctx.sessionId,
-        marker.toolName,
-      );
-    }
+    // Delegated to the SDK so both agent implementations share a single
+    // decision matrix and a single logging format. The call is a no-op
+    // when there's no pending marker for this session.
+    const { promptMessage } = resolvePendingApproval({
+      sessionId: ctx.sessionId,
+      message,
+      isFormSubmission,
+      formSubmissionPrefix: FORM_SUBMISSION_PREFIX,
+      classification,
+      approvalCache: this.approvalCache,
+      pendingMarker: this.pendingMarkerStore,
+      patternRules: this.patternRuleStore,
+      formAnswers: this.formAnswers,
+    });
 
     // ── legacy AskUserQuestion blocking path (unchanged) ──
     const hasPending = this.pendingConfirmations.size(ctx.sessionId) > 0;
@@ -389,6 +349,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         cache: this.approvalCache,
         pending: this.pendingConfirmations,
         pendingMarker: this.pendingMarkerStore,
+        patternRules: this.patternRuleStore,
         formAnswers: this.formAnswers,
         agentDisplayName: AGENT_DISPLAY_NAME,
       }),

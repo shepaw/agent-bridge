@@ -107,6 +107,7 @@ export {
   sessionsPath,
   pendingApprovalsPath,
   approvalRulesPath,
+  globalApprovalRulesPath,
 } from './storage-paths.js';
 export {
   ApprovalCache,
@@ -118,6 +119,10 @@ export {
   classifyApprovalMessage,
   ALLOW_TOKENS,
   DENY_TOKENS,
+  ALWAYS_TOKENS,
+  type ApprovalClassification,
+  type ApprovalVerdict,
+  type ApprovalScope,
 } from './permissions/approval-keywords.js';
 export {
   PendingConfirmations,
@@ -142,3 +147,18 @@ export {
   makeCanUseTool,
   type MakeCanUseToolOptions,
 } from './permissions/permission-core.js';
+export {
+  PatternRuleStore,
+  type PatternRule,
+  type PatternRuleStoreOptions,
+  type RuleAction,
+  evaluate,
+  deriveRule,
+} from './permissions/pattern-rules.js';
+export { match as wildcardMatch } from './permissions/wildcard.js';
+export { prefix as arityPrefix } from './permissions/arity.js';
+export {
+  resolvePendingApproval,
+  type ResolvePendingApprovalParams,
+  type ResolvePendingApprovalResult,
+} from './permissions/approval-router.js';

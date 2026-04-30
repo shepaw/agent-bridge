@@ -40,6 +40,7 @@ import {
   type PermissionDecision,
 } from './pending-confirmations.js';
 import type { PendingMarkerStore } from './pending-marker.js';
+import type { PatternRuleStore } from './pattern-rules.js';
 import { summarizeToolInput } from './tool-summary.js';
 
 export type { PermissionDecision };
@@ -118,6 +119,13 @@ export interface MakeCanUseToolOptions {
   /** Staging slot for AskUserQuestion answers keyed by sessionId. */
   formAnswers: FormAnswerStage;
   /**
+   * Pattern-rule engine covering "Allow All Similar" decisions and
+   * hand-edited global policy. Consulted BEFORE the exact-hash
+   * `ApprovalCache` so a broad `allow Bash npm *` rule can cover a
+   * fresh `npm install` that was never approved as an exact input.
+   */
+  patternRules: PatternRuleStore;
+  /**
    * Human-readable agent name used in user-facing prompts, e.g. "Claude" or
    * "CodeBuddy". Appears as `"<agentDisplayName> wants to use Bash: npm test"`.
    */
@@ -151,11 +159,14 @@ interface CanUseToolOptions {
  *        (single-shot: the staging slot is cleared on consume).
  *      - Stage miss → send `ui.form`, record a pendingMarker tagged `form`,
  *        return deny (the SDK turn ends, the user replies in a new message).
- *   2. Tool cache hit → return cached verdict immediately. (Used by the retry
- *      turn after an async approval: the cache says "yes this tool+input
- *      was approved".)
- *   3. Tool cache miss → send `ui.actionConfirmation`, record a
- *      `PendingMarker`, return deny.
+ *   2. Pattern rule match (session + global): if a rule says `allow` or
+ *      `deny`, return it immediately. `ask` (including the synthetic
+ *      default when no rule matches) falls through.
+ *   3. Exact-hash cache hit → return cached verdict. Cache lives under
+ *      the rule engine so a user's one-off "Allow" can still override
+ *      an `ask` rule for a specific input.
+ *   4. Miss → send `ui.actionConfirmation` (Allow / Allow All Similar /
+ *      Deny), record a `PendingMarker`, return deny.
  */
 export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
   return async function canUseTool(
@@ -173,7 +184,33 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
       );
     }
 
-    // Cache hit → short-circuit.
+    // Pattern rule match (covers "Allow All Similar" + hand-edited globals).
+    // Kept above the exact cache so a session-level `allow Bash npm *` rule
+    // can short-circuit a fresh `npm install foo` the user never approved
+    // as an exact input. `ask` means "no opinion, fall through".
+    const rule = opts.patternRules.findMatch(opts.sessionId, toolName, input);
+    if (rule.action === 'allow') {
+      log.gateway(
+        'pattern rule HIT for %s — allowing (%s=%s)',
+        toolName,
+        rule.permission,
+        rule.pattern,
+      );
+      return { behavior: 'allow', updatedInput: input };
+    }
+    if (rule.action === 'deny') {
+      log.gateway(
+        'pattern rule HIT for %s — denying (%s=%s)',
+        toolName,
+        rule.permission,
+        rule.pattern,
+      );
+      return { behavior: 'deny', message: DENY_MESSAGE_USER };
+    }
+
+    // Exact-hash cache hit → short-circuit. Sits UNDER the rule engine so
+    // a single "Allow" recorded for one specific input can override an
+    // `ask` rule without the rule having to enumerate that input.
     const cached = opts.cache.get(opts.sessionId, toolName, input);
     if (cached === 'allow') {
       log.gateway('approval cache HIT for %s — allowing', toolName);
@@ -197,6 +234,12 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
       prompt: displayPrompt,
       actions: [
         { label: 'Allow', value: 'allow' },
+        // "Allow All Similar" escalates scope from this exact input to
+        // every call matching the derived pattern (e.g. `npm *`). The
+        // app renders actions dynamically, so no client-side change is
+        // needed — `onChat` reads the chosen label and classifies it
+        // via `ALWAYS_TOKENS` just like a hand-typed "allow all".
+        { label: 'Allow All Similar', value: 'allow-all' },
         { label: 'Deny', value: 'deny' },
       ],
     });

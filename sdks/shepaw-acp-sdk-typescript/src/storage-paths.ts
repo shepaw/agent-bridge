@@ -36,10 +36,24 @@ export function pendingApprovalsPath(cfg: GatewayStorageConfig): string {
 }
 
 /**
- * Absolute path for the pattern-based approval rules file.
+ * Absolute path for the pattern-based approval rules file (session-scoped).
  * Used by the "Allow All Similar" feature to remember decisions that apply
- * to a whole class of tool calls (e.g. "all `npm` invocations").
+ * to a whole class of tool calls (e.g. "all `npm` invocations") for a given
+ * Shepaw session. Written by the gateway as users tap "Allow All Similar".
  */
 export function approvalRulesPath(cfg: GatewayStorageConfig): string {
   return join(gatewayDir(cfg), 'approval-rules.json');
+}
+
+/**
+ * Absolute path for the global pattern-based approval rules file.
+ *
+ * Unlike `approvalRulesPath` (which the gateway writes), this file is a
+ * read-only policy file hand-edited by the user — e.g. "always allow
+ * `Read *`" or "always deny `Bash rm -rf *`". Loaded once per process
+ * start and shared across every session. Session-level rules take
+ * precedence at evaluation time.
+ */
+export function globalApprovalRulesPath(cfg: GatewayStorageConfig): string {
+  return join(gatewayDir(cfg), 'global-rules.json');
 }
