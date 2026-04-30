@@ -1,21 +1,31 @@
 /**
  * Route `canUseTool` from the CodeBuddy Agent SDK into Shepaw UI components.
  *
- * Blocking flow:
- *   - On cache miss, fire `ui.actionConfirmation` to the phone and
- *     AWAIT the user's reply. The SDK's turn stays open. When the user
- *     taps Allow / Deny (or types an approval keyword in a new chat
- *     message) the onChat handler calls `pending.resolveAll(...)`, our
- *     Promise resolves, `canUseTool` returns, and the same SDK turn
- *     proceeds with the tool call. No retry, no second query(), no
- *     "deny and hope the model tries again" leakage.
- *   - `AskUserQuestion` → fire `ui.form` and AWAIT the user's form
- *     submission. Same round-trip as above; the answers come back in a
- *     follow-up chat message ("Form submitted: ..."). See
- *     `FORM_SUBMISSION_PREFIXES` in agent.ts for how we identify it.
- *   - Cache hit (allow) → return immediately without a UI prompt.
- *   - Cache hit (deny) → return deny immediately.
- *   - Task cancel (abort signal) → any in-flight wait resolves to deny.
+ * Async-confirmation flow (default):
+ *   - On cache miss, fire `ui.actionConfirmation` to the phone, record a
+ *     `PendingMarker` (toolName + input + cid), and IMMEDIATELY return
+ *     `deny` to the SDK. The SDK injects a `tool_result: error` and the
+ *     assistant turn ends naturally — the user's phone sees
+ *     `task.completed`, no "loading..." spinner.
+ *   - The user taps Allow / Deny (in-band `submitResponse`) or types an
+ *     approval keyword in a new chat message.
+ *   - `onChat` observes the pending marker + verdict, populates the
+ *     `ApprovalCache` with the verdict, and re-runs the SDK via `--resume`
+ *     with a prompt that asks the model to retry. On that retry the
+ *     cache short-circuits `canUseTool` and the tool actually executes.
+ *
+ * Trade-off vs. the old blocking flow:
+ *   + Mobile-friendly: user can close the app between ask and reply.
+ *   + No open TCP sockets or task_id races while we wait for input.
+ *   - One extra LLM call per approval (the retry turn). Worth it.
+ *
+ * `AskUserQuestion` keeps the old blocking model for now — it carries a
+ * free-form reply (not a boolean), which is harder to replay through the
+ * approval cache. Follow-up: make it async too by staging the form answer
+ * as an `updatedInput` and using `--resume` with a custom system prompt.
+ *
+ * Cache hits still short-circuit immediately; they're the whole point of
+ * the retry turn, after all.
  */
 
 import type { TaskContext } from 'shepaw-acp-sdk';
@@ -26,6 +36,7 @@ import {
   PendingConfirmations,
   type PermissionDecision,
 } from './pending-confirmations.js';
+import type { PendingMarkerStore } from './pending-marker.js';
 import { summarizeToolInput } from './tool-summary.js';
 
 export type { PermissionDecision };
@@ -56,19 +67,34 @@ export interface MakeCanUseToolOptions {
   sessionId: string;
   /** Cross-turn approval cache (allow/deny decisions that persist). */
   cache: ApprovalCache;
-  /** In-flight confirmation tracker — await these from canUseTool. */
+  /** In-flight confirmation tracker — used by the legacy blocking path for AskUserQuestion. */
   pending: PendingConfirmations;
+  /** Persistent store of "session has a pending tool_use waiting for user approval". */
+  pendingMarker: PendingMarkerStore;
 }
 
 const DENY_MESSAGE_USER = 'User denied this action.';
+
+/** Message returned to the SDK when we defer a tool_use to the user. */
+const DEFER_MESSAGE =
+  'This action needs user approval. A confirmation prompt has been sent to the user. ' +
+  'End this turn — the user will respond in a follow-up message, at which point we will ' +
+  'resume the session and re-attempt the call if approved.';
 
 interface CanUseToolOptions {
   signal: AbortSignal;
 }
 
 /**
- * Build a `canUseTool` callback that blocks the SDK turn until the
- * user replies on their phone.
+ * Build a `canUseTool` callback.
+ *
+ * Flow per call:
+ *   1. If `toolName === 'AskUserQuestion'` → legacy blocking path (form UI).
+ *   2. Cache hit → return cached verdict immediately. (Used by the retry
+ *      turn after an async approval: the cache says "yes this tool+input
+ *      was approved".)
+ *   3. Cache miss → send `ui.actionConfirmation`, record a `PendingMarker`,
+ *      return deny. The SDK terminates the turn shortly after.
  */
 export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
   return async function canUseTool(
@@ -77,10 +103,15 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
     sdkOpts: CanUseToolOptions,
   ): Promise<PermissionDecision> {
     if (toolName === 'AskUserQuestion') {
-      return handleAskUserQuestion(ctx, opts, sdkOpts, input as unknown as AskUserQuestionInput);
+      return handleAskUserQuestion(
+        ctx,
+        opts,
+        sdkOpts,
+        input as unknown as AskUserQuestionInput,
+      );
     }
 
-    // Cache hit → allow/deny immediately without asking again.
+    // Cache hit → short-circuit.
     const cached = opts.cache.get(opts.sessionId, toolName, input);
     if (cached === 'allow') {
       log.gateway('approval cache HIT for %s — allowing', toolName);
@@ -91,10 +122,14 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
       return { behavior: 'deny', message: DENY_MESSAGE_USER };
     }
 
-    // Cache miss → send a confirmation and block until the user replies.
+    // Cache miss → emit confirmation and defer.
     const summary = summarizeToolInput(toolName, input);
     const displayPrompt = buildPrompt(toolName, summary);
-    log.gateway('permission request: %s — %s (waiting)', toolName, summary.slice(0, 80));
+    log.gateway(
+      'permission request: %s — %s (deferring; user will respond in a follow-up turn)',
+      toolName,
+      summary.slice(0, 80),
+    );
 
     const cid = await ctx.sendActionConfirmation({
       prompt: displayPrompt,
@@ -104,69 +139,28 @@ export function makeCanUseTool(ctx: TaskContext, opts: MakeCanUseToolOptions) {
       ],
     });
 
-    // Race two reply paths:
-    //   (A) legacy chat-verdict: user types "allow"/"deny" as a new chat
-    //       message. `onChat` calls `pendingConfirmations.resolveAll(...)`
-    //       which settles our `wait()`.
-    //   (B) in-band `agent.submitResponse` carrying `confirmation_id=cid`.
-    //       SDK's `handleSubmitResponse` resolves the `pendingResponses`
-    //       deferred, which `ctx.waitForResponse(cid)` returns.
-    //
-    // Path B is preferred — it keeps the reply on the same task_id as the
-    // outstanding SDK turn, so the Shepaw app doesn't have to open a fresh
-    // task (which would race the existing taskCompleter and show an
-    // empty "Task completed" placeholder). Path A is kept because older
-    // apps / test harnesses still rely on sending the verdict as chat text.
-    //
-    // NB: when B wins, we still have an entry parked in
-    // `opts.pending.bySession[sessionId]`. If we leave it there, the *next*
-    // ordinary chat message from the user would trip `hasPending=true` in
-    // `onChat` and get swallowed as a stale verdict. So on B-wins we clear
-    // the pending list explicitly — with 'allow' so any in-flight A-branch
-    // observer sees a matching verdict rather than a deny surprise.
-    const waitForChat = opts.pending.wait({
-      sessionId: opts.sessionId,
+    // Record the pending approval persistently so `onChat` can resolve it
+    // even across gateway restarts. Note: we only keep ONE pending marker
+    // per session at a time. If there were somehow two concurrent
+    // canUseTool calls in the same session (shouldn't happen under normal
+    // SDK use — turns are serial), the later one overwrites the earlier.
+    opts.pendingMarker.set(opts.sessionId, {
       toolName,
       input,
+      cid,
       displayPrompt,
-      signal: sdkOpts.signal,
+      requestedAtMs: Date.now(),
     });
-    const waitForInBand = ctx
-      .waitForResponse(cid)
-      .then<PermissionDecision>((resp) => {
-        // The Shepaw app's action-confirmation widget reads `id` off the
-        // action list and reports it back as `selected_action_id`. Our
-        // outbound actions (see the `sendActionConfirmation` call above)
-        // set `value: 'allow' | 'deny'`, NOT `id`, so older apps end up
-        // posting `selected_action_id: ''` with the human label in
-        // `selected_action_label`. Accept both shapes: normalise every
-        // known field to lowercase and look for an allow-ish keyword.
-        const candidates: string[] = [];
-        for (const key of ['selected_action_id', 'selected_action_label'] as const) {
-          const v = resp[key];
-          if (typeof v === 'string' && v.length > 0) candidates.push(v.toLowerCase());
-        }
-        const text = candidates.join(' ');
-        const looksAllow = /\b(allow|approve|approved|yes|ok|confirm)\b/.test(text)
-          || text.includes('同意')
-          || text.includes('允许')
-          || text.includes('确认')
-          || text.includes('确定');
-        const verdict: PermissionDecision = looksAllow
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: DENY_MESSAGE_USER };
-        // Drain the chat-verdict queue so the next unrelated user message
-        // isn't misread as a stale confirmation reply.
-        opts.pending.resolveAll(opts.sessionId, looksAllow ? 'allow' : 'deny');
-        return verdict;
-      })
-      // `waitForResponse` throws on timeout; convert to a pending Promise
-      // (never settles) so the other branch wins if chat-verdict arrives.
-      .catch(() => new Promise<PermissionDecision>(() => {}));
 
-    const decision = await Promise.race([waitForChat, waitForInBand]);
-    log.gateway('permission resolved: %s — %s', toolName, decision.behavior);
-    return decision;
+    // Respect task cancellation: if the whole turn was aborted (e.g. the
+    // user explicitly stopped the task), settle as deny without expecting
+    // a follow-up.
+    if (sdkOpts.signal.aborted) {
+      opts.pendingMarker.delete(opts.sessionId);
+      return { behavior: 'deny', message: 'Task cancelled.' };
+    }
+
+    return { behavior: 'deny', message: DEFER_MESSAGE };
   };
 }
 
@@ -201,11 +195,10 @@ async function handleAskUserQuestion(
     fields,
   });
 
-  // Block until the user submits — resolved with 'allow' when onChat
-  // sees the form submission message. The raw answer text is what
-  // comes back in the follow-up chat turn; for now we simply allow so
-  // the SDK ends this AskUserQuestion call cleanly, and the answers
-  // flow to the model as the next user message.
+  // Block until the user submits. Kept blocking for now because form
+  // answers are free-form text — no simple "allow/deny" cache key. A
+  // follow-up can make this async by storing the raw submission as an
+  // `updatedInput` and re-running via --resume.
   const decision = await opts.pending.wait({
     sessionId: opts.sessionId,
     toolName: 'AskUserQuestion',

@@ -4,15 +4,21 @@
  * Wraps `@tencent-ai/agent-sdk`'s `query()` and routes:
  *   - Assistant text blocks → `ui.textContent` (streaming)
  *   - Tool use blocks → a `ui.messageMetadata` header + a `ui.textContent` summary
- *   - `canUseTool` callback → `ui.actionConfirmation` (or `ui.form` for
- *     `AskUserQuestion`), then BLOCKS until the user replies on their
- *     phone; the reply arrives as a new `agent.chat` message and
- *     `onChat` calls `pendingConfirmations.resolveAll(verdict)`, which
- *     unblocks the in-flight SDK turn. See the comment at the top of
- *     `onChat` for the full decision matrix.
- *   - Captured `session_id` from `SystemMessage` → SessionStore for resume
+ *   - `canUseTool` callback → async-confirmation flow:
+ *       1. On cache miss, `canUseTool` fires `ui.actionConfirmation`,
+ *          records a `PendingMarker` (persisted to disk), and returns
+ *          `deny` immediately so the SDK turn ends naturally.
+ *       2. The Shepaw app closes / user walks away — no open state to hold.
+ *       3. When the user taps Allow/Deny later, a new `agent.chat` arrives.
+ *          `onChat` sees the pending marker, populates `ApprovalCache`
+ *          with the verdict, and re-runs `query()` with `--resume`.
+ *       4. On the resume turn, `canUseTool` hits the cache and returns
+ *          immediately — the tool actually executes.
+ *   - `AskUserQuestion` → fire `ui.form` and AWAIT the user's form
+ *     submission (still blocking; async version is a follow-up).
+ *   - Captured `session_id` from `SystemMessage` → SessionStore for resume.
  *   - `agent.cancelTask` → AbortController.abort() propagates into
- *     canUseTool's wait() and resolves any pending as deny
+ *     canUseTool and clears any pending marker.
  */
 
 import {
@@ -37,6 +43,10 @@ import { classifyApprovalMessage } from './approval-keywords.js';
 import { log } from './debug.js';
 import { makeCanUseTool } from './permission.js';
 import { PendingConfirmations } from './pending-confirmations.js';
+import {
+  PendingMarkerStore,
+  type PendingMarkerOptions,
+} from './pending-marker.js';
 import { SessionStore, type SessionStoreOptions } from './session-store.js';
 import { summarizeToolInput } from './tool-summary.js';
 
@@ -103,6 +113,8 @@ export interface CodeBuddyCodeAgentOptions {
   approvalCacheOptions?: ApprovalCacheOptions;
   /** Override session-store persistence path. */
   sessionStoreOptions?: SessionStoreOptions;
+  /** Override pending-marker persistence path (async-confirmation state). */
+  pendingMarkerOptions?: PendingMarkerOptions;
   /**
    * When set, the gateway opens a reverse tunnel to the Shepaw Channel
    * Service so your phone can reach it from the public internet.
@@ -128,6 +140,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   private readonly queryFn: QueryFn;
   private readonly approvalCache: ApprovalCache;
   private readonly pendingConfirmations = new PendingConfirmations();
+  private readonly pendingMarkerStore: PendingMarkerStore;
 
   constructor(opts: CodeBuddyCodeAgentOptions = {}) {
     super({
@@ -154,10 +167,12 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
     this.sessionStore = new SessionStore(opts.sessionStoreOptions);
     this.queryFn = opts.queryFn ?? (query as unknown as QueryFn);
     this.approvalCache = new ApprovalCache(opts.approvalCacheOptions);
+    this.pendingMarkerStore = new PendingMarkerStore(opts.pendingMarkerOptions);
   }
 
   async init(): Promise<void> {
     await this.sessionStore.load();
+    await this.pendingMarkerStore.load();
   }
 
   override getAgentCard() {
@@ -173,6 +188,11 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         'file_operations',
         'bash_execution',
         'interactive_messages',
+        // Signals to the Shepaw app that this agent supports the
+        // async-confirmation flow (deny-and-resume) rather than the
+        // legacy blocking model. Older agents lacking this capability
+        // force the app back onto `taskCompleter`-based awaiting.
+        'async_confirmation',
       ],
       supported_protocols: ['acp'],
     };
@@ -185,39 +205,85 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   ): Promise<void> {
     // Decision matrix when a new agent.chat message arrives:
     //
-    //  pending?   message kind            action
-    //  ─────────  ─────────────────────   ────────────────────────────────
-    //  YES        verdict=allow           resolveAll(allow); return (no query)
-    //  YES        verdict=deny            resolveAll(deny);  return (no query)
-    //  YES        "Form submitted: …"     resolveAll(allow with raw text
-    //                                     in updatedInput.answers); return
-    //  YES        anything else           resolveAll(deny) to unblock the
-    //                                     stale SDK turn, then open a new
-    //                                     query() for the user's message.
-    //  NO         verdict=allow/deny      fall through to new query()
-    //                                     (the verdict got dropped, but
-    //                                     that's fine — nothing to resolve)
-    //  NO         anything else           open a new query() as usual
+    //  pending?          message kind            action
+    //  ────────────────  ─────────────────────   ─────────────────────────────
+    //  MARKER            verdict=allow           cache(allow), drop marker,
+    //                                            fall through with a synthetic
+    //                                            "retry it" prompt + --resume
+    //  MARKER            verdict=deny            cache(deny), drop marker,
+    //                                            fall through with a synthetic
+    //                                            "don't retry" prompt + --resume
+    //  MARKER            anything else           leave marker; treat as a
+    //                                            fresh user message (the model
+    //                                            will either re-request the
+    //                                            tool and hit a cache miss
+    //                                            again, or move on)
+    //  FORM (legacy)     verdict=allow           resolveAll(allow), mirror
+    //                                            cache, return (no new query)
+    //  FORM (legacy)     verdict=deny            resolveAll(deny), mirror
+    //                                            cache, return
+    //  FORM (legacy)     "Form submitted: …"     resolveAll(allow + raw text
+    //                                            in updatedInput), return
+    //  FORM (legacy)     anything else           resolveAll(deny) to unblock,
+    //                                            fall through
+    //  NONE              anything                open a new query() as usual
     //
-    // The logic is deliberately simple: the invariant we maintain is
-    // that at most one SDK turn is live per (session, caller), so the
-    // pending tracker is never supposed to hold entries from a previous
-    // query() beyond the next user message.
+    // Invariant: at most one MARKER and at most one FORM wait per session.
+    // The new async-confirmation flow uses MARKER for tool_use approvals;
+    // FORM is the legacy blocking path reserved for AskUserQuestion.
 
     const abortController =
       this.activeTasks.get(ctx.taskId) ?? new AbortController();
 
-    const hasPending = this.pendingConfirmations.size(ctx.sessionId) > 0;
     const isFormSubmission = message.trimStart().startsWith(FORM_SUBMISSION_PREFIX);
     const verdict = isFormSubmission ? undefined : classifyApprovalMessage(message);
 
+    // ── async-confirmation path: pendingMarker + verdict ──
+    const marker = this.pendingMarkerStore.get(ctx.sessionId);
+    let promptMessage = message;
+    if (marker && (verdict === 'allow' || verdict === 'deny')) {
+      // Populate the cross-turn ApprovalCache so the upcoming --resume
+      // turn's canUseTool hits immediately without asking again.
+      this.approvalCache.set(
+        ctx.sessionId,
+        marker.toolName,
+        marker.input,
+        verdict,
+        marker.displayPrompt,
+        message,
+      );
+      this.pendingMarkerStore.delete(ctx.sessionId);
+      log.gateway(
+        'async-confirmation %s for %s (session=%s); resuming SDK with synthetic prompt',
+        verdict,
+        marker.toolName,
+        ctx.sessionId,
+      );
+      // Swap the user's raw "allow"/"deny" for a prompt the model can
+      // actually act on. On --resume the model will see its own prior
+      // attempted tool_use (+ the deny tool_result we injected earlier),
+      // and this user message tells it what to do next.
+      promptMessage =
+        verdict === 'allow'
+          ? `The user approved the previous \`${marker.toolName}\` request. Please retry it now.`
+          : `The user denied the previous \`${marker.toolName}\` request. Please acknowledge the denial and do not retry.`;
+    } else if (marker) {
+      // Non-verdict message while a marker is live — leave the marker in
+      // place; the user may still approve/deny later. Start a fresh query
+      // for the new user message and let the model decide what to do.
+      log.gateway(
+        'non-verdict message while pendingMarker is live (session=%s, tool=%s); keeping marker and opening new query',
+        ctx.sessionId,
+        marker.toolName,
+      );
+    }
+
+    // ── legacy AskUserQuestion blocking path (unchanged) ──
+    const hasPending = this.pendingConfirmations.size(ctx.sessionId) > 0;
     if (hasPending) {
       if (verdict === 'allow' || verdict === 'deny') {
         const resolved = this.pendingConfirmations.resolveAll(ctx.sessionId, verdict);
         for (const p of resolved) {
-          // Mirror into the cross-turn ApprovalCache so that if the
-          // same tool call shows up in a future query() with the same
-          // input, we can short-circuit without asking again.
           this.approvalCache.set(
             ctx.sessionId,
             p.toolName,
@@ -228,7 +294,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
           );
         }
         log.gateway(
-          'resolved %d pending confirmation(s) as %s (session=%s); skipping new query',
+          'resolved %d pending form confirmation(s) as %s (session=%s); skipping new query',
           resolved.length,
           verdict,
           ctx.sessionId,
@@ -237,12 +303,6 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
       }
 
       if (isFormSubmission) {
-        // Pack the user's raw form-submission text into updatedInput
-        // so that AskUserQuestion's canUseTool returns with the answer.
-        // We use the `answers._raw` sub-field because the SDK treats
-        // `updatedInput` as an opaque merge into the tool input — the
-        // model then sees its own question plus our raw answers blob
-        // and continues from there.
         const resolved = this.pendingConfirmations.resolveAllWith(
           ctx.sessionId,
           (p) => ({
@@ -261,13 +321,10 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         return;
       }
 
-      // Unrelated chat while an SDK turn is blocked. Clean up the
-      // stale wait(s) with a deny, then fall through to open a fresh
-      // query for the new message.
       const stale = this.pendingConfirmations.resolveAll(ctx.sessionId, 'deny');
       if (stale.length > 0) {
         log.gateway(
-          'denied %d stale pending confirmation(s) to unblock prior SDK turn (session=%s)',
+          'denied %d stale pending form confirmation(s) to unblock prior SDK turn (session=%s)',
           stale.length,
           ctx.sessionId,
         );
@@ -286,6 +343,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         sessionId: ctx.sessionId,
         cache: this.approvalCache,
         pending: this.pendingConfirmations,
+        pendingMarker: this.pendingMarkerStore,
       }),
       permissionMode: this.cfg.permissionMode,
     };
@@ -301,7 +359,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
 
     // canUseTool requires streaming input mode — wrap the prompt as an async iterable.
     const stream = this.queryFn({
-      prompt: asyncUserPrompt(message),
+      prompt: asyncUserPrompt(promptMessage),
       options,
     });
 
