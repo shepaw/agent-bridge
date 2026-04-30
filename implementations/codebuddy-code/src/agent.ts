@@ -42,6 +42,7 @@ import {
 import { classifyApprovalMessage } from './approval-keywords.js';
 import { log } from './debug.js';
 import { makeCanUseTool } from './permission.js';
+import { FormAnswerStage } from './permission.js';
 import { PendingConfirmations } from './pending-confirmations.js';
 import {
   PendingMarkerStore,
@@ -141,6 +142,13 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   private readonly approvalCache: ApprovalCache;
   private readonly pendingConfirmations = new PendingConfirmations();
   private readonly pendingMarkerStore: PendingMarkerStore;
+  /**
+   * Single-shot staging for AskUserQuestion form answers. When the user
+   * submits a form, `onChat` writes the answers here; on the next
+   * `--resume` turn, `canUseTool` for AskUserQuestion consumes and returns
+   * them as `updatedInput` so the SDK sees the tool "successfully executed".
+   */
+  private readonly formAnswers = new FormAnswerStage();
 
   constructor(opts: CodeBuddyCodeAgentOptions = {}) {
     super({
@@ -205,32 +213,31 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   ): Promise<void> {
     // Decision matrix when a new agent.chat message arrives:
     //
-    //  pending?          message kind            action
-    //  ────────────────  ─────────────────────   ─────────────────────────────
-    //  MARKER            verdict=allow           cache(allow), drop marker,
-    //                                            fall through with a synthetic
-    //                                            "retry it" prompt + --resume
-    //  MARKER            verdict=deny            cache(deny), drop marker,
-    //                                            fall through with a synthetic
-    //                                            "don't retry" prompt + --resume
-    //  MARKER            anything else           leave marker; treat as a
-    //                                            fresh user message (the model
-    //                                            will either re-request the
-    //                                            tool and hit a cache miss
-    //                                            again, or move on)
-    //  FORM (legacy)     verdict=allow           resolveAll(allow), mirror
-    //                                            cache, return (no new query)
-    //  FORM (legacy)     verdict=deny            resolveAll(deny), mirror
-    //                                            cache, return
-    //  FORM (legacy)     "Form submitted: …"     resolveAll(allow + raw text
-    //                                            in updatedInput), return
-    //  FORM (legacy)     anything else           resolveAll(deny) to unblock,
-    //                                            fall through
-    //  NONE              anything                open a new query() as usual
+    //  pending?                     message kind            action
+    //  ───────────────────────────  ─────────────────────   ─────────────────────────────
+    //  MARKER(tool_use)             verdict=allow           cache(allow), drop marker,
+    //                                                       --resume with synthetic
+    //                                                       "retry it" prompt
+    //  MARKER(tool_use)             verdict=deny            cache(deny), drop marker,
+    //                                                       --resume with synthetic
+    //                                                       "don't retry" prompt
+    //  MARKER(AskUserQuestion)      "Form submitted: …"     stage answers, drop marker,
+    //                                                       --resume with synthetic
+    //                                                       "user answered" prompt
+    //  MARKER(AskUserQuestion)      verdict=allow           treat as empty form submission
+    //                                                       (user typed "allow" — we have
+    //                                                       no answers to stage, so drop
+    //                                                       the marker and fall through)
+    //  MARKER(AskUserQuestion)      verdict=deny            drop marker, --resume with
+    //                                                       "user declined to answer"
+    //  MARKER(*)                    anything else           leave marker; treat as a
+    //                                                       fresh user message
+    //  NONE                         anything                open a new query() as usual
     //
-    // Invariant: at most one MARKER and at most one FORM wait per session.
-    // The new async-confirmation flow uses MARKER for tool_use approvals;
-    // FORM is the legacy blocking path reserved for AskUserQuestion.
+    // Invariant: at most one MARKER per session. The legacy
+    // `pendingConfirmations` in-flight tracker is no longer used by
+    // production flows — kept only as a safety net in case a tool still
+    // holds a blocking wait somewhere.
 
     const abortController =
       this.activeTasks.get(ctx.taskId) ?? new AbortController();
@@ -238,12 +245,52 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
     const isFormSubmission = message.trimStart().startsWith(FORM_SUBMISSION_PREFIX);
     const verdict = isFormSubmission ? undefined : classifyApprovalMessage(message);
 
-    // ── async-confirmation path: pendingMarker + verdict ──
+    // ── async-confirmation path: pendingMarker + verdict/form submission ──
     const marker = this.pendingMarkerStore.get(ctx.sessionId);
     let promptMessage = message;
-    if (marker && (verdict === 'allow' || verdict === 'deny')) {
-      // Populate the cross-turn ApprovalCache so the upcoming --resume
-      // turn's canUseTool hits immediately without asking again.
+    const isAskUserQuestionMarker =
+      marker !== undefined && marker.toolName === 'AskUserQuestion';
+
+    if (marker && isAskUserQuestionMarker && isFormSubmission) {
+      // Stage the user's raw form-submission text under `updatedInput.answers._raw`
+      // so that the next --resume turn's `canUseTool(AskUserQuestion)` returns
+      // `{allow, updatedInput}` and the SDK treats the tool as having executed
+      // successfully with those answers.
+      const rawAnswers = message.slice(FORM_SUBMISSION_PREFIX.length).trim();
+      this.formAnswers.set(ctx.sessionId, {
+        toolName: 'AskUserQuestion',
+        updatedInput: {
+          ...marker.input,
+          answers: { _raw: rawAnswers },
+        },
+        stagedAtMs: Date.now(),
+      });
+      this.pendingMarkerStore.delete(ctx.sessionId);
+      log.gateway(
+        'AskUserQuestion form answer staged (session=%s, %d chars); resuming SDK',
+        ctx.sessionId,
+        rawAnswers.length,
+      );
+      // Swap the raw "Form submitted: ..." for a prompt that tells the model
+      // the user answered. On --resume the AskUserQuestion canUseTool hits the
+      // stage and returns the answers, so the SDK sees the tool's result.
+      promptMessage =
+        `The user answered the clarifying questions. Please continue based on their input.`;
+    } else if (marker && isAskUserQuestionMarker && verdict === 'deny') {
+      // User explicitly declined to answer the questions. Drop the marker
+      // WITHOUT staging; canUseTool on resume will send another form, OR
+      // the model may give up. We return an explicit decline so the model
+      // chooses to move on rather than looping.
+      this.formAnswers.delete(ctx.sessionId);
+      this.pendingMarkerStore.delete(ctx.sessionId);
+      log.gateway(
+        'AskUserQuestion declined by user (session=%s); resuming SDK with decline prompt',
+        ctx.sessionId,
+      );
+      promptMessage =
+        'The user declined to answer the clarifying questions. Please proceed with a reasonable default or move on.';
+    } else if (marker && !isAskUserQuestionMarker && (verdict === 'allow' || verdict === 'deny')) {
+      // Tool-use marker + allow/deny verdict → ApprovalCache.
       this.approvalCache.set(
         ctx.sessionId,
         marker.toolName,
@@ -259,18 +306,13 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         marker.toolName,
         ctx.sessionId,
       );
-      // Swap the user's raw "allow"/"deny" for a prompt the model can
-      // actually act on. On --resume the model will see its own prior
-      // attempted tool_use (+ the deny tool_result we injected earlier),
-      // and this user message tells it what to do next.
       promptMessage =
         verdict === 'allow'
           ? `The user approved the previous \`${marker.toolName}\` request. Please retry it now.`
           : `The user denied the previous \`${marker.toolName}\` request. Please acknowledge the denial and do not retry.`;
     } else if (marker) {
-      // Non-verdict message while a marker is live — leave the marker in
-      // place; the user may still approve/deny later. Start a fresh query
-      // for the new user message and let the model decide what to do.
+      // Non-verdict, non-form-submission message while a marker is live —
+      // leave the marker in place; the user may still respond later.
       log.gateway(
         'non-verdict message while pendingMarker is live (session=%s, tool=%s); keeping marker and opening new query',
         ctx.sessionId,
@@ -344,6 +386,7 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         cache: this.approvalCache,
         pending: this.pendingConfirmations,
         pendingMarker: this.pendingMarkerStore,
+        formAnswers: this.formAnswers,
       }),
       permissionMode: this.cfg.permissionMode,
     };
