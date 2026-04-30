@@ -59,8 +59,9 @@ cli
   .option('--host <host>', 'Host to bind to', { default: '0.0.0.0' })
   .option('--name <name>', 'Display name', { default: 'Claude Code' })
   .option('--model <model>', 'Claude model id (e.g. claude-opus-4-7)')
-  .option('--api-key <key>', 'API key for the LLM provider (sets ANTHROPIC_API_KEY for the subprocess)')
-  .option('--api-base-url <url>', 'Base URL for the LLM provider API (sets ANTHROPIC_BASE_URL; e.g. https://openrouter.ai/api/v1)')
+  .option('--api-key <key>', 'Anthropic-native API key (sets ANTHROPIC_API_KEY; sent as x-api-key). Mutually exclusive with --auth-token.')
+  .option('--auth-token <token>', 'Bearer token for an Anthropic-compatible provider like OpenRouter (sets ANTHROPIC_AUTH_TOKEN; sent as Authorization: Bearer). Mutually exclusive with --api-key.')
+  .option('--api-base-url <url>', 'Base URL for the LLM provider API (sets ANTHROPIC_BASE_URL). The SDK appends /v1/messages, so for OpenRouter use https://openrouter.ai/api (NOT /api/v1).')
   .option('--max-turns <n>', 'Maximum agentic turns per chat')
   .option(
     '--allowed-tools <list>',
@@ -98,6 +99,33 @@ cli
   )
   .action(async (opts) => {
     const port = Number(opts.port);
+
+    if (opts.apiKey && opts.authToken) {
+      console.error(
+        'Error: --api-key and --auth-token are mutually exclusive.\n' +
+          '  • Use --api-key for Anthropic-native keys (sent as x-api-key)\n' +
+          '  • Use --auth-token for OpenRouter or other Bearer-auth providers',
+      );
+      process.exit(1);
+    }
+
+    // Common footgun: users write `https://openrouter.ai/api/v1` but the
+    // SDK appends `/v1/messages`, producing `/api/v1/v1/messages` → 404 →
+    // the CLI subprocess crashes later with a cryptic `input_tokens`
+    // undefined error. Strip the trailing `/v1` and warn.
+    let apiBaseUrl: string | undefined = opts.apiBaseUrl;
+    if (typeof apiBaseUrl === 'string') {
+      const trimmed = apiBaseUrl.replace(/\/+$/, '');
+      if (/\/v1$/.test(trimmed)) {
+        const fixed = trimmed.replace(/\/v1$/, '');
+        console.warn(
+          `[warn] --api-base-url ends in /v1 (${apiBaseUrl}). The Claude SDK ` +
+            `appends /v1/messages itself, so this would double up. Using ${fixed} instead.`,
+        );
+        apiBaseUrl = fixed;
+      }
+    }
+
     const allowedTools =
       typeof opts.allowedTools === 'string' && opts.allowedTools.length > 0
         ? opts.allowedTools
@@ -135,7 +163,8 @@ cli
       cwd: opts.cwd,
       model: opts.model,
       apiKey: opts.apiKey,
-      apiBaseUrl: opts.apiBaseUrl,
+      authToken: opts.authToken,
+      apiBaseUrl,
       maxTurns: opts.maxTurns !== undefined ? Number(opts.maxTurns) : undefined,
       allowedTools,
       permissionMode: opts.permissionMode,

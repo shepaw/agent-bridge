@@ -91,16 +91,25 @@ export interface ClaudeCodeAgentOptions {
   /** Claude model id (e.g. 'claude-opus-4-7'). */
   model?: string;
   /**
-   * API key for the LLM provider. Passed as `ANTHROPIC_API_KEY` env var
-   * to the Claude Agent SDK subprocess. Use this to supply an OpenRouter
-   * key or any other Anthropic-compatible provider key without setting a
-   * global env var.
+   * Anthropic-native API key. Passed as `ANTHROPIC_API_KEY` env var to the
+   * Claude Agent SDK subprocess. The SDK sends it via the `x-api-key` header
+   * — this is the path for real Anthropic keys. Mutually exclusive with
+   * `authToken`; set only one.
    */
   apiKey?: string;
   /**
+   * Bearer auth token for an Anthropic-compatible third-party provider
+   * (e.g. OpenRouter). Passed as `ANTHROPIC_AUTH_TOKEN` env var to the SDK
+   * subprocess, which sends it via `Authorization: Bearer …`. When set, we
+   * also force `ANTHROPIC_API_KEY=""` in the subprocess env so the SDK does
+   * not prefer a stale host-level API key. Mutually exclusive with `apiKey`.
+   */
+  authToken?: string;
+  /**
    * Base URL for the LLM provider API. Passed as `ANTHROPIC_BASE_URL` env
-   * var to the Claude Agent SDK subprocess. For OpenRouter, set this to
-   * `https://openrouter.ai/api/v1`.
+   * var to the Claude Agent SDK subprocess. The SDK appends `/v1/messages`
+   * to this value — so for OpenRouter use `https://openrouter.ai/api`
+   * (NOT `/api/v1`, which would produce `/api/v1/v1/messages`).
    */
   apiBaseUrl?: string;
   /** Cap on agentic turns per chat. */
@@ -140,7 +149,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   > &
     Pick<
       ClaudeCodeAgentOptions,
-      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt' | 'apiKey' | 'apiBaseUrl'
+      'model' | 'maxTurns' | 'allowedTools' | 'systemPrompt' | 'apiKey' | 'authToken' | 'apiBaseUrl'
     >;
   private readonly sessionStore: SessionStore;
   private readonly queryFn: QueryFn;
@@ -156,6 +165,13 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   private readonly formAnswers = new FormAnswerStage();
 
   constructor(opts: ClaudeCodeAgentOptions = {}) {
+    if (opts.apiKey && opts.authToken) {
+      throw new Error(
+        'ClaudeCodeAgent: `apiKey` and `authToken` are mutually exclusive. ' +
+          'Use `apiKey` for Anthropic-native keys, `authToken` for OpenRouter / ' +
+          'other Bearer-auth providers.',
+      );
+    }
     super({
       name: opts.name ?? 'Claude Code',
       peersPath: opts.peersPath,
@@ -173,6 +189,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
       allowedTools: opts.allowedTools,
       systemPrompt: opts.systemPrompt,
       apiKey: opts.apiKey,
+      authToken: opts.authToken,
       apiBaseUrl: opts.apiBaseUrl,
     };
     this.sessionStore = new SessionStore(opts.sessionStoreOptions);
@@ -371,11 +388,22 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     const systemPrompt = this.cfg.systemPrompt ? this.cfg.systemPrompt : undefined;
 
     // Build env overrides for the Claude Agent SDK subprocess.
-    // When apiKey / apiBaseUrl are set (e.g. for OpenRouter), inject them
-    // as ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL so the subprocess picks
-    // them up without requiring global env vars on the host.
+    //
+    // Two authentication modes are supported (see option docs above):
+    //
+    //   • apiKey    → ANTHROPIC_API_KEY   (Anthropic native, `x-api-key` header)
+    //   • authToken → ANTHROPIC_AUTH_TOKEN (Bearer header, for OpenRouter etc.)
+    //
+    // When authToken is used we must also blank ANTHROPIC_API_KEY in the
+    // subprocess env: if both are set, the SDK prefers API_KEY and sends the
+    // wrong header (breaking OpenRouter auth). The constructor already
+    // rejects setting both at the same time.
     const envOverrides: Record<string, string> = {};
     if (this.cfg.apiKey) envOverrides.ANTHROPIC_API_KEY = this.cfg.apiKey;
+    if (this.cfg.authToken) {
+      envOverrides.ANTHROPIC_AUTH_TOKEN = this.cfg.authToken;
+      envOverrides.ANTHROPIC_API_KEY = '';
+    }
     if (this.cfg.apiBaseUrl) envOverrides.ANTHROPIC_BASE_URL = this.cfg.apiBaseUrl;
 
     const options: Options = {
