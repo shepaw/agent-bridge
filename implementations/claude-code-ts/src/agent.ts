@@ -22,6 +22,11 @@
  *     canUseTool and clears any pending marker.
  */
 
+import { createHash } from 'node:crypto';
+import { watch, type FSWatcher } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   query,
   type Options,
@@ -34,8 +39,16 @@ import {
   ApprovalCache,
   type ApprovalCacheOptions,
   classifyApprovalMessage,
+  type CommandScope,
+  type CommandsListParams,
+  type CommandsListResult,
   FormAnswerStage,
   makeCanUseTool,
+  type ModelInfo,
+  type ModelsListParams,
+  type ModelsListResult,
+  type ModelsSetCurrentParams,
+  type ModelsSetCurrentResult,
   PatternRuleStore,
   type PatternRuleStoreOptions,
   PendingConfirmations,
@@ -44,13 +57,19 @@ import {
   resolvePendingApproval,
   SessionStore,
   type SessionStoreOptions,
+  type SlashCommandInfo,
   summarizeToolInput,
   type ChannelTunnelConfig,
   type ChatKwargs,
   type TaskContext,
 } from 'shepaw-acp-sdk';
 
+import { scanCommandsDir, SlashCommandRegistry, type SlashProviders } from 'shepaw-acp-sdk';
+
 import { log } from './debug.js';
+
+import { ClaudeModelsProvider } from './commands/models-provider.js';
+import { buildRegistry, type ClaudeCfg } from './commands/registry.js';
 
 /** Gateway directory name — keeps our on-disk state isolated from other bridges. */
 const GATEWAY_DIR_NAME = 'shepaw-cc-gateway';
@@ -145,6 +164,17 @@ export interface ClaudeCodeAgentOptions {
    */
   tunnelConfig?: ChannelTunnelConfig;
   /**
+   * Directories scanned for slash-command markdown files. Each entry pairs a
+   * filesystem path with the `scope` reported on the wire. When omitted,
+   * ClaudeCodeAgent defaults to `<cwd>/.claude/commands` (scope `project`)
+   * plus `~/.claude/commands` (scope `user`). Commands from the SDK's
+   * `system/init` message are always merged in as `builtin`.
+   *
+   * Other agents with a different on-disk layout (e.g. a hypothetical
+   * CodebuddyAgent using `.codebuddy/commands/`) pass their own list here.
+   */
+  commandsDirs?: ReadonlyArray<{ path: string; scope: CommandScope }>;
+  /**
    * Override the `query()` implementation. Default: the real `query`
    * from `@anthropic-ai/claude-agent-sdk`. Used by tests and the
    * `--mock` CLI flag to exercise the full pipeline without calling
@@ -174,6 +204,54 @@ export class ClaudeCodeAgent extends ACPAgentServer {
    * them as `updatedInput` so the SDK sees the tool "successfully executed".
    */
   private readonly formAnswers = new FormAnswerStage();
+
+  /**
+   * Bare slash-command names captured from the Claude Agent SDK's
+   * `system/init` message (typed as `string[]` on `SDKSystemMessage`).
+   * These are the SDK's built-in commands; `.claude/commands/*.md`
+   * frontmatter gets merged on top in step 4.
+   */
+  private sdkSlashCommands: string[] = [];
+
+  /**
+   * Directories scanned for slash-command markdown files. Defaults to the
+   * Claude Code layout (`<cwd>/.claude/commands` + `~/.claude/commands`) but
+   * fully configurable so non-Claude-Code agents with a different on-disk
+   * layout can use the same mechanism.
+   */
+  private readonly commandsDirs: ReadonlyArray<{ path: string; scope: CommandScope }>;
+
+  /** Active fs.watch handles — one per existing directory in commandsDirs. */
+  private commandsWatchers: FSWatcher[] = [];
+
+  /**
+   * Timer for debouncing bursts of fs events. Many editors write a file as
+   * a rename + replace which fires multiple watch events in <50ms — we
+   * coalesce into a single rebuild + broadcast.
+   */
+  private commandsRebuildTimer: NodeJS.Timeout | undefined;
+
+  /**
+   * sha1 of the last broadcast snapshot. Broadcasts are suppressed if the
+   * newly-computed snapshot has the same hash (e.g. a file saved without
+   * any frontmatter change, or two watch events for the same write).
+   */
+  private lastCommandsSnapshot = '';
+
+  // ── /model picker state ────────────────────────────────────────
+  /**
+   * Provider backing `/model` + the `agent.models.list` /
+   * `agent.models.setCurrent` JSON-RPC methods. Internally cached for
+   * 5 minutes — see `ClaudeModelsProvider`.
+   */
+  private readonly modelsProvider: ClaudeModelsProvider;
+
+  /**
+   * Currently-selected model value. Set from `opts.model` on construct,
+   * mutated by `/model <id>` and `agent.models.setCurrent`. Picked up by
+   * `onChat`'s options builder via `this.cfg.model`.
+   */
+  private currentModel: string | undefined;
 
   constructor(opts: ClaudeCodeAgentOptions = {}) {
     if (opts.apiKey && opts.authToken) {
@@ -212,12 +290,102 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     this.patternRuleStore = new PatternRuleStore(
       opts.patternRuleStoreOptions ?? { gatewayDirName: GATEWAY_DIR_NAME },
     );
+    this.commandsDirs = opts.commandsDirs ?? [
+      { path: join(this.cfg.cwd, '.claude', 'commands'), scope: 'project' },
+      { path: join(homedir(), '.claude', 'commands'), scope: 'user' },
+    ];
+    this.currentModel = opts.model;
+
+    // ── Slash-command registry (/model, /status, /mcp, /permissions) ──
+    //
+    // Only /model has a working provider here; /status falls back to
+    // cfg fields, /mcp and /permissions emit "not supported" until the
+    // Claude SDK exposes these on a shareable out-of-band handle.
+    this.modelsProvider = new ClaudeModelsProvider({
+      queryFn: this.queryFn,
+      cwd: this.cfg.cwd,
+      getCurrentModel: () => this.currentModel,
+    });
+    this.slashRegistry = buildRegistry({
+      onModelApplied: (id) => {
+        this.currentModel = id;
+      },
+      onPermissionModeApplied: (id) => {
+        this.cfg.permissionMode = id as NonNullable<Options['permissionMode']>;
+      },
+    }) as unknown as SlashCommandRegistry<unknown>;
+    this.slashProviders = {
+      models: this.modelsProvider,
+    } satisfies SlashProviders;
   }
 
   async init(): Promise<void> {
     await this.sessionStore.load();
     await this.pendingMarkerStore.load();
     await this.patternRuleStore.load();
+    // Seed the snapshot so the first SDK-init or fs-watch trigger only
+    // broadcasts when the list has actually changed, not on cold start.
+    const { commands } = await this.onCommandsList({});
+    this.lastCommandsSnapshot = this.hashCommands(commands);
+    this.startCommandsWatchers();
+  }
+
+  override async close(): Promise<void> {
+    this.stopCommandsWatchers();
+    await super.close();
+  }
+
+  /**
+   * Install `fs.watch` on each configured commands directory that actually
+   * exists. Missing directories are skipped silently — users who don't use
+   * Claude Code commands should never see a "directory missing" warning.
+   *
+   * Watcher callbacks only schedule a debounced rebuild; the real work
+   * (scan + dedup + broadcast) happens in `rebuildCommandsAndBroadcast`.
+   */
+  private startCommandsWatchers(): void {
+    for (const d of this.commandsDirs) {
+      try {
+        const watcher = watch(d.path, { recursive: true }, () => {
+          this.scheduleCommandsRebuild();
+        });
+        // Don't let a watcher keep the event loop alive.
+        watcher.unref?.();
+        this.commandsWatchers.push(watcher);
+      } catch {
+        // Directory doesn't exist yet — fine. A future `touch` won't trigger
+        // a watch, but the next `agent.commands.list` call still scans fresh.
+      }
+    }
+  }
+
+  private stopCommandsWatchers(): void {
+    for (const w of this.commandsWatchers) {
+      try {
+        w.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.commandsWatchers = [];
+    if (this.commandsRebuildTimer !== undefined) {
+      clearTimeout(this.commandsRebuildTimer);
+      this.commandsRebuildTimer = undefined;
+    }
+  }
+
+  private scheduleCommandsRebuild(): void {
+    if (this.commandsRebuildTimer !== undefined) return;
+    this.commandsRebuildTimer = setTimeout(() => {
+      this.commandsRebuildTimer = undefined;
+      void this.rebuildCommandsAndBroadcast();
+    }, 200);
+  }
+
+  private hashCommands(commands: SlashCommandInfo[]): string {
+    // Sort by name so reordering doesn't produce spurious diffs.
+    const canonical = [...commands].sort((a, b) => a.name.localeCompare(b.name));
+    return createHash('sha1').update(JSON.stringify(canonical)).digest('hex');
   }
 
   override getAgentCard() {
@@ -415,8 +583,16 @@ export class ClaudeCodeAgent extends ACPAgentServer {
   private async handleSdkMessage(ctx: TaskContext, msg: SDKMessage): Promise<void> {
     if (msg.type === 'system') {
       const system = msg as SDKSystemMessage;
-      if (system.subtype === 'init' && system.session_id) {
-        this.sessionStore.set(ctx.sessionId, system.session_id);
+      if (system.subtype === 'init') {
+        if (system.session_id) {
+          this.sessionStore.set(ctx.sessionId, system.session_id);
+        }
+        if (Array.isArray(system.slash_commands)) {
+          this.sdkSlashCommands = system.slash_commands;
+          // Step 5 fills this in (fs scan + debounced broadcast). Until then
+          // it's a no-op stub so SDK-driven refreshes are plumbed in place.
+          void this.rebuildCommandsAndBroadcast();
+        }
       }
       return;
     }
@@ -457,6 +633,96 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     }
 
     // Everything else (stream events, hook callbacks, etc.) is ignored for v0.
+  }
+
+  /**
+   * Return the slash commands this agent supports.
+   *
+   * Sources (merged; filesystem wins over registry wins over SDK init on
+   * name collision because richer metadata → higher priority):
+   *   - SDK-registered builtin handlers (from `this.slashRegistry`,
+   *     produced by `super.onCommandsList`) → scope `builtin`, source `sdk`
+   *   - SDK `system/init`'s `slash_commands` → scope `builtin`, source `sdk`
+   *   - Each configured directory scan → scope from the directory config,
+   *     source `filesystem`, `description` / `argument_hint` from frontmatter
+   *
+   * The SDK cache may be empty if no `query()` has run yet (e.g. the user
+   * opens the `/` palette before sending any message) — that's fine, the
+   * filesystem scan still returns whatever is on disk.
+   */
+  override async onCommandsList(params: CommandsListParams): Promise<CommandsListResult> {
+    const registryResult = await super.onCommandsList(params);
+    const registryCmds = registryResult.commands;
+
+    const scannedGroups = await Promise.all(
+      this.commandsDirs.map((d) => scanCommandsDir(d.path, d.scope)),
+    );
+    const scanned = scannedGroups.flat();
+
+    const sdk: SlashCommandInfo[] = this.sdkSlashCommands.map((name) => ({
+      name,
+      scope: 'builtin',
+      source: 'sdk',
+    }));
+
+    // Filesystem entries override SDK entries of the same name (they have
+    // richer metadata: description, argument_hint). Among filesystem
+    // entries, first-wins — project scope is listed before user scope in
+    // the default, so project overrides user on collision.
+    const byName = new Map<string, SlashCommandInfo>();
+    for (const c of sdk) byName.set(c.name, c);
+    for (const c of registryCmds) byName.set(c.name, c);
+    for (const c of scanned) {
+      if (!byName.has(c.name) || byName.get(c.name)?.source !== 'filesystem') {
+        byName.set(c.name, c);
+      }
+    }
+    return { commands: [...byName.values()] };
+  }
+
+  /**
+   * Recompute the merged command list and broadcast `agent.commands.changed`
+   * to authenticated clients, but only when the snapshot has actually changed.
+   *
+   * Called from:
+   *   - Debounced `fs.watch` callback (file added/removed/modified)
+   *   - `system/init` handler (SDK refreshed its built-in list)
+   *
+   * Snapshot dedup keeps the event stream clean — editors commonly fire
+   * 2-3 watch events for a single save, and the SDK resends `init` on every
+   * new query even when nothing changed.
+   */
+  private async rebuildCommandsAndBroadcast(): Promise<void> {
+    const { commands } = await this.onCommandsList({});
+    const hash = this.hashCommands(commands);
+    if (hash === this.lastCommandsSnapshot) return;
+    this.lastCommandsSnapshot = hash;
+    await this.broadcastCommandsChanged(commands);
+  }
+
+  // ── /model picker ──────────────────────────────────────────────
+  //
+  // The user-facing `/model` command lives in the shared SDK registry
+  // (installed by the constructor); the direct-access `agent.models.*`
+  // JSON-RPC methods below share the same `ClaudeModelsProvider` cache.
+
+  override async onModelsList(_p: ModelsListParams): Promise<ModelsListResult> {
+    const entries = await this.modelsProvider.list();
+    const models: ModelInfo[] = entries.map((e) => ({
+      value: e.id,
+      display_name: e.name,
+      description: e.description ?? '',
+    }));
+    return { models, current: this.currentModel };
+  }
+
+  override async onModelsSetCurrent(p: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
+    const entries = await this.modelsProvider.list();
+    const found = entries.find((m) => m.id === p.model);
+    if (!found) throw new Error(`Unknown model: ${p.model}`);
+    this.currentModel = p.model;
+    (this.cfg as { model?: string }).model = p.model;
+    return { model: p.model, display_name: found.name };
   }
 }
 

@@ -420,5 +420,488 @@ describe('ACPAgentServer v2.1 — cancellation', () => {
   });
 });
 
+// ── agent.commands.list (default empty + override) ─────────────────
+
+describe('ACPAgentServer v2.1 — agent.commands.list', () => {
+  class CommandsAgent extends ACPAgentServer {
+    override async onChat(ctx: TaskContext): Promise<void> {
+      await ctx.sendText('ok');
+    }
+    override async onCommandsList() {
+      return {
+        commands: [
+          { name: 'plan', description: 'Plan something', scope: 'project' as const, source: 'filesystem' as const },
+          { name: 'compact', scope: 'builtin' as const, source: 'sdk' as const },
+        ],
+      };
+    }
+
+    // expose protected helper for tests
+    async forceBroadcast() {
+      await this.broadcastCommandsChanged([
+        { name: 'new', scope: 'project', source: 'filesystem' },
+      ]);
+    }
+  }
+
+  let agent: CommandsAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-commands-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new CommandsAgent({ name: 'Cmds', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('returns commands from onCommandsList override', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request<{ commands: Array<{ name: string }> }>(
+      'agent.commands.list',
+    );
+    expect(resp.result).toMatchObject({
+      commands: expect.arrayContaining([
+        expect.objectContaining({ name: 'plan', scope: 'project', source: 'filesystem' }),
+        expect.objectContaining({ name: 'compact', scope: 'builtin', source: 'sdk' }),
+      ]),
+    });
+
+    await client.close();
+  });
+
+  it('default ACPAgentServer returns an empty list', async () => {
+    class BareAgent extends ACPAgentServer {}
+    const bare = new BareAgent({ name: 'Bare', peersPath });
+    const handle = await startAgent(bare);
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${handle.port}/acp/ws`,
+      bare.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request<{ commands: unknown[] }>('agent.commands.list');
+    expect(resp.result).toEqual({ commands: [] });
+
+    await client.close();
+    await handle.stop();
+  });
+
+  it('broadcastCommandsChanged pushes agent.commands.changed to authenticated clients', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    // Let the handshake settle before firing the broadcast so the client
+    // is already in the authenticated set.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const waitNotif = client.waitForNotification('agent.commands.changed', 2000);
+    await agent.forceBroadcast();
+    const notif = await waitNotif;
+    expect(notif.params).toMatchObject({
+      commands: expect.arrayContaining([
+        expect.objectContaining({ name: 'new' }),
+      ]),
+    });
+
+    await client.close();
+  });
+});
+
+// ── onSlashCommand hook ────────────────────────────────────────────
+
+describe('ACPAgentServer v2.1 — onSlashCommand hook', () => {
+  class SlashAgent extends ACPAgentServer {
+    chatCallCount = 0;
+    slashCalls: Array<{ command: string; args: string; raw: string }> = [];
+
+    override async onChat(ctx: TaskContext, message: string): Promise<void> {
+      this.chatCallCount += 1;
+      await ctx.sendText(`chat:${message}`);
+    }
+
+    override async onSlashCommand(
+      ctx: TaskContext,
+      command: string,
+      args: string,
+      raw: string,
+    ): Promise<boolean> {
+      this.slashCalls.push({ command, args, raw });
+      if (command === 'model') {
+        await ctx.sendText(`picked model handling ${args}`);
+        return true;
+      }
+      return false;
+    }
+  }
+
+  let agent: SlashAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-slash-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new SlashAgent({ name: 'Slash', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('intercepts /model and skips onChat', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    agent.chatCallCount = 0;
+    agent.slashCalls = [];
+
+    await client.request('agent.chat', {
+      task_id: 't-slash',
+      session_id: 's-slash',
+      message: '/model list',
+    });
+
+    const text = await client.waitFor(
+      (m) =>
+        m.method === 'ui.textContent' &&
+        typeof (m.params as Record<string, unknown>).content === 'string' &&
+        ((m.params as Record<string, unknown>).content as string).startsWith('picked'),
+    );
+    expect(text).toBeDefined();
+    await client.waitForNotification('task.completed');
+
+    expect(agent.chatCallCount).toBe(0);
+    expect(agent.slashCalls).toEqual([
+      { command: 'model', args: 'list', raw: '/model list' },
+    ]);
+
+    await client.close();
+  });
+
+  it('falls through to onChat when onSlashCommand returns false', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    agent.chatCallCount = 0;
+    agent.slashCalls = [];
+
+    await client.request('agent.chat', {
+      task_id: 't-passthru',
+      session_id: 's-passthru',
+      message: '/unknownCommand foo',
+    });
+
+    await client.waitForNotification('task.completed');
+    expect(agent.chatCallCount).toBe(1);
+    expect(agent.slashCalls).toEqual([
+      { command: 'unknownCommand', args: 'foo', raw: '/unknownCommand foo' },
+    ]);
+
+    await client.close();
+  });
+
+  it('does not invoke onSlashCommand for non-slash messages', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    agent.chatCallCount = 0;
+    agent.slashCalls = [];
+
+    await client.request('agent.chat', {
+      task_id: 't-plain',
+      session_id: 's-plain',
+      message: 'hello',
+    });
+
+    await client.waitForNotification('task.completed');
+    expect(agent.chatCallCount).toBe(1);
+    expect(agent.slashCalls).toEqual([]);
+
+    await client.close();
+  });
+});
+
+// ── agent.models.list / agent.models.setCurrent ────────────────────
+
+describe('ACPAgentServer v2.1 — agent.models.*', () => {
+  class ModelsAgent extends ACPAgentServer {
+    current: string | undefined = 'm-a';
+
+    override async onChat(ctx: TaskContext): Promise<void> {
+      await ctx.sendText('ok');
+    }
+
+    override async onModelsList() {
+      return {
+        models: [
+          { value: 'm-a', display_name: 'Model A', description: 'The default' },
+          { value: 'm-b', display_name: 'Model B', description: 'Better' },
+        ],
+        current: this.current,
+      };
+    }
+
+    override async onModelsSetCurrent(p: { model: string }) {
+      if (p.model !== 'm-a' && p.model !== 'm-b') {
+        throw new Error(`unknown model: ${p.model}`);
+      }
+      this.current = p.model;
+      return { model: p.model, display_name: p.model === 'm-a' ? 'Model A' : 'Model B' };
+    }
+  }
+
+  let agent: ModelsAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-models-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new ModelsAgent({ name: 'Models', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('agent.models.list returns models + current', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request<{
+      models: Array<{ value: string; display_name: string }>;
+      current?: string;
+    }>('agent.models.list');
+    expect(resp.result?.current).toBe('m-a');
+    expect(resp.result?.models).toHaveLength(2);
+    expect(resp.result?.models[0]).toMatchObject({ value: 'm-a', display_name: 'Model A' });
+
+    await client.close();
+  });
+
+  it('agent.models.setCurrent updates and returns display_name', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request<{ model: string; display_name?: string }>(
+      'agent.models.setCurrent',
+      { model: 'm-b' },
+    );
+    expect(resp.result).toEqual({ model: 'm-b', display_name: 'Model B' });
+
+    const list = await client.request<{ current?: string }>('agent.models.list');
+    expect(list.result?.current).toBe('m-b');
+
+    await client.close();
+  });
+
+  it('agent.models.setCurrent rejects missing model param with -32602', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request('agent.models.setCurrent');
+    expect(resp).toHaveProperty('error');
+    const asErr = resp as unknown as { error: { code: number } };
+    expect(asErr.error.code).toBe(-32602);
+
+    await client.close();
+  });
+
+  it('agent.models.setCurrent surfaces agent errors with -32000', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request('agent.models.setCurrent', { model: 'bogus' });
+    expect(resp).toHaveProperty('error');
+    const asErr = resp as unknown as { error: { code: number; message: string } };
+    expect(asErr.error.code).toBe(-32000);
+    expect(asErr.error.message).toContain('unknown model');
+
+    await client.close();
+  });
+});
+
+// ── registerFormHandler (non-blocking form flow) ───────────────────
+
+describe('ACPAgentServer v2.1 — registerFormHandler', () => {
+  class FormAgent extends ACPAgentServer {
+    lastChoice: string | undefined;
+
+    override async onChat(): Promise<void> {}
+
+    override async onSlashCommand(
+      ctx: TaskContext,
+      command: string,
+    ): Promise<boolean> {
+      if (command !== 'pick') return false;
+      const formId = 'form_fixed';
+      await ctx.sendForm({
+        title: 'Pick',
+        fields: [
+          {
+            name: 'choice',
+            label: 'Choice',
+            type: 'radio_group',
+            required: true,
+            options: [
+              { label: 'A', value: 'a' },
+              { label: 'B', value: 'b' },
+            ],
+          },
+        ],
+        formId,
+      });
+      // Fire-and-forget: register handler and return immediately.
+      this.exposeRegister(formId, (data) => {
+        this.lastChoice = typeof data.choice === 'string' ? data.choice : undefined;
+      });
+      return true;
+    }
+
+    // Expose protected helper for the test.
+    exposeRegister(
+      formId: string,
+      handler: (d: Record<string, unknown>) => void,
+    ): void {
+      this.registerFormHandler(formId, handler);
+    }
+  }
+
+  let agent: FormAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-form-handler-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new FormAgent({ name: 'FormAgent', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('lets task complete immediately, then invokes handler on later submit', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    agent.lastChoice = undefined;
+
+    // Send /pick — expect task.completed WITHOUT any prior submit.
+    await client.request('agent.chat', {
+      task_id: 't-pick',
+      session_id: 's-pick',
+      message: '/pick',
+    });
+
+    const form = await client.waitForNotification('ui.form', 2000);
+    expect((form.params as Record<string, unknown>).form_id).toBe('form_fixed');
+
+    // Task should complete without waiting for submit — the fix.
+    await client.waitForNotification('task.completed', 2000);
+    expect(agent.lastChoice).toBeUndefined();
+
+    // Later, user submits. Handler fires in the background.
+    await client.request('agent.submitResponse', {
+      task_id: 't-pick',
+      response_type: 'form',
+      response_data: { form_id: 'form_fixed', choice: 'b' },
+    });
+
+    // Give the microtask queue a tick for the handler to run.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(agent.lastChoice).toBe('b');
+
+    await client.close();
+  });
+});
+
 // eliminate unused-import lint warning
 void removePeerByFingerprint;

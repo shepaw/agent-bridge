@@ -165,9 +165,8 @@ shepaw-codebuddy-code serve --cwd ~/code/my-project --port 8090
 
 # With model + turn cap
 shepaw-codebuddy-code serve \
-  --cwd ~/code/my-project \
+  --cwd ~/workspace/shepaw/agent-bridge \
   --port 8090 \
-  --model deepseek-v3.1 \
   --max-turns 20
 
 # See all flags
@@ -201,15 +200,15 @@ shepaw-codebuddy-code serve \
 ```
 
 Or pass the flags inline:
-
+channel-agent --server http://channel.shepaw.com --channel-id f7977615-0148-443a-9ed9-39654a3301d4 --secret ch_sec_243d56d05e1201b65ccdaa71e91e5cd8
 ```sh
 shepaw-codebuddy-code serve \
-  --cwd ~/code/my-project \
+  --cwd ~/workspace/shepaw/agent-bridge \
   --port 8090 \
-  --tunnel-server https://channel.example.com \
-  --tunnel-channel-id ch_abc123 \
-  --tunnel-secret ch_sec_xyz \
-  --tunnel-endpoint myagent
+  --tunnel-server http://channel.shepaw.com \
+  --tunnel-channel-id f7977615-0148-443a-9ed9-39654a3301d4  \
+  --tunnel-secret ch_sec_243d56d05e1201b65ccdaa71e91e5cd8 \
+  --tunnel-endpoint shepaw-root
 ```
 
 When the tunnel comes up you'll see a `Public WS: wss://…#fp=…` line —

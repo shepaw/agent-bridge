@@ -63,10 +63,20 @@ import { TunnelClient } from './tunnel.js';
 import type {
   AgentCard,
   ChatKwargs,
+  CommandsChangedParams,
+  CommandsListParams,
+  CommandsListResult,
   ConversationMessage,
   JsonRpcErrorObject,
+  ModelsListParams,
+  ModelsListResult,
+  ModelsSetCurrentParams,
+  ModelsSetCurrentResult,
+  SlashCommandInfo,
 } from './types.js';
 import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS } from './types.js';
+import type { SlashProviders } from './slash/types.js';
+import { SlashCommandRegistry } from './slash/registry.js';
 
 import type { ShepawWebSocket } from './task-context.js';
 
@@ -220,6 +230,22 @@ export class ACPAgentServer {
   private readonly pendingHubRequests = new Map<string, Deferred<unknown>>();
   private readonly pendingResponses = new Map<string, Deferred<Record<string, unknown>>>();
 
+  /**
+   * Optional slash-command registry. When set, the default
+   * `onSlashCommand` dispatches to its handlers and `onCommandsList`
+   * surfaces them in the shepaw `/` palette. Concrete agents install
+   * this in their constructor (see `implementations/**\/commands`).
+   */
+  protected slashRegistry?: SlashCommandRegistry<unknown>;
+
+  /**
+   * Injected capability providers consumed by SDK-shipped slash handlers
+   * (`/model`, `/status`, `/mcp`, `/permissions`). Agents populate only
+   * the providers they can implement; handlers gracefully degrade when
+   * a provider is absent.
+   */
+  protected slashProviders: SlashProviders = {};
+
   constructor(opts: ACPAgentServerOptions = {}) {
     this.name = opts.name ?? 'ACP Agent';
     this.identity = loadOrCreateIdentity({ path: opts.identityPath });
@@ -277,6 +303,93 @@ export class ACPAgentServer {
         error: { code: -32601, message: 'requestFileData not supported by this agent' },
       }),
     );
+  }
+
+  /**
+   * Return the list of slash commands this agent supports.
+   *
+   * Default behavior: if a `slashRegistry` is set, returns its registered
+   * handlers as `scope: 'builtin', source: 'sdk'` entries so the shepaw
+   * "/" palette surfaces them automatically.
+   *
+   * Subclasses commonly override to MERGE this with filesystem-scanned
+   * frontmatter (e.g. `.claude/commands/`) + SDK init's `slash_commands`:
+   *
+   *   override async onCommandsList(p) {
+   *     const base = await super.onCommandsList(p);
+   *     const scanned = ... ;
+   *     return { commands: dedup([...base.commands, ...scanned]) };
+   *   }
+   */
+  async onCommandsList(_params: CommandsListParams): Promise<CommandsListResult> {
+    if (!this.slashRegistry) return { commands: [] };
+    return {
+      commands: this.slashRegistry.listPrimary().map((h) => ({
+        name: h.name,
+        description: h.description,
+        argument_hint: h.argumentHint,
+        scope: 'builtin',
+        source: 'sdk',
+      })),
+    };
+  }
+
+  /**
+   * Hook called before `onChat` whenever the user message starts with a "/".
+   *
+   * Default behavior: if a `slashRegistry` is set, look up by `command`
+   * and dispatch. Handlers that match return `true` (we skip onChat);
+   * unmatched commands return `false` (fall through to the LLM — this
+   * is the correct behavior for commands like `/compact` or `/plan`
+   * that the SDK/CLI handles at a lower layer).
+   *
+   * Return `true` to signal the command was handled; the server will send
+   * `sendTextFinal` + `completed` around it exactly like onChat, but will
+   * NOT call onChat afterwards — the agent skips the LLM entirely.
+   *
+   * Return `false` (or let the default no-op run) to fall through to the
+   * normal onChat flow, exactly as if the hook didn't exist.
+   *
+   * Arguments:
+   *   - `command`: the word immediately after "/" (e.g. "model" for "/model list")
+   *   - `args`: everything after the first whitespace, trimmed (e.g. "list")
+   *   - `raw`: the full trimmed message including the leading "/"
+   *
+   * Subclasses that want ad-hoc command interception (without the registry)
+   * can still override this method directly.
+   */
+  async onSlashCommand(
+    ctx: TaskContext,
+    command: string,
+    args: string,
+    raw: string,
+    kwargs: ChatKwargs,
+  ): Promise<boolean> {
+    if (!this.slashRegistry?.has(command)) return false;
+    const argTokens = args.trim() === '' ? [] : args.trim().split(/\s+/);
+    return this.slashRegistry.dispatch(ctx, command, argTokens, raw, kwargs as unknown as Record<string, unknown>, {
+      cfg: (this as unknown as { cfg?: unknown }).cfg,
+      providers: this.slashProviders,
+      registerFormHandler: (id, fn) => this.registerFormHandler(id, fn),
+    });
+  }
+
+  /**
+   * Return the list of models the underlying SDK exposes (from
+   * `query.supportedModels()` or equivalent). The default returns an empty
+   * list — agents that don't expose models leave this alone.
+   */
+  async onModelsList(_params: ModelsListParams): Promise<ModelsListResult> {
+    return { models: [] };
+  }
+
+  /**
+   * Switch the currently-selected model for this agent. Subsequent `onChat`
+   * calls should use the new model. The default throws — agents without a
+   * runtime model switch should not advertise model listing either.
+   */
+  async onModelsSetCurrent(_p: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
+    throw new Error('agent.models.setCurrent not supported by this agent');
   }
 
   // ── saving replies ─────────────────────────────────────────────
@@ -875,6 +988,15 @@ export class ACPAgentServer {
         case 'agent.getCard':
           await this.handleGetCard(ws, msgId);
           return;
+        case 'agent.commands.list':
+          await this.handleCommandsList(ws, msgId, params);
+          return;
+        case 'agent.models.list':
+          await this.handleModelsList(ws, msgId, params);
+          return;
+        case 'agent.models.setCurrent':
+          await this.handleModelsSetCurrent(ws, msgId, params);
+          return;
         case 'agent.requestFileData':
           await this.onRequestFileData(ws, msgId, params);
           return;
@@ -1048,7 +1170,27 @@ export class ACPAgentServer {
     try {
       await ctx.started();
 
-      await this.onChat(ctx, message, kwargs);
+      // Slash-command pre-interception: messages starting with "/" are first
+      // offered to `onSlashCommand`. Concrete agents use this to short-circuit
+      // commands like `/model` into interactive UIs (sendForm → setModel)
+      // without the LLM round-trip. Returning `true` means "I handled it";
+      // we skip onChat and fall through to the normal lifecycle wrap
+      // (sendTextFinal + completed). Returning `false` means "not mine";
+      // onChat runs as usual.
+      const trimmed = message.trimStart();
+      let handledBySlash = false;
+      if (trimmed.startsWith('/')) {
+        const space = trimmed.search(/\s/);
+        const command = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).trim();
+        const args = space === -1 ? '' : trimmed.slice(space + 1).trim();
+        if (command.length > 0) {
+          handledBySlash = await this.onSlashCommand(ctx, command, args, trimmed, kwargs);
+        }
+      }
+
+      if (!handledBySlash) {
+        await this.onChat(ctx, message, kwargs);
+      }
 
       await ctx.sendTextFinal();
       await ctx.completed();
@@ -1144,6 +1286,161 @@ export class ACPAgentServer {
   private async handleGetCard(ws: WebSocket, msgId: string | number): Promise<void> {
     const card = this.getAgentCard();
     await wsSend(ws, jsonrpcResponse(msgId, { result: card }));
+  }
+
+  private async handleCommandsList(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const listParams = (params ?? {}) as CommandsListParams;
+      const result = await this.onCommandsList(listParams);
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'commands.list failed',
+          },
+        }),
+      );
+    }
+  }
+
+  private async handleModelsList(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const p = (params ?? {}) as ModelsListParams;
+      const result = await this.onModelsList(p);
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'models.list failed',
+          },
+        }),
+      );
+    }
+  }
+
+  private async handleModelsSetCurrent(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const raw = (params ?? {}) as Record<string, unknown>;
+    const model = typeof raw.model === 'string' ? raw.model : '';
+    if (model === '') {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: { code: -32602, message: 'model parameter required' },
+        }),
+      );
+      return;
+    }
+    try {
+      const result = await this.onModelsSetCurrent({ model });
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'models.setCurrent failed',
+          },
+        }),
+      );
+    }
+  }
+
+  /**
+   * Broadcast `agent.commands.changed` to all authenticated connections.
+   *
+   * Used by concrete agents (e.g. ClaudeCodeAgent) when their command source
+   * changes — either because the Claude Agent SDK emitted a fresh `system/init`
+   * with updated `slash_commands`, or because files under the agent's commands
+   * directory were added / removed / modified.
+   *
+   * Per-client send failures are swallowed so one bad socket doesn't starve
+   * the others.
+   */
+  protected async broadcastCommandsChanged(
+    commands: SlashCommandInfo[],
+  ): Promise<void> {
+    if (this.wsServer === undefined) return;
+    const msg = jsonrpcNotification('agent.commands.changed', {
+      commands,
+    } satisfies CommandsChangedParams as unknown as Record<string, unknown>);
+    for (const client of this.wsServer.clients) {
+      const sws = client as ShepawWebSocket;
+      if (sws.authorizedPeer === undefined) continue;
+      try {
+        await wsSend(client, msg);
+      } catch {
+        /* ignore per-client failure */
+      }
+    }
+  }
+
+  /**
+   * Register a fire-and-forget handler to be invoked when the app submits
+   * a response for the given `formId` via `agent.submitResponse`.
+   *
+   * Unlike `TaskContext.waitForResponse`, this does NOT block the caller.
+   * The task that sent the form can (and should) complete normally —
+   * `sendTextFinal` + `completed` fire, the UI unpins, and this handler
+   * runs in the background whenever the user eventually submits.
+   *
+   * The handler runs outside any task lifecycle: the original task's
+   * `TaskContext` is no longer live, so the handler should NOT try to
+   * call `ctx.sendText` etc. It should only mutate agent-internal state
+   * (e.g. flip `this.currentModel`).
+   *
+   * Returns a cancel function that removes the pending entry (e.g. if the
+   * agent wants to tear down the form on a timeout).
+   */
+  protected registerFormHandler(
+    formId: string,
+    handler: (responseData: Record<string, unknown>) => void | Promise<void>,
+  ): () => void {
+    const deferred = createDeferred<Record<string, unknown>>();
+    this.pendingResponses.set(formId, deferred);
+    // Consume the promise asynchronously so this call doesn't block.
+    void deferred.promise.then(
+      async (data) => {
+        try {
+          await handler(data);
+        } catch (err) {
+          // Swallow — handler is background, there's no one to report to.
+          // eslint-disable-next-line no-console
+          console.error(`[form handler ${formId}]`, err);
+        } finally {
+          this.pendingResponses.delete(formId);
+        }
+      },
+      () => {
+        // Rejected (e.g. connection closed, task cancelled) — just clean up.
+        this.pendingResponses.delete(formId);
+      },
+    );
+    return () => {
+      const existing = this.pendingResponses.get(formId);
+      if (existing === deferred && !deferred.settled) {
+        deferred.reject(new Error('Form handler cancelled'));
+        this.pendingResponses.delete(formId);
+      }
+    };
   }
 
   // ── banner ─────────────────────────────────────────────────────

@@ -40,6 +40,7 @@ export type {
 } from './task-context.js';
 export { ACPAgentServer, TaskCancelledError } from './server.js';
 export type { ACPAgentServerOptions, RunOptions } from './server.js';
+export { parseFrontmatter, scanCommandsDir } from './commands-scanner.js';
 export {
   derivedAgentId,
   derivedFingerprint,
@@ -162,3 +163,25 @@ export {
   type ResolvePendingApprovalParams,
   type ResolvePendingApprovalResult,
 } from './permissions/approval-router.js';
+
+// ── Slash command registry ────────────────────────────────────────
+export { SlashCommandRegistry } from './slash/registry.js';
+export type {
+  SlashCommandDeps,
+  SlashCommandHandler,
+  SlashProviders,
+  ModelsProvider,
+  ModelInfoEntry,
+  StatusProvider,
+  StatusSummary,
+  McpProvider,
+  McpServerInfo,
+  PermissionsProvider,
+  PermissionModeInfo,
+} from './slash/types.js';
+export { createModelHandler } from './slash/handlers/model.js';
+export type { CreateModelHandlerOptions } from './slash/handlers/model.js';
+export { createStatusHandler } from './slash/handlers/status.js';
+export { createMcpHandler } from './slash/handlers/mcp.js';
+export { createPermissionsHandler } from './slash/handlers/permissions.js';
+export type { CreatePermissionsHandlerOptions } from './slash/handlers/permissions.js';

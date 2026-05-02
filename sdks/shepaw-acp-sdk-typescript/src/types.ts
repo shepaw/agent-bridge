@@ -134,6 +134,83 @@ export interface ChatKwargs {
   params: Record<string, unknown>;
 }
 
+// ── Slash command discovery (agent.commands.list) ──────────────────
+
+/** Origin of a command entry. */
+export type CommandScope = 'project' | 'user' | 'builtin';
+
+/** How a command entry was discovered. */
+export type CommandSource = 'sdk' | 'filesystem';
+
+/**
+ * Metadata for a single slash command surfaced by the agent.
+ *
+ * `name` is the bare command name without a leading slash ("plan" not "/plan").
+ * The shepaw client prepends "/" when inserting into chat input.
+ *
+ * All field names stay snake_case on the wire to match the rest of the
+ * protocol (e.g., `argument_hint`, not `argumentHint`).
+ */
+export interface SlashCommandInfo {
+  name: string;
+  description?: string;
+  argument_hint?: string;
+  scope?: CommandScope;
+  source?: CommandSource;
+}
+
+/** `agent.commands.list` request params (reserved for future filters). */
+export interface CommandsListParams {
+  // Reserved: scope, include_hidden, query.
+}
+
+/** `agent.commands.list` response. */
+export interface CommandsListResult {
+  commands: SlashCommandInfo[];
+}
+
+/** `agent.commands.changed` notification params. */
+export interface CommandsChangedParams {
+  commands: SlashCommandInfo[];
+}
+
+// ── Model selection (agent.models.list / agent.models.setCurrent) ──
+
+/**
+ * Metadata for a model offered by the underlying agent SDK.
+ *
+ * Mirrors `ModelInfo` from the Claude/CodeBuddy Agent SDKs:
+ *   - `value` is the id you pass to `query.setModel(value)` (and also back
+ *     through `agent.models.setCurrent`).
+ *   - `display_name` is human-readable (wire stays snake_case).
+ */
+export interface ModelInfo {
+  value: string;
+  display_name: string;
+  description: string;
+}
+
+/** `agent.models.list` request params (reserved). */
+export interface ModelsListParams {}
+
+/** `agent.models.list` response. */
+export interface ModelsListResult {
+  models: ModelInfo[];
+  /** The currently-selected model value, if any. */
+  current?: string;
+}
+
+/** `agent.models.setCurrent` request params. */
+export interface ModelsSetCurrentParams {
+  model: string;
+}
+
+/** `agent.models.setCurrent` response. */
+export interface ModelsSetCurrentResult {
+  model: string;
+  display_name?: string;
+}
+
 // ── JSON-RPC envelopes (generic shapes) ────────────────────────────
 
 export interface JsonRpcRequest {
