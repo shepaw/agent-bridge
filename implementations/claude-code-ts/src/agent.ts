@@ -69,6 +69,7 @@ import { scanCommandsDir, SlashCommandRegistry, type SlashProviders } from 'shep
 import { log } from './debug.js';
 
 import { ClaudeModelsProvider } from './commands/models-provider.js';
+import { ClaudeStatusProvider } from './commands/status-provider.js';
 import { buildRegistry, type ClaudeCfg } from './commands/registry.js';
 
 /** Gateway directory name — keeps our on-disk state isolated from other bridges. */
@@ -245,6 +246,8 @@ export class ClaudeCodeAgent extends ACPAgentServer {
    * 5 minutes — see `ClaudeModelsProvider`.
    */
   private readonly modelsProvider: ClaudeModelsProvider;
+  /** Provider backing the `/status` account/model/permissionMode summary. */
+  private readonly statusProvider: ClaudeStatusProvider;
 
   /**
    * Currently-selected model value. Set from `opts.model` on construct,
@@ -306,6 +309,12 @@ export class ClaudeCodeAgent extends ACPAgentServer {
       cwd: this.cfg.cwd,
       getCurrentModel: () => this.currentModel,
     });
+    this.statusProvider = new ClaudeStatusProvider({
+      queryFn: this.queryFn,
+      cwd: this.cfg.cwd,
+      getCurrentModel: () => this.currentModel,
+      getCurrentPermissionMode: () => this.cfg.permissionMode,
+    });
     this.slashRegistry = buildRegistry({
       onModelApplied: (id) => {
         this.currentModel = id;
@@ -316,6 +325,7 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     }) as unknown as SlashCommandRegistry<unknown>;
     this.slashProviders = {
       models: this.modelsProvider,
+      status: this.statusProvider,
     } satisfies SlashProviders;
   }
 

@@ -68,6 +68,7 @@ import { log } from './debug.js';
 
 import { CodeBuddyModelsProvider } from './commands/models-provider.js';
 import { CodeBuddyPermissionsProvider } from './commands/permissions-provider.js';
+import { CodeBuddyStatusProvider } from './commands/status-provider.js';
 import { buildRegistry, type CodeBuddyCfg } from './commands/registry.js';
 
 /** Gateway directory name — keeps our on-disk state isolated from the Claude bridge. */
@@ -219,6 +220,8 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
   private readonly modelsProvider: CodeBuddyModelsProvider;
   /** Provider backing `/permissions` — internally cached. */
   private readonly permissionsProvider: CodeBuddyPermissionsProvider;
+  /** Provider backing the `/status` account/model/permissionMode summary. */
+  private readonly statusProvider: CodeBuddyStatusProvider;
 
   /**
    * The currently-selected model value. `undefined` means "use whatever
@@ -281,6 +284,13 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
       ...(this.cfg.environment !== undefined && { environment: this.cfg.environment }),
       ...(this.cfg.endpoint !== undefined && { endpoint: this.cfg.endpoint }),
     });
+    this.statusProvider = new CodeBuddyStatusProvider({
+      cwd: this.cfg.cwd,
+      ...(this.cfg.environment !== undefined && { environment: this.cfg.environment }),
+      ...(this.cfg.endpoint !== undefined && { endpoint: this.cfg.endpoint }),
+      getCurrentModel: () => this.currentModel,
+      getCurrentPermissionMode: () => this.cfg.permissionMode,
+    });
     this.slashRegistry = buildRegistry({
       onModelApplied: (id) => {
         this.currentModel = id;
@@ -291,11 +301,11 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
     }) as unknown as SlashCommandRegistry<unknown>;
     this.slashProviders = {
       models: this.modelsProvider,
+      status: this.statusProvider,
       permissions: this.permissionsProvider,
-      // status + mcp providers omitted: Tencent SDK exposes these only on
-      // a live `Query`, which we don't spin up out-of-band. The status
-      // handler falls back to cfg fields; /mcp emits a "not supported"
-      // line. Revisit once the SDK exposes these on Session.
+      // mcp provider omitted: Tencent SDK exposes MCP server list only on
+      // a live Query, which we don't spin up out-of-band. The mcp handler
+      // emits a "not supported" line. Revisit once the SDK exposes these on Session.
     } satisfies SlashProviders;
   }
 

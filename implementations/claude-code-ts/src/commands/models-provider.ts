@@ -53,14 +53,21 @@ export class ClaudeModelsProvider implements ModelsProvider {
     const current = this.opts.getCurrentModel?.();
     if (current !== undefined) options.model = current;
 
+    // Recent `@anthropic-ai/claude-agent-sdk` versions dropped the explicit
+    // `Query.connect()` method — `query()` now kicks off initialization
+    // synchronously on construction, and control methods like
+    // `supportedModels()` just await the internal `initialization` promise.
+    // Older versions required `await q.connect()` first; we detect and call
+    // it only if present so this code works across SDK versions.
     type QueryLike = {
-      connect(): Promise<void>;
+      connect?: () => Promise<void>;
       supportedModels(): Promise<Array<{
         value: string;
         displayName: string;
         description: string;
       }>>;
-      return(): Promise<unknown>;
+      return?: () => Promise<unknown>;
+      close?: () => void;
     };
     const q = this.opts.queryFn({
       prompt: warmupPrompt(),
@@ -68,7 +75,9 @@ export class ClaudeModelsProvider implements ModelsProvider {
     }) as unknown as QueryLike;
 
     try {
-      await q.connect();
+      if (typeof q.connect === 'function') {
+        await q.connect();
+      }
       const raw = await q.supportedModels();
       this.cache = raw
         .filter((m) => typeof m.value === 'string' && m.value.length > 0)
@@ -80,8 +89,14 @@ export class ClaudeModelsProvider implements ModelsProvider {
       this.fetchedAt = Date.now();
       return this.cache;
     } finally {
+      // Prefer generator `return()` (drives cleanup via the AsyncGenerator
+      // protocol). Fall back to `close()` on older SDKs.
       try {
-        await q.return();
+        if (typeof q.return === 'function') {
+          await q.return();
+        } else if (typeof q.close === 'function') {
+          q.close();
+        }
       } catch {
         /* ignore */
       }
