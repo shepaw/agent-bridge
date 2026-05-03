@@ -60,7 +60,7 @@ export class ChannelTunnelConfig {
 
   /** Public WebSocket URL the Shepaw app should paste into the "remote agent" field. */
   getPublicEndpoint(
-    opts: { agentId?: string; fingerprint?: string } = {},
+    opts: { agentId?: string; fingerprint?: string; publicKey?: Uint8Array } = {},
   ): string {
     const base = this.serverUrl.replace(/\/+$/, '');
     const wsBase = base.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
@@ -70,13 +70,25 @@ export class ChannelTunnelConfig {
     const params: string[] = [];
     // v2.1: no `token=` here. Authorization is per-peer public key (see
     // `authorized_peers.json` on the agent side); the pairing URL carries only
-    // the agentId (as a routing/UX hint) and the fingerprint (to pin the
-    // server's static public key at handshake time).
+    // the agentId (as a routing/UX hint), the fingerprint (to pin the
+    // server's static public key at handshake time), and the full static
+    // public key itself — the Noise IK initiator needs the responder's
+    // public key upfront to encrypt its first message.
     if (opts.agentId) params.push(`agentId=${encodeURIComponent(opts.agentId)}`);
     const query = params.length > 0 ? `?${params.join('&')}` : '';
-    // Fingerprint goes in the URI fragment so it is NOT sent to the Channel Service
-    // in the WebSocket upgrade request — fragments are client-side only.
-    const fragment = opts.fingerprint ? `#fp=${encodeURIComponent(opts.fingerprint)}` : '';
+    // Fingerprint + public key go in the URI fragment so they are NOT sent
+    // to the Channel Service in the WebSocket upgrade request — fragments
+    // are client-side only. The `pk` value is base64 then percent-encoded so
+    // `+`/`/`/`=` round-trip cleanly through standard URI helpers (Dart
+    // `Uri.splitQueryString`, JS `URLSearchParams`). Same treatment as the
+    // LAN banner in `server.ts` and the `pair` command in `cli.ts`.
+    const fragParts: string[] = [];
+    if (opts.fingerprint) fragParts.push(`fp=${encodeURIComponent(opts.fingerprint)}`);
+    if (opts.publicKey) {
+      const pkB64 = Buffer.from(opts.publicKey).toString('base64');
+      fragParts.push(`pk=${encodeURIComponent(pkB64)}`);
+    }
+    const fragment = fragParts.length > 0 ? `#${fragParts.join('&')}` : '';
     return `${wsBase}${path}${query}${fragment}`;
   }
 
@@ -371,6 +383,33 @@ export class TunnelClient {
 
   // ── HTTP forwarding ─────────────────────────────────────────
 
+  /**
+   * Strip the channel routing prefix from a public path so the local agent
+   * sees the same path clients see at `ws://localhost:<port>/...`.
+   *
+   * Public paths arrive as one of:
+   *   - `/proxy/<channel_id>/<rest>` (canonical)
+   *   - `/c/<endpoint>/<rest>`       (short-name alias, configured or server-assigned)
+   * Both must become `/<rest>`. Applied uniformly to HTTP (`forwardHttp`)
+   * and WebSocket (`forwardWsConnect`) — otherwise the app's `/health`
+   * probe over the tunnel reaches the local server as `/proxy/<id>/health`
+   * and 404s, even though the tunnel itself is healthy.
+   */
+  private stripChannelPrefix(path: string): string {
+    const proxyPrefix = `/proxy/${this.config.channelId}`;
+    if (path.startsWith(proxyPrefix)) return path.slice(proxyPrefix.length);
+    if (this.config.channelEndpoint) {
+      const shortPrefix = `/c/${this.config.channelEndpoint}`;
+      if (path.startsWith(shortPrefix)) return path.slice(shortPrefix.length);
+    }
+    // No `channelEndpoint` configured, but the relay may still route this
+    // channel via a short-name slug it assigned. Strip any `/c/<slug>` prefix
+    // so local path matching ("/health", "/acp/ws") still works.
+    const m = /^\/c\/[^/]+/.exec(path);
+    if (m !== null) return path.slice(m[0].length);
+    return path;
+  }
+
   private async forwardHttp(req: TunnelMessage): Promise<void> {
     const streamId = req.stream_id ?? 0;
     try {
@@ -379,7 +418,8 @@ export class TunnelClient {
           ? Buffer.from(req.body, 'base64')
           : undefined;
 
-      const localUrl = `http://${this.localHost}:${this.localPort}${req.path ?? ''}`;
+      const localPath = this.stripChannelPrefix(req.path ?? '');
+      const localUrl = `http://${this.localHost}:${this.localPort}${localPath}`;
 
       const skip = new Set(['host', 'content-length', 'transfer-encoding', 'connection']);
       const fwdHeaders: Record<string, string> = {};
@@ -436,20 +476,7 @@ export class TunnelClient {
 
   private async forwardWsConnect(req: TunnelMessage): Promise<void> {
     const streamId = req.stream_id ?? 0;
-    let path = req.path ?? '';
-    const proxyPrefix = `/proxy/${this.config.channelId}`;
-    if (path.startsWith(proxyPrefix)) {
-      path = path.slice(proxyPrefix.length);
-    } else if (this.config.channelEndpoint) {
-      const shortPrefix = `/c/${this.config.channelEndpoint}`;
-      if (path.startsWith(shortPrefix)) path = path.slice(shortPrefix.length);
-    } else {
-      // No `channelEndpoint` configured, but the relay may still route this
-      // channel via a short-name slug it assigned. Strip any `/c/<slug>` prefix
-      // so local path matching ("/acp/ws") still works.
-      const m = /^\/c\/[^/]+/.exec(path);
-      if (m !== null) path = path.slice(m[0].length);
-    }
+    const path = this.stripChannelPrefix(req.path ?? '');
     const localWsUrl = `ws://${this.localHost}:${this.localPort}${path}`;
 
     this.log(`[Tunnel] ws_connect stream=${streamId} '${req.path}' → '${localWsUrl}'`);

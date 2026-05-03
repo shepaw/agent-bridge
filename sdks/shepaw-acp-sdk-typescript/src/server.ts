@@ -433,6 +433,11 @@ export class ACPAgentServer {
       const publicUrl = this.tunnelConfig.getPublicEndpoint({
         agentId: this.agentId,
         fingerprint: this.identity.fingerprint,
+        // The Noise IK initiator needs the responder's static public key
+        // upfront to encrypt its first handshake message, so the paste URL
+        // must carry it in the (client-only) fragment — same as the LAN
+        // banner does for `ACP WS:` below.
+        publicKey: this.identity.staticPublicKey,
       });
       // eslint-disable-next-line no-console
       console.log(`  Public WS: ${publicUrl}`);
