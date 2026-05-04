@@ -128,7 +128,8 @@ cli
         );
         process.exit(1);
       }
-      tunnelConfig = new ChannelTunnelConfig({
+      // Use factory method to automatically fetch alias if not provided
+      tunnelConfig = await ChannelTunnelConfig.createWithAliasLookup({
         serverUrl,
         channelId,
         secret,

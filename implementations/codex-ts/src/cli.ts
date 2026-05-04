@@ -1,7 +1,7 @@
 /**
- * CLI entry point: `shepaw-claude-code <subcommand> [options]`.
+ * CLI entry point: `shepaw-codex <subcommand> [options]`.
  *
- * v2.1 subcommands:
+ * Subcommands:
  *   serve                       Start the gateway
  *   peers list                  Print authorized device public keys
  *   peers add <pubkey>          Authorize a Shepaw app to connect
@@ -11,12 +11,12 @@
  *   enroll-revoke <code>        Cancel an unused pairing code
  *
  * Authentication is entirely by public-key allowlist (`authorized_peers.json`),
- * no `--token` flag exists anymore. See `shepaw-claude-code peers --help`.
+ * no `--token` flag exists. See `shepaw-codex peers --help`.
  *
  * Implementation note: cac doesn't support multi-word command names; we
  * rewrite `peers <sub>` → `peers-<sub>` in argv before parsing, and rewrite
  * the help output back for display. See the matching comment in
- * codebuddy-code/src/cli.ts for the longer rationale.
+ * claude-code-ts/src/cli.ts for the longer rationale.
  */
 
 import { cac } from 'cac';
@@ -36,54 +36,79 @@ import {
   revokeEnrollmentToken,
 } from 'shepaw-acp-sdk';
 
-import { ClaudeCodeAgent } from './agent.js';
-import { mockQuery } from './mock-claude.js';
+import { CodexAgent } from './agent.js';
 
-// See codebuddy-code/src/cli.ts for the rationale. Must mutate argv in place
-// because cac snapshots `process.argv` at module-load time.
-if (process.argv[2] === 'peers' && typeof process.argv[3] === 'string' && !process.argv[3].startsWith('-')) {
+// cac doesn't support multi-word subcommand names; rewrite `peers <sub>` →
+// `peers-<sub>` before the parser sees it.
+if (
+  process.argv[2] === 'peers' &&
+  typeof process.argv[3] === 'string' &&
+  !process.argv[3].startsWith('-')
+) {
   const sub = process.argv[3];
   process.argv.splice(2, 2, `peers-${sub}`);
 }
 
-const cli = cac('shepaw-claude-code');
+const cli = cac('shepaw-codex');
 
 cli
-  .command('serve', 'Start the Shepaw Claude Code gateway on a WebSocket port')
-  .option('--cwd <dir>', 'Working directory for Claude Code', {
+  .command('serve', 'Start the Shepaw Codex gateway on a WebSocket port')
+  .option('--cwd <dir>', 'Working directory for Codex', {
     default: process.cwd(),
   })
   .option('--port <port>', 'Port to listen on', {
-    default: process.env.AGENT_PORT ?? 8090,
+    default: process.env['AGENT_PORT'] ?? 8091,
   })
   .option('--host <host>', 'Host to bind to', { default: '0.0.0.0' })
-  .option('--name <name>', 'Display name', { default: 'Claude Code' })
-  .option('--model <model>', 'Claude model id (e.g. claude-opus-4-7)')
-  .option('--api-key <key>', 'Anthropic-native API key (sets ANTHROPIC_API_KEY; sent as x-api-key). Mutually exclusive with --auth-token.')
-  .option('--auth-token <token>', 'Bearer token for an Anthropic-compatible provider like OpenRouter (sets ANTHROPIC_AUTH_TOKEN; sent as Authorization: Bearer). Mutually exclusive with --api-key.')
-  .option('--api-base-url <url>', 'Base URL for the LLM provider API (sets ANTHROPIC_BASE_URL). The SDK appends /v1/messages, so for OpenRouter use https://openrouter.ai/api (NOT /api/v1).')
-  .option('--max-turns <n>', 'Maximum agentic turns per chat')
+  .option('--name <name>', 'Display name', { default: 'Codex' })
+  .option('--model <model>', 'OpenAI model id (e.g. o4-mini, o3)')
+  .option('--api-key <key>', 'OpenAI API key (sets OPENAI_API_KEY)')
   .option(
-    '--allowed-tools <list>',
-    'Comma-separated list of allowed tools (default: all)',
+    '--api-base-url <url>',
+    'Base URL for the OpenAI-compatible API endpoint (sets OPENAI_BASE_URL)',
   )
   .option(
-    '--permission-mode <mode>',
-    'Permission mode (default | acceptEdits | plan | bypassPermissions)',
-    { default: 'default' },
+    '--approval-policy <policy>',
+    'Approval policy: never | on-request | on-failure | untrusted (default: on-request)',
+    { default: 'on-request' },
   )
-  .option('--system-prompt <text>', 'Extra system prompt')
+  .option(
+    '--sandbox-mode <mode>',
+    'Sandbox mode: read-only | workspace-write | danger-full-access (default: workspace-write)',
+    { default: 'workspace-write' },
+  )
+  .option(
+    '--reasoning-effort <effort>',
+    'Model reasoning effort: minimal | low | medium | high | xhigh',
+  )
+  .option(
+    '--web-search-mode <mode>',
+    'Web search mode: disabled | cached | live (default: disabled)',
+    { default: 'disabled' },
+  )
+  .option('--skip-git-repo-check', 'Skip the git repository check', {
+    default: false,
+  })
+  .option(
+    '--additional-dirs <dirs>',
+    'Comma-separated list of additional directories Codex may access',
+  )
+  .option('--system-prompt <text>', 'Extra system prompt / instructions prepended to the session')
   .option(
     '--peers-path <path>',
-    'Override authorized_peers.json path (default: $SHEPAW_PEERS_PATH or ~/.config/shepaw-cb-gateway/authorized_peers.json)',
+    'Override authorized_peers.json path (default: $SHEPAW_PEERS_PATH or ~/.config/shepaw-codex-gateway/authorized_peers.json)',
   )
   .option(
     '--enrollments-path <path>',
-    'Override enrollments.json path (default: $SHEPAW_ENROLLMENTS_PATH or ~/.config/shepaw-cb-gateway/enrollments.json)',
+    'Override enrollments.json path (default: $SHEPAW_ENROLLMENTS_PATH or ~/.config/shepaw-codex-gateway/enrollments.json)',
   )
   .option(
     '--session-store-path <path>',
-    'Override session store path (default: ~/.config/shepaw-cc-gateway/sessions.json)',
+    'Override session store path (default: ~/.config/shepaw-codex-gateway/sessions.json)',
+  )
+  .option(
+    '--codex-path <path>',
+    'Override path to the Codex CLI binary (default: resolved from PATH)',
   )
   .option(
     '--tunnel',
@@ -92,53 +117,30 @@ cli
   .option('--tunnel-server <url>', 'Channel Service base URL (or PAW_ACP_TUNNEL_SERVER_URL)')
   .option('--tunnel-channel-id <id>', 'Channel ID (or PAW_ACP_TUNNEL_CHANNEL_ID)')
   .option('--tunnel-secret <secret>', 'Channel secret (or PAW_ACP_TUNNEL_SECRET)')
-  .option('--tunnel-endpoint <name>', 'Optional short-name endpoint (or PAW_ACP_TUNNEL_ENDPOINT)')
   .option(
-    '--mock',
-    'Use a scripted fake Claude (no ANTHROPIC_API_KEY required). Send "help" from the app for scenarios.',
+    '--tunnel-endpoint <name>',
+    'Optional short-name endpoint (or PAW_ACP_TUNNEL_ENDPOINT)',
   )
   .action(async (opts) => {
     const port = Number(opts.port);
 
-    if (opts.apiKey && opts.authToken) {
-      console.error(
-        'Error: --api-key and --auth-token are mutually exclusive.\n' +
-          '  • Use --api-key for Anthropic-native keys (sent as x-api-key)\n' +
-          '  • Use --auth-token for OpenRouter or other Bearer-auth providers',
-      );
-      process.exit(1);
-    }
-
-    // Common footgun: users write `https://openrouter.ai/api/v1` but the
-    // SDK appends `/v1/messages`, producing `/api/v1/v1/messages` → 404 →
-    // the CLI subprocess crashes later with a cryptic `input_tokens`
-    // undefined error. Strip the trailing `/v1` and warn.
-    let apiBaseUrl: string | undefined = opts.apiBaseUrl;
-    if (typeof apiBaseUrl === 'string') {
-      const trimmed = apiBaseUrl.replace(/\/+$/, '');
-      if (/\/v1$/.test(trimmed)) {
-        const fixed = trimmed.replace(/\/v1$/, '');
-        console.warn(
-          `[warn] --api-base-url ends in /v1 (${apiBaseUrl}). The Claude SDK ` +
-            `appends /v1/messages itself, so this would double up. Using ${fixed} instead.`,
-        );
-        apiBaseUrl = fixed;
-      }
-    }
-
-    const allowedTools =
-      typeof opts.allowedTools === 'string' && opts.allowedTools.length > 0
-        ? opts.allowedTools
+    const additionalDirs =
+      typeof opts.additionalDirs === 'string' && opts.additionalDirs.length > 0
+        ? opts.additionalDirs
             .split(',')
             .map((s: string) => s.trim())
             .filter(Boolean)
         : undefined;
 
     let tunnelConfig: ChannelTunnelConfig | undefined;
-    const serverUrl: string | undefined = opts.tunnelServer ?? process.env.PAW_ACP_TUNNEL_SERVER_URL;
-    const channelId: string | undefined = opts.tunnelChannelId ?? process.env.PAW_ACP_TUNNEL_CHANNEL_ID;
-    const secret: string | undefined = opts.tunnelSecret ?? process.env.PAW_ACP_TUNNEL_SECRET;
-    const endpoint: string = opts.tunnelEndpoint ?? process.env.PAW_ACP_TUNNEL_ENDPOINT ?? '';
+    const serverUrl: string | undefined =
+      opts.tunnelServer ?? process.env['PAW_ACP_TUNNEL_SERVER_URL'];
+    const channelId: string | undefined =
+      opts.tunnelChannelId ?? process.env['PAW_ACP_TUNNEL_CHANNEL_ID'];
+    const secret: string | undefined =
+      opts.tunnelSecret ?? process.env['PAW_ACP_TUNNEL_SECRET'];
+    const endpoint: string =
+      opts.tunnelEndpoint ?? process.env['PAW_ACP_TUNNEL_ENDPOINT'] ?? '';
     const wantTunnel = Boolean(opts.tunnel) || Boolean(serverUrl && channelId && secret);
     if (wantTunnel) {
       if (!serverUrl || !channelId || !secret) {
@@ -157,31 +159,27 @@ cli
       });
     }
 
-    const agent = new ClaudeCodeAgent({
+    const agent = new CodexAgent({
       name: opts.name,
       peersPath: opts.peersPath,
       enrollmentsPath: opts.enrollmentsPath,
       cwd: opts.cwd,
       model: opts.model,
-      apiKey: opts.apiKey,
-      authToken: opts.authToken,
-      apiBaseUrl,
-      maxTurns: opts.maxTurns !== undefined ? Number(opts.maxTurns) : undefined,
-      allowedTools,
-      permissionMode: opts.permissionMode,
+      apiKey: opts.apiKey ?? process.env['OPENAI_API_KEY'],
+      apiBaseUrl: opts.apiBaseUrl ?? process.env['OPENAI_BASE_URL'],
+      approvalPolicy: opts.approvalPolicy,
+      sandboxMode: opts.sandboxMode,
+      reasoningEffort: opts.reasoningEffort,
+      webSearchMode: opts.webSearchMode,
+      skipGitRepoCheck: opts.skipGitRepoCheck,
+      additionalDirectories: additionalDirs,
       systemPrompt: opts.systemPrompt,
       sessionStoreOptions: opts.sessionStorePath
         ? { path: opts.sessionStorePath }
         : undefined,
+      codexPathOverride: opts.codexPath,
       tunnelConfig,
-      queryFn: opts.mock ? mockQuery : undefined,
     });
-
-    if (opts.mock) {
-      console.log(
-        '\n[mock] Running without Claude API. Send "help" from the app to see scripted scenarios.\n',
-      );
-    }
 
     await agent.init();
     await agent.run({ host: opts.host, port });
@@ -197,7 +195,7 @@ cli
     const peers = loadOrCreatePeers({ path });
     if (peers.peers.length === 0) {
       console.log(`No authorized peers. File: ${peers.path}`);
-      console.log('Add one with:  shepaw-claude-code peers add <pubkey> --label "my phone"');
+      console.log('Add one with:  shepaw-codex peers add <pubkey> --label "my phone"');
       return;
     }
     console.log(`Authorized peers (${peers.peers.length}) from ${peers.path}:`);
@@ -255,11 +253,6 @@ cli
   });
 
 // ── enrollment subcommands ─────────────────────────────────────────
-//
-// Single-use pairing codes. Operator runs `enroll`, app scans the QR or
-// types the short code, server consumes it at the next handshake and
-// auto-adds the app's pubkey to authorized_peers.json. Codes travel inside
-// the Noise-encrypted msg 1 payload — Channel Service sees AEAD ciphertext.
 
 cli
   .command('enroll', 'Mint a single-use pairing code the Shepaw app can redeem on first connect')
@@ -268,81 +261,85 @@ cli
   .option('--peers-path <path>', 'Override authorized_peers.json path')
   .option('--enrollments-path <path>', 'Override enrollments.json path')
   .option('--identity-path <path>', 'Override identity.json path (to read agentId/fp)')
-  .option('--base-url <url>', 'Base WS URL to print (e.g. wss://channel.example.com/c/my-agent). Defaults to printing a LAN hint only.')
+  .option(
+    '--base-url <url>',
+    'Base WS URL to print (e.g. wss://channel.example.com/c/my-agent). Defaults to printing a LAN hint only.',
+  )
   .option('--no-qr', 'Suppress the terminal QR code (useful for piping output)')
-  .action((opts: {
-    label?: string;
-    ttlMinutes?: number;
-    peersPath?: string;
-    enrollmentsPath?: string;
-    identityPath?: string;
-    baseUrl?: string;
-    qr?: boolean;  // cac inverts --no-qr into { qr: false }
-  }) => {
-    const enrollmentsPath = resolveEnrollmentsPath(opts.enrollmentsPath);
-    const identity = loadOrCreateIdentity({ path: resolveIdentityPath(opts.identityPath) });
+  .action(
+    (opts: {
+      label?: string;
+      ttlMinutes?: number;
+      peersPath?: string;
+      enrollmentsPath?: string;
+      identityPath?: string;
+      baseUrl?: string;
+      qr?: boolean;
+    }) => {
+      const enrollmentsPath = resolveEnrollmentsPath(opts.enrollmentsPath);
+      const identity = loadOrCreateIdentity({ path: resolveIdentityPath(opts.identityPath) });
 
-    const ttlMs = Math.max(1, Math.floor(Number(opts.ttlMinutes ?? 10))) * 60 * 1000;
-    const token = createEnrollmentToken(enrollmentsPath, { label: opts.label, ttlMs });
-    const display = formatCodeForDisplay(token.code);
-    const expires = new Date(token.expiresAt).toLocaleString();
+      const ttlMs = Math.max(1, Math.floor(Number(opts.ttlMinutes ?? 10))) * 60 * 1000;
+      const token = createEnrollmentToken(enrollmentsPath, { label: opts.label, ttlMs });
+      const display = formatCodeForDisplay(token.code);
+      const expires = new Date(token.expiresAt).toLocaleString();
 
-    // See codebuddy-code/src/cli.ts:enroll for the rationale on the
-    // shepaw:// deep-link format. We only emit a QR when --base-url is
-    // supplied — without a concrete host the QR would be useless or
-    // actively misleading.
-    let pairUrl: string | undefined;
-    if (opts.baseUrl) {
-      const base = opts.baseUrl.replace(/\/$/, '');
-      pairUrl = `${base}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
-    }
-    const qrPayload = pairUrl
-      ? `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`
-      : undefined;
+      let pairUrl: string | undefined;
+      if (opts.baseUrl) {
+        const base = opts.baseUrl.replace(/\/$/, '');
+        pairUrl = `${base}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
+      }
+      const qrPayload = pairUrl
+        ? `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`
+        : undefined;
 
-    console.log('');
-    console.log('╭──────────────────────────────────────────────╮');
-    console.log(`│  Pairing code:  ${display.padEnd(28, ' ')} │`);
-    console.log('╰──────────────────────────────────────────────╯');
-    console.log('');
-    console.log(`  Valid until:  ${expires}`);
-    console.log(`  Single use:   the code is invalidated after first handshake.`);
-    console.log(`  Agent ID:     ${identity.agentId}`);
-    console.log(`  Fingerprint:  ${identity.fingerprint}`);
-    if (pairUrl) {
-      console.log(`  Pair URL:     ${pairUrl}`);
-    } else {
       console.log('');
-      console.log('  In the Shepaw app:');
-      console.log('    1. Tap "Add remote agent"');
-      console.log('    2. Paste the URL printed on the agent banner (includes #fp=...)');
-      console.log(`    3. Enter pairing code: ${display}`);
-    }
-
-    if (qrPayload && opts.qr !== false) {
+      console.log('╭──────────────────────────────────────────────╮');
+      console.log(`│  Pairing code:  ${display.padEnd(28, ' ')} │`);
+      console.log('╰──────────────────────────────────────────────╯');
       console.log('');
-      console.log('  Scan with Shepaw app (or enter the code + URL manually):');
-      console.log('');
-      qrcode.generate(qrPayload, { small: true }, (qr: string) => {
-        process.stdout.write(qr);
-      });
-    }
+      console.log(`  Valid until:  ${expires}`);
+      console.log(`  Single use:   the code is invalidated after first handshake.`);
+      console.log(`  Agent ID:     ${identity.agentId}`);
+      console.log(`  Fingerprint:  ${identity.fingerprint}`);
+      if (pairUrl) {
+        console.log(`  Pair URL:     ${pairUrl}`);
+      } else {
+        console.log('');
+        console.log('  In the Shepaw app:');
+        console.log('    1. Tap "Add remote agent"');
+        console.log('    2. Paste the URL printed on the agent banner (includes #fp=...)');
+        console.log(`    3. Enter pairing code: ${display}`);
+      }
 
-    console.log('');
-    console.log(`  peers file:        ${resolvePeersPath(opts.peersPath)}`);
-    console.log(`  enrollments file:  ${enrollmentsPath}`);
-    console.log('');
-  });
+      if (qrPayload && opts.qr !== false) {
+        console.log('');
+        console.log('  Scan with Shepaw app (or enter the code + URL manually):');
+        console.log('');
+        qrcode.generate(qrPayload, { small: true }, (qr: string) => {
+          process.stdout.write(qr);
+        });
+      }
+
+      console.log('');
+      console.log(`  peers file:        ${resolvePeersPath(opts.peersPath)}`);
+      console.log(`  enrollments file:  ${enrollmentsPath}`);
+      console.log('');
+    },
+  );
 
 cli
-  .command('enroll-list', 'Show outstanding pairing codes (expired ones are auto-pruned on read)')
+  .command(
+    'enroll-list',
+    'Show outstanding pairing codes (expired ones are auto-pruned on read)',
+  )
   .option('--enrollments-path <path>', 'Override enrollments.json path')
   .action((opts: { enrollmentsPath?: string }) => {
     const enrollmentsPath = resolveEnrollmentsPath(opts.enrollmentsPath);
     const store = loadOrCreateEnrollments({ path: enrollmentsPath });
     if (store.tokens.length === 0) {
       console.log(`No outstanding pairing codes. File: ${store.path}`);
-      console.log('Mint one with:  shepaw-claude-code enroll --label "my phone"');
+      console.log('Mint one with:  shepaw-codex enroll --label "my phone"');
       return;
     }
     console.log(`Outstanding pairing codes (${store.tokens.length}) in ${store.path}:`);
@@ -361,10 +358,7 @@ cli
   });
 
 cli
-  .command(
-    'enroll-revoke <code>',
-    'Cancel an unused pairing code before it is redeemed',
-  )
+  .command('enroll-revoke <code>', 'Cancel an unused pairing code before it is redeemed')
   .option('--enrollments-path <path>', 'Override enrollments.json path')
   .action((code: string, opts: { enrollmentsPath?: string }) => {
     const enrollmentsPath = resolveEnrollmentsPath(opts.enrollmentsPath);

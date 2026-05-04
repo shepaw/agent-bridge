@@ -31,6 +31,10 @@ import { createHmac, randomBytes } from 'node:crypto';
 
 import { WebSocket } from 'ws';
 
+// ── Type helpers ─────────────────────────────────────────────────
+
+type Writable<T> = { -readonly [K in keyof T]: T[K] };
+
 // ── Configuration ───────────────────────────────────────────────────
 
 export interface ChannelTunnelConfigInit {
@@ -56,6 +60,47 @@ export class ChannelTunnelConfig {
     this.secret = init.secret;
     this.channelEndpoint = init.channelEndpoint ?? '';
     this.autoConnect = init.autoConnect ?? false;
+  }
+
+  /**
+   * Create a ChannelTunnelConfig and automatically fetch the channel's alias from the Channel Service.
+   * If the channel has an alias, it will be set as channelEndpoint; otherwise channelEndpoint remains empty.
+   *
+   * @param init Configuration without the automatic alias lookup
+   * @returns ChannelTunnelConfig with alias populated if available
+   */
+  static async createWithAliasLookup(init: ChannelTunnelConfigInit): Promise<ChannelTunnelConfig> {
+    const config = new ChannelTunnelConfig(init);
+
+    // Skip lookup if endpoint is already provided
+    if (init.channelEndpoint) {
+      return config;
+    }
+
+    try {
+      const base = init.serverUrl.replace(/\/+$/, '');
+      const response = await fetch(`${base}/api/v1/channels/${encodeURIComponent(init.channelId)}`);
+      if (!response.ok) {
+        console.warn(`Failed to fetch channel info (${response.status}), using channel ID for routing`);
+        return config;
+      }
+
+      const data = (await response.json()) as {
+        id: string;
+        alias?: string;
+        name: string;
+        [key: string]: unknown;
+      };
+
+      if (data.alias && typeof data.alias === 'string' && data.alias.length > 0) {
+        (config as Writable<ChannelTunnelConfig>).channelEndpoint = data.alias;
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch channel alias: ${err instanceof Error ? err.message : String(err)}`);
+      // Continue with empty channelEndpoint; routing falls back to channel ID
+    }
+
+    return config;
   }
 
   /** Public WebSocket URL the Shepaw app should paste into the "remote agent" field. */
@@ -240,7 +285,16 @@ export class TunnelClient {
       `?channel_id=${encodeURIComponent(this.config.channelId)}` +
       `&timestamp=${encodeURIComponent(timestamp)}` +
       `&nonce=${encodeURIComponent(nonce)}` +
-      `&signature=${encodeURIComponent(signature)}`;
+      `&signature=${encodeURIComponent(signature)}` +
+      // Optional alias: opt in to `/c/<alias>/...` routing on the Channel
+      // Service. The server claims the alias on connect (idempotent for the
+      // same channel, 409 if another channel already owns it). If the server
+      // hasn't been upgraded to support aliases yet, it simply ignores the
+      // unknown query param and the tunnel still comes up — the public URL
+      // will just need to use `/proxy/<channel_id>/...` instead.
+      (this.config.channelEndpoint
+        ? `&endpoint=${encodeURIComponent(this.config.channelEndpoint)}`
+        : '');
 
     return new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url, {

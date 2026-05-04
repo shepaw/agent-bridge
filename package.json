@@ -7,6 +7,8 @@
     "sdks/shepaw-acp-sdk-typescript",
     "implementations/claude-code-ts",
     "implementations/codebuddy-code",
+    "implementations/codex-ts",
+    "implementations/opencode-ts",
     "implementations/shepaw-agent-hub"
   ],
   "scripts": {
