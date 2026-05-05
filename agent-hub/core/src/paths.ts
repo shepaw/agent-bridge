@@ -142,6 +142,11 @@ export function normalizeCwd(cwd: string): string {
   if (typeof cwd !== 'string' || cwd.length === 0) {
     throw new Error('Project cwd must be a non-empty string.');
   }
-  if (isAbsolute(cwd)) return cwd;
-  return join(process.cwd(), cwd);
+  // Expand ~ to home directory before checking if absolute
+  let expanded = cwd;
+  if (cwd.startsWith('~')) {
+    expanded = cwd === '~' ? homedir() : join(homedir(), cwd.slice(2));
+  }
+  if (isAbsolute(expanded)) return expanded;
+  return join(process.cwd(), expanded);
 }

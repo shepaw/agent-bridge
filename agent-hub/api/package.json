@@ -1,0 +1,44 @@
+{
+  "name": "@shepaw/agent-hub-api",
+  "version": "0.1.0",
+  "description": "Express + WebSocket API backend for Shepaw Agent Hub dashboard",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@shepaw/agent-hub-core": "*",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "shepaw-acp-sdk": "*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.20.0"
+  },
+  "license": "Apache-2.0"
+}

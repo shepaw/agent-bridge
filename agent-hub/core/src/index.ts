@@ -8,6 +8,7 @@
 
 export {
   addProject,
+  deleteProjectEnvVar,
   findProject,
   getProject,
   loadOrCreateHubConfig,
@@ -15,9 +16,12 @@ export {
   ProjectNotFoundError,
   removeProject,
   saveHubConfig,
+  setProjectEnvVar,
   updateProject,
 } from './config.js';
 export type { AgentEngine, HubConfig, ProjectConfig, LoadHubOptions } from './config.js';
+
+export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
 export {
   hubConfigPath,

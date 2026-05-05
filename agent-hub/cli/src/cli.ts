@@ -18,7 +18,6 @@
  *   logs rotate <id>               Force log rotation
  *
  *   pair <id>                      Mint an enroll code, print QR + short code.
- *                                  Handy shortcut for the most common flow.
  *   enroll <id>                    Same as pair; preserved for consistency with gateway CLIs.
  *   enroll-list <id>               List this project's outstanding codes
  *   enroll-revoke <id> <code>      Cancel an unused code
@@ -27,15 +26,11 @@
  *   peers add <id> <pubkey>        Authorize a device
  *   peers remove <id> <fp>         Revoke a device
  *
- * Multi-word subcommand dispatch (`project add`, `peers list`, `logs rotate`,
- * `enroll list`, `enroll revoke`) uses the same argv-rewrite trick as the
- * gateway CLIs. cac's parser treats only the first word as a command;
- * rewriting `<first> <second>` → `<first>-<second>` makes cac happy
- * without the user ever seeing the hyphen.
+ *   web [--port <n>]               Start the web dashboard (API + UI)
  */
 
-import { spawn as nodeSpawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { spawn as nodeSpawn } from 'node:child_process';
 
 import { cac } from 'cac';
 import qrcode from 'qrcode-terminal';
@@ -57,11 +52,10 @@ import {
   loadOrCreateHubConfig,
   ProjectExistsError,
   ProjectNotFoundError,
-  removeProject,
-  updateProject,
   type AgentEngine,
   type ProjectConfig,
-} from './config.js';
+  type TunnelConfig,
+} from '@shepaw/agent-hub-core';
 import {
   ensureProjectDir,
   isAlive,
@@ -69,16 +63,13 @@ import {
   rotateProjectLogs,
   startProject,
   stopProject,
-} from './spawn.js';
-import { nextFreePort } from './ports.js';
-import { projectPaths, hubRoot, hubConfigPath } from './paths.js';
-import { tailLog } from './logs.js';
+} from '@shepaw/agent-hub-core';
+import { nextFreePort } from '@shepaw/agent-hub-core';
+import { projectPaths, hubRoot, hubConfigPath } from '@shepaw/agent-hub-core';
+import { tailLog } from '@shepaw/agent-hub-core';
+import { updateProject } from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
-//
-// Rewrite `shepaw-hub <outer> <inner> [...rest]` into
-// `shepaw-hub <outer>-<inner> [...rest]` BEFORE cac reads process.argv.
-// Must mutate in place — see gateway CLIs for the longer note on why.
 const multiWord = new Set(['project', 'peers', 'logs', 'enroll']);
 if (
   process.argv.length >= 4 &&
@@ -114,13 +105,17 @@ cli
 
 cli
   .command('project-add <id>', 'Register a new agent project')
-  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code', { default: 'codebuddy' })
+  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code | codex | opencode', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
   .option('--label <text>', 'Display name shown in `status`')
   .option('--port <n>', 'Bind port (default: next free port from 8090)')
   .option('--host <host>', 'Bind host (default: 127.0.0.1; use 0.0.0.0 for LAN)', { default: '127.0.0.1' })
-  .option('--base-url <url>', 'Base WS URL for pairing QRs (tunnel endpoint, typically)')
+  .option('--base-url <url>', 'Base WS URL for pairing QRs (overrides tunnel-derived URL)')
+  .option('--tunnel-server <url>', 'Shepaw Channel Service base URL')
+  .option('--tunnel-channel-id <id>', 'Channel ID for this project')
+  .option('--tunnel-secret <secret>', 'HMAC-SHA256 signing secret for this channel')
   .option('--extra-arg <arg>', 'Extra argument passed through to gateway serve (repeatable)', { default: [] })
+  .option('--env <KEY=VALUE>', 'Set a project env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
   .action(async (id: string, opts: {
     engine: string;
     cwd: string;
@@ -128,7 +123,11 @@ cli
     port?: number | string;
     host: string;
     baseUrl?: string;
+    tunnelServer?: string;
+    tunnelChannelId?: string;
+    tunnelSecret?: string;
     extraArg?: string | string[];
+    env?: string | string[];
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
@@ -144,16 +143,46 @@ cli
           ? [opts.extraArg]
           : [];
 
-      const project: ProjectConfig = {
+      // Parse --env KEY=VALUE flags
+      const envList = Array.isArray(opts.env) ? opts.env : opts.env ? [opts.env] : [];
+      const plainEnvVars: Record<string, string> = {};
+      for (const entry of envList) {
+        const eq = entry.indexOf('=');
+        if (eq < 1) {
+          console.error(`Error: --env value must be in KEY=VALUE format (got "${entry}").`);
+          process.exit(1);
+        }
+        plainEnvVars[entry.slice(0, eq)] = entry.slice(eq + 1);
+      }
+
+      // Build tunnel config if all three params are provided
+      let tunnel: TunnelConfig | undefined;
+      if (opts.tunnelServer && opts.tunnelChannelId && opts.tunnelSecret) {
+        tunnel = {
+          serverUrl: opts.tunnelServer,
+          channelId: opts.tunnelChannelId,
+          secret: opts.tunnelSecret,
+        };
+      } else if (opts.tunnelServer || opts.tunnelChannelId || opts.tunnelSecret) {
+        console.error('Error: --tunnel-server, --tunnel-channel-id, and --tunnel-secret must all be provided together.');
+        process.exit(1);
+      }
+
+      // Auto-derive baseUrl from tunnel if not explicitly set
+      const baseUrl = opts.baseUrl ?? (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
+
+      const project: Parameters<typeof addProject>[1] = {
         id,
         label: opts.label ?? id,
         engine,
         cwd: opts.cwd,
         port,
         host: opts.host,
-        baseUrl: opts.baseUrl ?? '',
+        baseUrl,
         extraArgs,
         createdAt: new Date().toISOString(),
+        tunnel,
+        plainEnvVars: Object.keys(plainEnvVars).length > 0 ? plainEnvVars : undefined,
       };
 
       const next = addProject(cfg, project);
@@ -165,6 +194,12 @@ cli
       console.log(`  cwd:       ${project.cwd}`);
       console.log(`  bind:      ${project.host}:${project.port}`);
       if (project.baseUrl) console.log(`  base URL:  ${project.baseUrl}`);
+      if (project.tunnel) {
+        console.log(`  tunnel:    ${project.tunnel.serverUrl} / channel ${project.tunnel.channelId}`);
+      }
+      if (Object.keys(plainEnvVars).length > 0) {
+        console.log(`  env vars:  ${Object.keys(plainEnvVars).join(', ')} (encrypted)`);
+      }
       console.log('');
       console.log(`Next: shepaw-hub start ${id}`);
       void next;
@@ -225,6 +260,13 @@ cli
       console.log(`  base URL:    ${p.baseUrl || '(none — pair URL uses bind host)'}`);
       console.log(`  extra args:  ${p.extraArgs.length > 0 ? p.extraArgs.join(' ') : '(none)'}`);
       console.log(`  created at:  ${p.createdAt}`);
+      if (p.tunnel) {
+        console.log('');
+        console.log('Tunnel:');
+        console.log(`  server:      ${p.tunnel.serverUrl}`);
+        console.log(`  channel ID:  ${p.tunnel.channelId}`);
+        console.log(`  secret:      ${'*'.repeat(8)} (set)`);
+      }
       console.log('');
       console.log('Files:');
       console.log(`  identity:      ${paths.identityPath}`);
@@ -257,8 +299,6 @@ cli
       const p = getProject(cfg, id);
       const paths = projectPaths(id);
 
-      // Stop first if running. Don't surface "not-running" as an error; it's
-      // the expected path for projects that haven't been touched in a while.
       const state = readState(paths.statePath);
       if (state !== undefined && state.pid > 0 && isAlive(state.pid)) {
         console.log(`Stopping running project "${id}" (pid ${state.pid})...`);
@@ -266,6 +306,7 @@ cli
         console.log(`  ${result}`);
       }
 
+      const { removeProject } = await import('@shepaw/agent-hub-core');
       removeProject(cfg, id);
       console.log(`Unregistered project "${id}".`);
       console.log('  Files left on disk (delete manually if desired):');
@@ -282,24 +323,37 @@ cli
   .option('--base-url <url>', 'New base URL for pairing QRs')
   .option('--cwd <dir>', 'New working directory')
   .option('--extra-arg <arg>', 'Replace extra args (repeatable; pass to clear)')
+  .option('--tunnel-server <url>', 'New Shepaw Channel Service base URL (update all three tunnel fields together)')
+  .option('--tunnel-channel-id <id>', 'New channel ID')
+  .option('--tunnel-secret <secret>', 'New channel HMAC-SHA256 signing secret')
+  .option('--clear-tunnel', 'Remove tunnel configuration from this project')
+  .option('--env <KEY=VALUE>', 'Set/update an env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
+  .option('--clear-env', 'Remove all stored env vars from this project')
   .action((id: string, opts: {
     label?: string;
     host?: string;
     baseUrl?: string;
     cwd?: string;
     extraArg?: string | string[];
+    tunnelServer?: string;
+    tunnelChannelId?: string;
+    tunnelSecret?: string;
+    clearTunnel?: boolean;
+    env?: string | string[];
+    clearEnv?: boolean;
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id); // existence check
-      // Build a mutable patch object; updateProject's signature accepts
-      // Readonly<Partial<...>> but we need to assign fields conditionally.
+      getProject(cfg, id);
       const patch: {
         label?: string;
         host?: string;
         baseUrl?: string;
         cwd?: string;
         extraArgs?: ReadonlyArray<string>;
+        tunnel?: TunnelConfig;
+        mergeEnvVars?: Record<string, string>;
+        clearEnvVars?: boolean;
       } = {};
       if (opts.label !== undefined) patch.label = opts.label;
       if (opts.host !== undefined) patch.host = opts.host;
@@ -310,9 +364,41 @@ cli
           ? opts.extraArg
           : [opts.extraArg];
       }
-      if (Object.keys(patch).length === 0) {
-        console.log('Nothing to update. Pass at least one of --label / --host / --base-url / --cwd / --extra-arg.');
+      if (opts.clearTunnel) {
+        // Setting tunnel to undefined removes it from the config
+        (patch as Record<string, unknown>).tunnel = undefined;
+      } else if (opts.tunnelServer || opts.tunnelChannelId || opts.tunnelSecret) {
+        if (!opts.tunnelServer || !opts.tunnelChannelId || !opts.tunnelSecret) {
+          console.error('Error: --tunnel-server, --tunnel-channel-id, and --tunnel-secret must all be provided together.');
+          process.exit(1);
+        }
+        patch.tunnel = {
+          serverUrl: opts.tunnelServer,
+          channelId: opts.tunnelChannelId,
+          secret: opts.tunnelSecret,
+        };
+        // Auto-derive baseUrl from tunnel if --base-url wasn't explicitly set
+        if (opts.baseUrl === undefined) {
+          patch.baseUrl = `${opts.tunnelServer}/proxy/${opts.tunnelChannelId}`;
+        }
+      }
+      if (Object.keys(patch).length === 0 && !opts.clearEnv && (Array.isArray(opts.env) ? opts.env.length === 0 : !opts.env)) {
+        console.log('Nothing to update. Pass at least one of --label / --host / --base-url / --cwd / --extra-arg / --tunnel-* / --clear-tunnel / --env / --clear-env.');
         process.exit(1);
+      }
+      if (opts.clearEnv) patch.clearEnvVars = true;
+      const envList = Array.isArray(opts.env) ? opts.env : opts.env ? [opts.env] : [];
+      if (envList.length > 0) {
+        const mergeEnvVars: Record<string, string> = {};
+        for (const entry of envList) {
+          const eq = entry.indexOf('=');
+          if (eq < 1) {
+            console.error(`Error: --env value must be in KEY=VALUE format (got "${entry}").`);
+            process.exit(1);
+          }
+          mergeEnvVars[entry.slice(0, eq)] = entry.slice(eq + 1);
+        }
+        patch.mergeEnvVars = mergeEnvVars;
       }
       updateProject(cfg, id, patch);
       console.log(`Updated project "${id}".`);
@@ -402,8 +488,6 @@ cli
       const cfg = loadOrCreateHubConfig();
       getProject(cfg, id);
       const ac = new AbortController();
-      // Stop following on Ctrl-C; node prints "\n" before exit so the log
-      // reader sees a clean final line.
       process.on('SIGINT', () => ac.abort());
       await tailLog(id, {
         tail: opts.tail !== undefined ? Number(opts.tail) : 50,
@@ -430,10 +514,6 @@ cli
 
 // ── enrollment / pair ──────────────────────────────────────────────
 
-/**
- * Shared pairing implementation used by `pair` and `enroll`. Mints a code
- * for a specific project, prints short code + QR + URL.
- */
 function runPair(
   id: string,
   opts: { label?: string; ttlMinutes?: number | string; qr?: boolean; baseUrl?: string },
@@ -452,18 +532,12 @@ function runPair(
   const display = formatCodeForDisplay(token.code);
   const expires = new Date(token.expiresAt).toLocaleString();
 
-  // Prefer the user's configured baseUrl (tunnel URL, typically); fall back
-  // to the CLI override; fall back to the loopback bind host (only useful
-  // on same-machine setups, but honest about what we know).
   const base = opts.baseUrl ?? project.baseUrl;
   let pairUrl: string | undefined;
   if (base) {
     const clean = base.replace(/\/$/, '');
     pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
   } else {
-    // Loopback pair URL — the user has to be on the same machine. Hub
-    // prints a warning so nobody wastes time scanning a localhost QR
-    // from another device.
     pairUrl = `ws://${project.host}:${project.port}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
   }
 
@@ -568,7 +642,7 @@ cli
     }
   });
 
-// ── peers (per-project allowlist) ──────────────────────────────────
+// ── peers ──────────────────────────────────────────────────────────
 
 cli
   .command('peers-list <id>', 'List authorized peer public keys for a project')
@@ -632,11 +706,43 @@ cli
     }
   });
 
+// ── web dashboard ──────────────────────────────────────────────────
+
+cli
+  .command('web', 'Start the web dashboard (API + UI) for managing projects')
+  .option('--port <n>', 'Dashboard HTTP port (default: 4000)', { default: 4000 })
+  .option('--host <host>', 'Dashboard bind host (default: 127.0.0.1)', { default: '127.0.0.1' })
+  .option('--no-open', 'Do not automatically open the browser')
+  .action(async (opts: { port: number | string; host: string; open?: boolean }) => {
+    try {
+      const port = Number(opts.port);
+      const host = opts.host;
+      const shouldOpen = opts.open !== false;
+
+      console.log(`Starting Shepaw Hub dashboard on http://${host}:${port} ...`);
+
+      const { startServer } = await import('@shepaw/agent-hub-api');
+      await startServer({ port, host });
+
+      const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
+      console.log(`Dashboard ready: ${url}`);
+
+      if (shouldOpen) {
+        try {
+          const { default: open } = await import('open');
+          await open(url);
+        } catch {
+          // Silently ignore if `open` fails (headless env, etc.)
+        }
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
 // ── help formatting ────────────────────────────────────────────────
 
 cli.help((sections) => {
-  // Rewrite the hyphen-namespaced pseudo-commands back to multi-word in the
-  // printed help, so users see what they actually type.
   const restoreMap: Array<[RegExp, string]> = [
     [/project-(add|list|show|remove|update)/g, 'project $1'],
     [/peers-(list|add|remove)/g, 'peers $1'],
@@ -651,14 +757,14 @@ cli.help((sections) => {
   return sections;
 });
 
-cli.version('0.1.0');
+cli.version('0.2.0');
 cli.parse();
 
 // ── helpers ────────────────────────────────────────────────────────
 
 function parseEngine(raw: string): AgentEngine {
-  if (raw === 'codebuddy' || raw === 'claude-code') return raw;
-  throw new Error(`Invalid --engine: "${raw}". Expected "codebuddy" or "claude-code".`);
+  if (raw === 'codebuddy' || raw === 'claude-code' || raw === 'codex' || raw === 'opencode') return raw;
+  throw new Error(`Invalid --engine: "${raw}". Expected "codebuddy", "claude-code", "codex", or "opencode".`);
 }
 
 function exitWithError(err: unknown): never {
@@ -675,7 +781,7 @@ function exitWithError(err: unknown): never {
   process.exit(1);
 }
 
-// Silence unused-import lint from strict TS configs.
 void findProject;
 void nodeSpawn;
 void existsSync;
+void hubConfigPath;

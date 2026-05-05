@@ -524,6 +524,12 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
         const b = block as { type: string; text?: string; name?: string; input?: unknown };
         if (b.type === 'text' && typeof b.text === 'string') {
           await ctx.sendText(b.text);
+        } else if (b.type === 'thinking' && typeof (b as unknown as { thinking?: string }).thinking === 'string') {
+          // Extended thinking — surface as italic text so it's visible but visually distinct
+          const thinking = (b as unknown as { thinking: string }).thinking;
+          if (thinking.length > 0) {
+            await ctx.sendText(`*${thinking}*`);
+          }
         } else if (b.type === 'tool_use' && typeof b.name === 'string') {
           const toolName = b.name;
           const input = (b.input ?? {}) as Record<string, unknown>;

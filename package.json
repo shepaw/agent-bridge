@@ -9,13 +9,19 @@
     "implementations/codebuddy-code",
     "implementations/codex-ts",
     "implementations/opencode-ts",
-    "implementations/shepaw-agent-hub"
+    "agent-hub/core",
+    "agent-hub/api",
+    "agent-hub/ui",
+    "agent-hub/cli"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present"
+  },
+  "overrides": {
+    "vite": "^5.4.0"
   },
   "engines": {
     "node": ">=18.17.0"

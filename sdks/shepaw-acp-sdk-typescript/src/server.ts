@@ -515,9 +515,20 @@ export class ACPAgentServer {
   }
 
   private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
-    if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('ok');
+    const url = req.url?.split('?')[0];
+    if (url === '/health') {
+      // Return agent identity info so clients can detect if the gateway was
+      // re-keyed (identity.json deleted/replaced) and know to re-pair rather
+      // than infinitely retrying with a stale public key.
+      const pk = Buffer.from(this.identity.staticPublicKey).toString('base64');
+      const body = JSON.stringify({
+        status: 'ok',
+        agentId: this.agentId,
+        fingerprint: this.identity.fingerprint,
+        publicKey: pk,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(body);
       return;
     }
     res.writeHead(404, { 'Content-Type': 'text/plain' });

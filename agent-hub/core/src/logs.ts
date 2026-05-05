@@ -25,6 +25,7 @@ import {
   statSync,
   watch,
 } from 'node:fs';
+import { once as eventOnce } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { projectPaths } from './paths.js';
@@ -80,7 +81,7 @@ export async function tailLog(projectId: string, opts: TailOptions = {}): Promis
     // Wait for either a change event or the poll timeout, whichever first.
     await Promise.race([
       sleep(pollInterval).catch(() => undefined),
-      watcher ? once(watcher, 'change') : Promise.resolve(),
+      watcher ? eventOnce(watcher, 'change').catch(() => undefined) : Promise.resolve(),
     ]);
     if (opts.signal?.aborted) break;
 
@@ -154,17 +155,6 @@ function readFromOffset(file: string, offset: number, write: (s: string) => void
 function tryStat(file: string): { size: number } | undefined {
   try { return statSync(file); }
   catch { return undefined; }
-}
-
-/** Resolve on the first event of the given type. */
-function once<T>(emitter: NodeJS.EventEmitter, event: string): Promise<T> {
-  return new Promise<T>((resolve) => {
-    const handler = (payload: T): void => {
-      emitter.off(event, handler as (...args: unknown[]) => void);
-      resolve(payload);
-    };
-    emitter.on(event, handler as (...args: unknown[]) => void);
-  });
 }
 
 /** Poll for a file to exist, respecting an abort signal. */

@@ -1,0 +1,38 @@
+{
+  "name": "@shepaw/agent-hub-core",
+  "version": "0.1.0",
+  "description": "Core business logic for Shepaw Agent Hub — config, process lifecycle, log tailing",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "rotating-file-stream": "^3.2.3",
+    "shepaw-acp-sdk": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.20.0"
+  },
+  "license": "Apache-2.0"
+}

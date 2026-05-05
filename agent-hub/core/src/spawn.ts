@@ -46,7 +46,8 @@ import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
 import type { ProjectConfig, AgentEngine } from './config.js';
-import { projectPaths } from './paths.js';
+import { projectPaths, hubRoot } from './paths.js';
+import { decryptEnvVars } from './crypto.js';
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -138,12 +139,27 @@ export async function startProject(project: ProjectConfig): Promise<{
       stdio: ['ignore', logFd, logFd],
       env: {
         ...process.env,
+        // Per-project credentials (ANTHROPIC_API_KEY, CODEBUDDY_API_KEY, etc.).
+        // Decrypted from hub.json's envVars at spawn time; never appear in
+        // argv or hub.json in plaintext.
+        ...decryptEnvVars(project.envVars ?? {}, hubRoot()),
         // Redirect SDK file-resolution to this project's isolated dir.
         // These three vars are the entire integration surface between hub
         // and the unmodified gateway binaries.
         SHEPAW_IDENTITY_PATH: paths.identityPath,
         SHEPAW_PEERS_PATH: paths.peersPath,
         SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
+        // Tunnel credentials — injected as env vars so they never appear in
+        // `ps aux` argv. The gateway reads these to open the channel-service
+        // tunnel. Omitted entirely when not configured (undefined entries are
+        // stripped by Node when building the child env).
+        ...(project.tunnel !== undefined
+          ? {
+              PAW_ACP_TUNNEL_SERVER_URL: project.tunnel.serverUrl,
+              PAW_ACP_TUNNEL_CHANNEL_ID: project.tunnel.channelId,
+              PAW_ACP_TUNNEL_SECRET: project.tunnel.secret,
+            }
+          : {}),
       },
     });
 
@@ -384,7 +400,11 @@ function resolveEngineCliPath(engine: AgentEngine): string {
   const pkg =
     engine === 'codebuddy'
       ? 'shepaw-codebuddy-code-gateway/cli'
-      : 'shepaw-claude-code-gateway/cli';
+      : engine === 'claude-code'
+        ? 'shepaw-claude-code-gateway/cli'
+        : engine === 'codex'
+          ? 'shepaw-codex-gateway/cli'
+          : 'shepaw-opencode-gateway/cli';
   try {
     return require.resolve(pkg);
   } catch (err) {

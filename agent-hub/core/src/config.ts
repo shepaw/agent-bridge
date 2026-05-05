@@ -31,7 +31,8 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { hubConfigPath, validateProjectId, normalizeCwd } from './paths.js';
+import { hubConfigPath, validateProjectId, normalizeCwd, hubRoot } from './paths.js';
+import { encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -41,7 +42,27 @@ import { hubConfigPath, validateProjectId, normalizeCwd } from './paths.js';
  * Keeping this as a string union (not an enum) so adding a new engine later
  * only requires editing this file and `resolveEngineCliPath` in spawn.ts.
  */
-export type AgentEngine = 'codebuddy' | 'claude-code';
+export type AgentEngine = 'codebuddy' | 'claude-code' | 'codex' | 'opencode';
+
+/**
+ * Tunnel configuration for a Shepaw Channel Service channel.
+ *
+ * One channel per agent — a single channel cannot be shared across multiple
+ * agents simultaneously. The channel's `endpoint` is NOT stored here; it is
+ * set by the Channel Service when the channel is created. The hub only needs
+ * the credentials required to authenticate as the channel owner.
+ *
+ * These values are injected into the gateway child process as env vars
+ * (`PAW_ACP_TUNNEL_*`) so they never appear in `ps aux` argv output.
+ */
+export interface TunnelConfig {
+  /** Shepaw Channel Service base URL, e.g. "https://channel.example.com" */
+  readonly serverUrl: string;
+  /** Channel ID assigned by the Channel Service, e.g. "ch_abc123" */
+  readonly channelId: string;
+  /** HMAC-SHA256 signing secret for this channel */
+  readonly secret: string;
+}
 
 export interface ProjectConfig {
   /** User-chosen identifier. Validated against `paths.validateProjectId`. */
@@ -75,6 +96,19 @@ export interface ProjectConfig {
   readonly extraArgs: ReadonlyArray<string>;
   /** ISO 8601 timestamp for audit / `status --verbose`. */
   readonly createdAt: string;
+  /**
+   * Optional tunnel config. When set, the hub injects `PAW_ACP_TUNNEL_*`
+   * env vars into the gateway process and auto-derives `baseUrl` from
+   * `${serverUrl}/proxy/${channelId}` if `baseUrl` is not explicitly set.
+   */
+  readonly tunnel?: TunnelConfig;
+  /**
+   * Per-project engine credentials (API keys, auth tokens, base URLs).
+   * Values are stored AES-256-GCM encrypted via `crypto.ts`; they are
+   * decrypted only at process-spawn time and injected as env vars into the
+   * gateway child process. Never returned in plaintext over the API.
+   */
+  readonly envVars: Record<string, string>;
 }
 
 export interface HubConfig {
@@ -119,10 +153,18 @@ export function saveHubConfig(path: string, projects: ReadonlyArray<ProjectConfi
  */
 export function addProject(
   config: HubConfig,
-  project: ProjectConfig,
+  project: Omit<ProjectConfig, 'envVars'> & { plainEnvVars?: Record<string, string> },
 ): HubConfig {
   validateProjectId(project.id);
-  const normalized: ProjectConfig = { ...project, cwd: normalizeCwd(project.cwd) };
+  const root = hubRoot();
+  const { plainEnvVars, ...rest } = project;
+  const normalized: ProjectConfig = {
+    ...rest,
+    cwd: normalizeCwd(project.cwd),
+    envVars: plainEnvVars && Object.keys(plainEnvVars).length > 0
+      ? encryptEnvVars(plainEnvVars, root)
+      : {},
+  };
 
   if (config.projects.some((p) => p.id === normalized.id)) {
     throw new ProjectExistsError(
@@ -197,26 +239,72 @@ export function getProject(config: HubConfig, id: string): ProjectConfig {
  * baseUrl / extraArgs / host without having to restate the whole project.
  * Refuses to change id or port through this path; those go through remove +
  * add to force the operator to think about the port collision implications.
+ *
+ * `mergeEnvVars`: plain key→value pairs to encrypt and merge into envVars.
+ * `clearEnvVars`: if true, clears all existing envVars before applying mergeEnvVars.
  */
 export function updateProject(
   config: HubConfig,
   id: string,
-  patch: Partial<Omit<ProjectConfig, 'id' | 'port' | 'createdAt'>>,
+  patch: Partial<Omit<ProjectConfig, 'id' | 'port' | 'createdAt' | 'envVars'>> & {
+    mergeEnvVars?: Record<string, string>;
+    clearEnvVars?: boolean;
+    deleteEnvVarKey?: string;
+  },
 ): HubConfig {
   const idx = config.projects.findIndex((p) => p.id === id);
   if (idx < 0) {
     throw new ProjectNotFoundError(`No project with id "${id}".`);
   }
   const existing = config.projects[idx]!;
+  const root = hubRoot();
+
+  // Build updated envVars
+  let envVars = patch.clearEnvVars ? {} : { ...existing.envVars };
+  if (patch.deleteEnvVarKey !== undefined) {
+    const { [patch.deleteEnvVarKey]: _, ...rest } = envVars;
+    envVars = rest;
+  }
+  if (patch.mergeEnvVars && Object.keys(patch.mergeEnvVars).length > 0) {
+    const encrypted = encryptEnvVars(patch.mergeEnvVars, root);
+    envVars = { ...envVars, ...encrypted };
+  }
+
+  const { mergeEnvVars: _m, clearEnvVars: _c, deleteEnvVarKey: _d, ...rest } = patch;
   const next: ProjectConfig = {
     ...existing,
-    ...patch,
+    ...rest,
     // Normalize cwd if changed so relative paths resolve consistently.
-    cwd: patch.cwd !== undefined ? normalizeCwd(patch.cwd) : existing.cwd,
+    cwd: rest.cwd !== undefined ? normalizeCwd(rest.cwd) : existing.cwd,
+    envVars,
   };
   const nextList = [...config.projects.slice(0, idx), next, ...config.projects.slice(idx + 1)];
   persist(config.path, nextList);
   return { path: config.path, projects: nextList };
+}
+
+/**
+ * Set a single env var key on an existing project. The value is encrypted
+ * before storage. Convenience wrapper around updateProject.
+ */
+export function setProjectEnvVar(
+  config: HubConfig,
+  id: string,
+  key: string,
+  value: string,
+): HubConfig {
+  return updateProject(config, id, { mergeEnvVars: { [key]: value } });
+}
+
+/**
+ * Delete a single env var key from an existing project.
+ */
+export function deleteProjectEnvVar(
+  config: HubConfig,
+  id: string,
+  key: string,
+): HubConfig {
+  return updateProject(config, id, { deleteEnvVarKey: key });
 }
 
 // ── errors ─────────────────────────────────────────────────────────
@@ -293,6 +381,9 @@ function loadExisting(path: string): HubConfig {
         ? p.extraArgs.filter((x): x is string => typeof x === 'string')
         : [],
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : '',
+      tunnel: parseTunnelConfig(p.tunnel),
+      // Backwards compat: old projects without envVars default to empty.
+      envVars: parseEnvVarsConfig(p.envVars),
     };
     validateProjectId(entry.id);
     projects.push(entry);
@@ -330,10 +421,30 @@ function requireNumber(v: unknown, field: string, file: string): number {
 }
 
 function requireEngine(v: unknown, field: string, file: string): AgentEngine {
-  if (v === 'codebuddy' || v === 'claude-code') return v;
+  if (v === 'codebuddy' || v === 'claude-code' || v === 'codex' || v === 'opencode') return v;
   throw new Error(
-    `Hub config at ${file}: ${field} must be "codebuddy" or "claude-code" (got ${JSON.stringify(v)}).`,
+    `Hub config at ${file}: ${field} must be "codebuddy", "claude-code", "codex", or "opencode" (got ${JSON.stringify(v)}).`,
   );
+}
+
+function parseEnvVarsConfig(v: unknown): Record<string, string> {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return {};
+  const obj = v as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(obj)) {
+    if (typeof val === 'string') out[k] = val;
+  }
+  return out;
+}
+
+function parseTunnelConfig(v: unknown): TunnelConfig | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'object') return undefined;
+  const obj = v as Record<string, unknown>;
+  if (typeof obj.serverUrl !== 'string' || obj.serverUrl.length === 0) return undefined;
+  if (typeof obj.channelId !== 'string' || obj.channelId.length === 0) return undefined;
+  if (typeof obj.secret !== 'string' || obj.secret.length === 0) return undefined;
+  return { serverUrl: obj.serverUrl, channelId: obj.channelId, secret: obj.secret };
 }
 
 function formatErr(err: unknown): string {
