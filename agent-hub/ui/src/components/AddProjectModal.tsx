@@ -156,7 +156,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   const credFields = ENGINE_CREDS[engine];
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <h3 style={{ margin: 0, color: '#cdd6f4' }}>Add Project</h3>

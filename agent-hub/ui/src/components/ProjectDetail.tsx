@@ -133,6 +133,11 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   const saveEnvVar = async (key: string) => {
     const value = envEditing[key];
     if (value === undefined) return;
+    // Sentinel means user never typed a new value — treat as cancel.
+    if (value === ENV_UNCHANGED) {
+      setEnvEditing((e) => { const n = { ...e }; delete n[key]; return n; });
+      return;
+    }
     setEnvBusy((b) => ({ ...b, [key]: true }));
     setEnvErr(null);
     try {
@@ -159,6 +164,10 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     }
   };
 
+  // Sentinels for "value not changed" — used for tunnel secret and env var fields.
+  const TUNNEL_SECRET_UNCHANGED = '\x00unchanged';
+  const ENV_UNCHANGED = '\x00unchanged';
+
   const openEdit = (p: typeof project) => {    if (!p) return;
     setEditLabel(p.label);
     setEditCwd(p.cwd);
@@ -167,7 +176,8 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setEditExtraArgs(p.extraArgs.join(' '));
     setEditTunnelServer(p.tunnel?.serverUrl ?? '');
     setEditTunnelChannelId(p.tunnel?.channelId ?? '');
-    setEditTunnelSecret('');
+    // Pre-fill sentinel so existing secret is kept when left untouched.
+    setEditTunnelSecret(p.tunnel ? TUNNEL_SECRET_UNCHANGED : '');
     setEditClearTunnel(false);
     setEditErr(null);
     setShowEdit(true);
@@ -178,12 +188,37 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setEditBusy(true);
     setEditErr(null);
     try {
-      const hasTunnelEdit = editTunnelServer && editTunnelChannelId && editTunnelSecret;
-      const partialTunnel = editTunnelServer || editTunnelChannelId || editTunnelSecret;
-      if (partialTunnel && !hasTunnelEdit) {
-        setEditErr('All three tunnel fields are required together.');
+      const secretUnchanged = editTunnelSecret === TUNNEL_SECRET_UNCHANGED;
+      const effectiveSecret = secretUnchanged ? '' : editTunnelSecret;
+      // Server/channel pre-filled from existing tunnel — only require secret when
+      // the user explicitly typed a new one, or when there was no tunnel before.
+      const hasTunnelFields = editTunnelServer && editTunnelChannelId;
+      const isNewTunnel = hasTunnelFields && !project?.tunnel; // no prior tunnel
+      if (hasTunnelFields && isNewTunnel && !effectiveSecret) {
+        setEditErr('Secret is required when adding a new tunnel.');
         setEditBusy(false);
         return;
+      }
+      if ((editTunnelServer || editTunnelChannelId) && !(editTunnelServer && editTunnelChannelId)) {
+        setEditErr('Both Server URL and Channel ID are required together.');
+        setEditBusy(false);
+        return;
+      }
+      // Build tunnel patch:
+      // - clearTunnel: remove existing tunnel
+      // - new secret typed: update full tunnel (server + channel + new secret)
+      // - secret unchanged: update server/channel only (backend keeps existing secret when omitted)
+      let tunnelPatch: Record<string, unknown> = {};
+      if (editClearTunnel) {
+        tunnelPatch = { clearTunnel: true };
+      } else if (hasTunnelFields) {
+        if (effectiveSecret) {
+          // New secret provided — send full tunnel object
+          tunnelPatch = { tunnel: { serverUrl: editTunnelServer, channelId: editTunnelChannelId, secret: effectiveSecret } };
+        } else if (secretUnchanged) {
+          // Secret unchanged — send server/channel; backend will merge with existing secret
+          tunnelPatch = { tunnel: { serverUrl: editTunnelServer, channelId: editTunnelChannelId, secret: '' } };
+        }
       }
       await api.projects.update(projectId, {
         label: editLabel || undefined,
@@ -191,11 +226,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
         host: editHost || undefined,
         baseUrl: editBaseUrl || undefined,
         extraArgs: editExtraArgs.trim() ? editExtraArgs.trim().split(/\s+/) : [],
-        ...(editClearTunnel
-          ? { clearTunnel: true }
-          : hasTunnelEdit
-          ? { tunnel: { serverUrl: editTunnelServer, channelId: editTunnelChannelId, secret: editTunnelSecret } }
-          : {}),
+        ...tunnelPatch,
       });
       setShowEdit(false);
       await load();
@@ -318,8 +349,19 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
                   <input style={editInp} value={editTunnelChannelId} onChange={(e) => setEditTunnelChannelId(e.target.value)} placeholder="ch_abc123" />
                 </div>
                 <div style={editField}>
-                  <label style={editLbl}>Secret <span style={{ color: '#6c7086', fontSize: 11 }}>(leave blank to keep existing)</span></label>
-                  <input style={editInp} type="password" value={editTunnelSecret} onChange={(e) => setEditTunnelSecret(e.target.value)} placeholder="new secret (leave blank to keep)" />
+                  <label style={editLbl}>Secret</label>
+                  <input
+                    style={editInp}
+                    type={editTunnelSecret === TUNNEL_SECRET_UNCHANGED ? 'text' : 'password'}
+                    value={editTunnelSecret === TUNNEL_SECRET_UNCHANGED
+                      ? (project?.tunnel ? maskSecret(project.tunnel.secret) : '')
+                      : editTunnelSecret}
+                    onChange={(e) => setEditTunnelSecret(e.target.value)}
+                    onFocus={() => {
+                      if (editTunnelSecret === TUNNEL_SECRET_UNCHANGED) setEditTunnelSecret('');
+                    }}
+                    placeholder="Enter new secret to change"
+                  />
                 </div>
               </div>
             )}
@@ -378,10 +420,16 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
                         <>
                           <input
                             style={credInput}
-                            type={field.type ?? 'password'}
-                            value={envEditing[field.key]}
+                            type={envEditing[field.key] === ENV_UNCHANGED ? 'text' : (field.type ?? 'password')}
+                            value={envEditing[field.key] === ENV_UNCHANGED
+                              ? (envMasked[field.key] ?? '••••••••')
+                              : envEditing[field.key]}
                             onChange={(e) => setEnvEditing((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                            placeholder={`Enter ${field.label}`}
+                            onFocus={() => {
+                              if (envEditing[field.key] === ENV_UNCHANGED)
+                                setEnvEditing((prev) => ({ ...prev, [field.key]: '' }));
+                            }}
+                            placeholder={isSet ? 'Enter new value to change' : `Enter ${field.label}`}
                             autoFocus
                           />
                           <button style={credSaveBtn} disabled={isBusy} onClick={() => void saveEnvVar(field.key)}>
@@ -402,7 +450,11 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
                           <button
                             style={credEditBtn}
                             disabled={isBusy}
-                            onClick={() => setEnvEditing((e) => ({ ...e, [field.key]: '' }))}
+                            onClick={() => setEnvEditing((e) => ({
+                              ...e,
+                              // Pre-fill sentinel for existing keys so user sees the masked value
+                              [field.key]: isSet ? ENV_UNCHANGED : '',
+                            }))}
                           >
                             {isSet ? 'Update' : 'Set'}
                           </button>

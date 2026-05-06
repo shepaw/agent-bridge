@@ -50,7 +50,7 @@ export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <h3 style={{ margin: 0, color: '#cdd6f4' }}>Resume Session — {projectId}</h3>

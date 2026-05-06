@@ -193,9 +193,9 @@ export function updateHubMeta(
 }
 
 /**
- * Add a project, validating the id and checking for duplicate ids AND
- * duplicate cwds (user error: same project registered twice under different
- * ids). Returns the final HubConfig. Throws ProjectExistsError on duplicates.
+ * Add a project, validating the id and checking for duplicate ids.
+ * Multiple projects may share the same cwd. Returns the final HubConfig.
+ * Throws ProjectExistsError if the id already exists.
  */
 export function addProject(
   config: HubConfig,
@@ -216,14 +216,6 @@ export function addProject(
     throw new ProjectExistsError(
       `A project with id "${normalized.id}" already exists. ` +
         `Pick a different id, or remove the existing one first (shepaw-hub project remove ${normalized.id}).`,
-    );
-  }
-  const dupCwd = config.projects.find((p) => p.cwd === normalized.cwd);
-  if (dupCwd !== undefined) {
-    throw new ProjectExistsError(
-      `Project "${dupCwd.id}" is already registered at cwd "${normalized.cwd}". ` +
-        `Registering the same directory twice is almost always a mistake — ` +
-        `remove the old one first, or pick a different cwd.`,
     );
   }
   if (!Number.isInteger(normalized.port) || normalized.port <= 0 || normalized.port > 65535) {

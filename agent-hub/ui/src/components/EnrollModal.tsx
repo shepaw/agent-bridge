@@ -34,7 +34,7 @@ export function EnrollModal({ projectId, onClose, baseUrl: initialBaseUrl }: Enr
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
           <h3 style={{ margin: 0, color: '#cdd6f4' }}>Pair device — {projectId}</h3>

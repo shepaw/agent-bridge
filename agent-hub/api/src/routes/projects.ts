@@ -159,7 +159,9 @@ projectsRouter.get('/', (_req: Request, res: Response) => {
  */
 projectsRouter.get('/meta', (_req: Request, res: Response) => {
   const cfg = loadOrCreateHubConfig();
-  // Strip encrypted values — client only needs the masked display strings.
+  const root = hubRoot();
+
+  // Start with persisted hints.
   const hints: Record<string, Record<string, string>> = {};
   if (cfg.credentialHints) {
     for (const [engine, engineHints] of Object.entries(cfg.credentialHints)) {
@@ -170,6 +172,44 @@ projectsRouter.get('/meta', (_req: Request, res: Response) => {
       }
     }
   }
+
+  // Back-fill from existing projects for any engine that has no persisted hint yet.
+  // This makes hints available for projects created before the hints cache was introduced,
+  // without requiring a migration — the first call to /meta populates the cache.
+  let needsPersist = false;
+  const updatedHintCache: HubCredentialCache = { ...(cfg.credentialHints ?? {}) };
+  for (const project of cfg.projects) {
+    const eng = project.engine;
+    if (hints[eng]) continue;  // already covered by persisted hints
+    const envVars = project.envVars ?? {};
+    if (Object.keys(envVars).length === 0) continue;
+    // Decrypt and build masked hints for this engine from the first project found.
+    const engineHints: Record<string, CredentialHint> = { ...(updatedHintCache[eng] ?? {}) };
+    let changed = false;
+    for (const [key, encrypted] of Object.entries(envVars)) {
+      if (engineHints[key]) continue; // already have a hint for this key
+      try {
+        const plain = decryptValue(encrypted, root);
+        engineHints[key] = { masked: maskSecretValue(plain), encrypted };
+        changed = true;
+      } catch {
+        // skip keys that fail to decrypt
+      }
+    }
+    if (changed) {
+      updatedHintCache[eng] = engineHints;
+      hints[eng] = Object.fromEntries(
+        Object.entries(engineHints).map(([key, hint]) => [key, hint.masked]),
+      );
+      needsPersist = true;
+    }
+  }
+
+  // Persist the newly built hints so subsequent calls don't re-decrypt.
+  if (needsPersist) {
+    updateHubMeta(cfg, { credentialHints: updatedHintCache });
+  }
+
   res.json({
     lastTunnelServerUrl: cfg.lastTunnelServerUrl ?? null,
     lastTunnelSecretHint: cfg.lastTunnelSecretHint?.masked ?? null,
@@ -315,7 +355,7 @@ projectsRouter.delete('/:id', async (req: Request, res: Response) => {
 projectsRouter.patch('/:id', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
+    const existing = getProject(cfg, req.params.id!);
     const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars } = req.body as Record<string, unknown>;
     const patch: Parameters<typeof updateProject>[2] = {};
     if (typeof label === 'string') patch.label = label;
@@ -330,6 +370,20 @@ projectsRouter.patch('/:id', (req: Request, res: Response) => {
         patch.tunnel = resolvedTunnel;
         if (typeof baseUrl !== 'string') {
           patch.baseUrl = `${resolvedTunnel.serverUrl}/proxy/${resolvedTunnel.channelId}`;
+        }
+      } else {
+        // secret may be blank (user kept existing) — try partial parse with secret fallback
+        const obj = (tunnel !== null && typeof tunnel === 'object') ? tunnel as Record<string, unknown> : {};
+        const serverUrl = typeof obj.serverUrl === 'string' ? obj.serverUrl : '';
+        const channelId = typeof obj.channelId === 'string' ? obj.channelId : '';
+        const secret = (typeof obj.secret === 'string' && obj.secret.length > 0)
+          ? obj.secret
+          : existing.tunnel?.secret ?? '';
+        if (serverUrl && channelId && secret) {
+          patch.tunnel = { serverUrl, channelId, secret };
+          if (typeof baseUrl !== 'string') {
+            patch.baseUrl = `${serverUrl}/proxy/${channelId}`;
+          }
         }
       }
     }
