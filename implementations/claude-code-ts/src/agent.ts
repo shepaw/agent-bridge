@@ -579,14 +579,43 @@ export class ClaudeCodeAgent extends ACPAgentServer {
     if (systemPrompt !== undefined) options.systemPrompt = systemPrompt;
 
     // canUseTool requires streaming input mode — wrap the prompt as an async iterable.
-    const stream = this.queryFn({
-      prompt: asyncUserPrompt(promptMessage),
-      options,
-    });
+    //
+    // Error recovery: if the SDK throws "Session … is already in use" it means
+    // the previous turn's subprocess didn't fully release the session lock before
+    // we attempted a `--resume`. This can happen on the resume turn that follows
+    // an async-confirmation (Allow / Allow All Similar / Deny), where the deny
+    // that ended the prior turn may not have fully flushed. Recovery: clear the
+    // stale session mapping and retry without `resume` so we start a fresh SDK
+    // session. The conversation context is not lost — the model will re-infer
+    // from the task history, and the approval is already cached / pattern-ruled.
+    const runQuery = async (opts: Options): Promise<void> => {
+      const stream = this.queryFn({
+        prompt: asyncUserPrompt(promptMessage),
+        options: opts,
+      });
+      for await (const msg of stream as AsyncIterable<SDKMessage>) {
+        if (abortController.signal.aborted) break;
+        await this.handleSdkMessage(ctx, msg);
+      }
+    };
 
-    for await (const msg of stream as AsyncIterable<SDKMessage>) {
-      if (abortController.signal.aborted) break;
-      await this.handleSdkMessage(ctx, msg);
+    try {
+      await runQuery(options);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (resumeId !== undefined && errMsg.includes('already in use')) {
+        log.gateway(
+          'SDK session %s is already in use (session=%s); clearing stale mapping and retrying without resume',
+          resumeId,
+          ctx.sessionId,
+        );
+        this.sessionStore.delete(ctx.sessionId);
+        const freshOptions: Options = { ...options };
+        delete freshOptions.resume;
+        await runQuery(freshOptions);
+      } else {
+        throw err;
+      }
     }
   }
 

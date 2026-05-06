@@ -4,6 +4,7 @@ import type { Project, Peer, AgentEngine } from '../api/types.js';
 import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
+import { maskSecret } from '../utils/maskSecret.js';
 
 // ── engine credential field definitions ───────────────────────────
 
@@ -40,6 +41,8 @@ interface ProjectDetailProps {
 export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProps) {
   const [project, setProject] = useState<Project | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
+  // key -> masked display value, populated from GET /envvars
+  const [envMasked, setEnvMasked] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -70,12 +73,17 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
 
   const load = async () => {
     try {
-      const [p, ps] = await Promise.all([
+      const [p, ps, envvars] = await Promise.all([
         api.projects.get(projectId),
         api.peers.list(projectId),
+        api.envvars.list(projectId).catch(() => [] as { key: string; value: string }[]),
       ]);
       setProject(p);
       setPeers(ps);
+      // Build key -> masked string map
+      const masked: Record<string, string> = {};
+      for (const { key, value } of envvars) masked[key] = value;
+      setEnvMasked(masked);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -386,7 +394,9 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
                       ) : (
                         <>
                           {isSet
-                            ? <span style={{ fontSize: 12, color: '#a6e3a1', letterSpacing: 2 }}>••••••••</span>
+                            ? <code style={{ fontSize: 12, color: '#a6e3a1', fontFamily: 'monospace' }}>
+                                {envMasked[field.key] ?? '••••••••'}
+                              </code>
                             : <span style={{ fontSize: 12, color: '#6c7086', fontStyle: 'italic' }}>not set</span>
                           }
                           <button
@@ -426,7 +436,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
             </div>
             <div style={tunnelRow}>
               <span style={tunnelLabel}>Secret</span>
-              <span style={{ ...tunnelValue, color: '#6c7086', fontStyle: 'italic' }}>••••••••  (stored, not shown)</span>
+              <code style={{ ...tunnelCode, color: '#cdd6f4' }}>{maskSecret(project.tunnel.secret)}</code>
             </div>
           </div>
         </>

@@ -8,6 +8,18 @@ export interface TunnelConfig {
   secret: string;
 }
 
+/**
+ * Hub-level metadata returned by GET /api/projects/meta.
+ * credentialHints contains masked (display-only) values for pre-filling forms.
+ */
+export interface HubMeta {
+  lastTunnelServerUrl: string | null;
+  /** Masked hint for the last-used tunnel secret (e.g. "hmac***3b2a") */
+  lastTunnelSecretHint: string | null;
+  /** Per-engine, per-key masked credential hints (e.g. "sk-an***789") */
+  credentialHints: Partial<Record<AgentEngine, Record<string, string>>>;
+}
+
 export interface ProjectStatus {
   running: boolean;
   pid: number | null;

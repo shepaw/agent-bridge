@@ -111,9 +111,32 @@ export interface ProjectConfig {
   readonly envVars: Record<string, string>;
 }
 
+/**
+ * Per-engine credential hint stored in hub.json.
+ * `masked` is the display string (e.g. "sk-ant-ab***789").
+ * `encrypted` holds the full encrypted value (same scheme as envVars).
+ */
+export interface CredentialHint {
+  readonly masked: string;
+  readonly encrypted: string;
+}
+
+/**
+ * Hub-level credential cache: per engine, per env-var key.
+ * Stored at the hub (global) level so adding a new project with the same
+ * engine can pre-fill credentials without the user having to re-enter them.
+ */
+export type HubCredentialCache = Partial<Record<AgentEngine, Record<string, CredentialHint>>>;
+
 export interface HubConfig {
   readonly path: string;
   readonly projects: ReadonlyArray<ProjectConfig>;
+  /** Last Tunnel Server URL used — pre-filled when creating a new project. */
+  readonly lastTunnelServerUrl?: string;
+  /** Last Tunnel Secret hint (masked + encrypted) — pre-filled when creating a new project. */
+  readonly lastTunnelSecretHint?: CredentialHint;
+  /** Per-engine credential hints for pre-filling on project creation. */
+  readonly credentialHints?: HubCredentialCache;
 }
 
 export interface LoadHubOptions {
@@ -131,7 +154,7 @@ export interface LoadHubOptions {
 export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
   const path = opts.path ?? hubConfigPath();
   if (!existsSync(path)) {
-    persist(path, []);
+    persist(path, [], {});
     return { path, projects: [] };
   }
   return loadExisting(path);
@@ -144,6 +167,29 @@ export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
  */
 export function saveHubConfig(path: string, projects: ReadonlyArray<ProjectConfig>): void {
   persist(path, projects);
+}
+
+/**
+ * Update hub-level metadata (lastTunnelServerUrl, credentialHints) without
+ * touching the projects list. Used when a project is created with tunnel/creds
+ * so subsequent project creations can pre-fill these values.
+ */
+export function updateHubMeta(
+  config: HubConfig,
+  meta: { lastTunnelServerUrl?: string; lastTunnelSecretHint?: CredentialHint; credentialHints?: HubCredentialCache },
+): HubConfig {
+  const next: HubConfig = {
+    ...config,
+    ...(meta.lastTunnelServerUrl !== undefined && { lastTunnelServerUrl: meta.lastTunnelServerUrl }),
+    ...(meta.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: meta.lastTunnelSecretHint }),
+    ...(meta.credentialHints !== undefined && { credentialHints: meta.credentialHints }),
+  };
+  persist(next.path, next.projects, {
+    lastTunnelServerUrl: next.lastTunnelServerUrl,
+    lastTunnelSecretHint: next.lastTunnelSecretHint,
+    credentialHints: next.credentialHints,
+  });
+  return next;
 }
 
 /**
@@ -194,8 +240,12 @@ export function addProject(
   }
 
   const next = [...config.projects, normalized];
-  persist(config.path, next);
-  return { path: config.path, projects: next };
+  persist(config.path, next, {
+    lastTunnelServerUrl: config.lastTunnelServerUrl,
+    lastTunnelSecretHint: config.lastTunnelSecretHint,
+    credentialHints: config.credentialHints,
+  });
+  return { path: config.path, projects: next, lastTunnelServerUrl: config.lastTunnelServerUrl, lastTunnelSecretHint: config.lastTunnelSecretHint, credentialHints: config.credentialHints };
 }
 
 /**
@@ -209,8 +259,12 @@ export function removeProject(config: HubConfig, id: string): HubConfig {
       `No project with id "${id}". Run 'shepaw-hub project list' to see registered projects.`,
     );
   }
-  persist(config.path, filtered);
-  return { path: config.path, projects: filtered };
+  persist(config.path, filtered, {
+    lastTunnelServerUrl: config.lastTunnelServerUrl,
+    lastTunnelSecretHint: config.lastTunnelSecretHint,
+    credentialHints: config.credentialHints,
+  });
+  return { path: config.path, projects: filtered, lastTunnelServerUrl: config.lastTunnelServerUrl, lastTunnelSecretHint: config.lastTunnelSecretHint, credentialHints: config.credentialHints };
 }
 
 /**
@@ -279,8 +333,12 @@ export function updateProject(
     envVars,
   };
   const nextList = [...config.projects.slice(0, idx), next, ...config.projects.slice(idx + 1)];
-  persist(config.path, nextList);
-  return { path: config.path, projects: nextList };
+  persist(config.path, nextList, {
+    lastTunnelServerUrl: config.lastTunnelServerUrl,
+    lastTunnelSecretHint: config.lastTunnelSecretHint,
+    credentialHints: config.credentialHints,
+  });
+  return { path: config.path, projects: nextList, lastTunnelServerUrl: config.lastTunnelServerUrl, lastTunnelSecretHint: config.lastTunnelSecretHint, credentialHints: config.credentialHints };
 }
 
 /**
@@ -324,6 +382,9 @@ export class ProjectNotFoundError extends Error {
 interface OnDiskSchema {
   version: 1;
   projects: Array<ProjectConfig>;
+  lastTunnelServerUrl?: string;
+  lastTunnelSecretHint?: CredentialHint;
+  credentialHints?: HubCredentialCache;
 }
 
 function loadExisting(path: string): HubConfig {
@@ -389,13 +450,28 @@ function loadExisting(path: string): HubConfig {
     projects.push(entry);
   }
 
-  return { path, projects };
+  return {
+    path,
+    projects,
+    lastTunnelServerUrl: typeof obj.lastTunnelServerUrl === 'string' ? obj.lastTunnelServerUrl : undefined,
+    lastTunnelSecretHint: parseCredentialHint(obj.lastTunnelSecretHint),
+    credentialHints: parseCredentialHints(obj.credentialHints),
+  };
 }
 
-function persist(path: string, projects: ReadonlyArray<ProjectConfig>): void {
+interface PersistOptions {
+  lastTunnelServerUrl?: string;
+  lastTunnelSecretHint?: CredentialHint;
+  credentialHints?: HubCredentialCache;
+}
+
+function persist(path: string, projects: ReadonlyArray<ProjectConfig>, opts?: PersistOptions): void {
   const schema: OnDiskSchema = {
     version: 1,
     projects: [...projects],
+    ...(opts?.lastTunnelServerUrl !== undefined && { lastTunnelServerUrl: opts.lastTunnelServerUrl }),
+    ...(opts?.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: opts.lastTunnelSecretHint }),
+    ...(opts?.credentialHints !== undefined && { credentialHints: opts.credentialHints }),
   };
 
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -450,4 +526,37 @@ function parseTunnelConfig(v: unknown): TunnelConfig | undefined {
 function formatErr(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function parseCredentialHint(v: unknown): CredentialHint | undefined {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const h = v as Record<string, unknown>;
+  if (typeof h.masked === 'string' && typeof h.encrypted === 'string') {
+    return { masked: h.masked, encrypted: h.encrypted };
+  }
+  return undefined;
+}
+
+function parseCredentialHints(v: unknown): HubCredentialCache | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  const out: HubCredentialCache = {};
+  const engines: AgentEngine[] = ['codebuddy', 'claude-code', 'codex', 'opencode'];
+  for (const engine of engines) {
+    const hints = obj[engine];
+    if (hints === null || typeof hints !== 'object' || Array.isArray(hints)) continue;
+    const hintsObj = hints as Record<string, unknown>;
+    const engineHints: Record<string, CredentialHint> = {};
+    for (const [key, hint] of Object.entries(hintsObj)) {
+      if (hint === null || typeof hint !== 'object' || Array.isArray(hint)) continue;
+      const h = hint as Record<string, unknown>;
+      if (typeof h.masked === 'string' && typeof h.encrypted === 'string') {
+        engineHints[key] = { masked: h.masked, encrypted: h.encrypted };
+      }
+    }
+    if (Object.keys(engineHints).length > 0) {
+      out[engine] = engineHints;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }

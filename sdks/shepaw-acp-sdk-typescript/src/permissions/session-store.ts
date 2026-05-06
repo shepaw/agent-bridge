@@ -73,6 +73,12 @@ export class SessionStore {
     this.schedulePersist();
   }
 
+  delete(shepawSessionId: string): void {
+    if (!this.mapping.has(shepawSessionId)) return;
+    this.mapping.delete(shepawSessionId);
+    this.schedulePersist();
+  }
+
   async flush(): Promise<void> {
     if (this.writeTimer !== undefined) {
       clearTimeout(this.writeTimer);

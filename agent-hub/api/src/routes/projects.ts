@@ -2,6 +2,7 @@
  * Projects REST routes.
  *
  * GET    /api/projects               — list all projects with live status
+ * GET    /api/projects/meta          — hub metadata: lastTunnelServerUrl + credential hints
  * POST   /api/projects               — register a new project
  * GET    /api/projects/:id           — get one project + state
  * DELETE /api/projects/:id           — unregister (stops first if running)
@@ -15,7 +16,7 @@
  * GET    /api/projects/:id/enroll    — list outstanding pairing codes
  * DELETE /api/projects/:id/enroll/:code — revoke a pairing code
  * GET    /api/projects/:id/envvars   — list env var keys (values masked)
- * PUT    /api/projects/:id/envvars/:key — set a single env var
+ * PUT    /api/projects/:id/envvars/:key — set a single env var (also updates credential hints cache)
  * DELETE /api/projects/:id/envvars/:key — delete a single env var
  */
 
@@ -33,8 +34,11 @@ import {
 import {
   addProject,
   deleteProjectEnvVar,
+  decryptValue,
+  encryptValue,
   ensureProjectDir,
   getProject,
+  hubRoot,
   isAlive,
   loadOrCreateHubConfig,
   nextFreePort,
@@ -46,8 +50,11 @@ import {
   setProjectEnvVar,
   startProject,
   stopProject,
+  updateHubMeta,
   updateProject,
   type AgentEngine,
+  type CredentialHint,
+  type HubCredentialCache,
   type ProjectConfig,
   type TunnelConfig,
 } from '@shepaw/agent-hub-core';
@@ -97,11 +104,77 @@ function parseTunnelBody(v: unknown): TunnelConfig | undefined {
   return { serverUrl: obj.serverUrl, channelId: obj.channelId, secret: obj.secret };
 }
 
+// ── credential hint helpers ────────────────────────────────────────
+
+/**
+ * Produce a masked display string for a secret value.
+ * Shows the first few and last few chars; masks the middle with ***.
+ */
+function maskSecretValue(secret: string): string {
+  if (!secret) return '';
+  const len = secret.length;
+  if (len <= 4) return '*'.repeat(len);
+  const headLen = Math.min(4, Math.floor(len / 3));
+  const tailLen = Math.min(4, Math.floor(len / 4));
+  const head = secret.slice(0, headLen);
+  const tail = secret.slice(len - tailLen);
+  return `${head}***${tail}`;
+}
+
+/**
+ * Build an updated credential hints cache by merging new plaintext env vars
+ * for a given engine into the existing cache.
+ */
+function buildCredentialHints(
+  existing: HubCredentialCache | undefined,
+  engine: AgentEngine,
+  plainEnvVars: Record<string, string>,
+): HubCredentialCache {
+  const root = hubRoot();
+  const current = existing ?? {};
+  const engineHints: Record<string, CredentialHint> = { ...(current[engine] ?? {}) };
+  for (const [key, value] of Object.entries(plainEnvVars)) {
+    if (value.length === 0) continue;
+    engineHints[key] = {
+      masked: maskSecretValue(value),
+      encrypted: encryptValue(value, root),
+    };
+  }
+  return { ...current, [engine]: engineHints };
+}
+
 // ── list all ───────────────────────────────────────────────────────
 
 projectsRouter.get('/', (_req: Request, res: Response) => {
   const cfg = loadOrCreateHubConfig();
   res.json(cfg.projects.map(enrichProject));
+});
+
+// ── hub meta (credential hints + lastTunnelServerUrl) ──────────────
+
+/**
+ * GET /api/projects/meta
+ * Returns hub-level metadata: lastTunnelServerUrl and per-engine credential
+ * hints (masked values only — encrypted blobs are never sent to the client).
+ */
+projectsRouter.get('/meta', (_req: Request, res: Response) => {
+  const cfg = loadOrCreateHubConfig();
+  // Strip encrypted values — client only needs the masked display strings.
+  const hints: Record<string, Record<string, string>> = {};
+  if (cfg.credentialHints) {
+    for (const [engine, engineHints] of Object.entries(cfg.credentialHints)) {
+      if (engineHints) {
+        hints[engine] = Object.fromEntries(
+          Object.entries(engineHints).map(([key, hint]) => [key, hint.masked]),
+        );
+      }
+    }
+  }
+  res.json({
+    lastTunnelServerUrl: cfg.lastTunnelServerUrl ?? null,
+    lastTunnelSecretHint: cfg.lastTunnelSecretHint?.masked ?? null,
+    credentialHints: hints,
+  });
 });
 
 // ── create ─────────────────────────────────────────────────────────
@@ -126,6 +199,30 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
         ? `${resolvedTunnel.serverUrl}/proxy/${resolvedTunnel.channelId}`
         : '';
 
+    // Build explicit envVars from request body
+    const explicitEnvVars: Record<string, string> = (envVars !== undefined && typeof envVars === 'object' && !Array.isArray(envVars))
+      ? Object.fromEntries(
+          Object.entries(envVars as Record<string, unknown>)
+            .filter(([, v]) => typeof v === 'string')
+            .map(([k, v]) => [k, v as string]),
+        )
+      : {};
+
+    // Merge in cached credentials for keys the user did NOT explicitly provide.
+    // Decrypt the cached encrypted values so they can be re-encrypted into the new project.
+    const root = hubRoot();
+    const engineHints = cfg.credentialHints?.[resolvedEngine] ?? {};
+    const mergedEnvVars: Record<string, string> = { ...explicitEnvVars };
+    for (const [key, hint] of Object.entries(engineHints)) {
+      if (!(key in mergedEnvVars)) {
+        try {
+          mergedEnvVars[key] = decryptValue(hint.encrypted, root);
+        } catch {
+          // If decryption fails, skip this hint silently
+        }
+      }
+    }
+
     const project: Omit<ProjectConfig, 'envVars'> & { plainEnvVars?: Record<string, string> } = {
       id,
       label: typeof label === 'string' ? label : id,
@@ -137,22 +234,34 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
       extraArgs: Array.isArray(extraArgs) ? extraArgs.filter((x): x is string => typeof x === 'string') : [],
       createdAt: new Date().toISOString(),
       tunnel: resolvedTunnel,
-      plainEnvVars: (envVars !== undefined && typeof envVars === 'object' && !Array.isArray(envVars))
-        ? Object.fromEntries(
-            Object.entries(envVars as Record<string, unknown>)
-              .filter(([ , v]) => typeof v === 'string')
-              .map(([k, v]) => [k, v as string]),
-          )
-        : undefined,
+      plainEnvVars: Object.keys(mergedEnvVars).length > 0 ? mergedEnvVars : undefined,
     };
-
-    const { id: _id, label: _label, engine: _engine, cwd: _cwd, port: _port, host: _host,
-      baseUrl: _baseUrl, extraArgs: _extraArgs, createdAt: _createdAt, tunnel: _tunnel } = req.body as Record<string, unknown>;
 
     addProject(cfg, project);
     ensureProjectDir(id);
     const savedCfg = loadOrCreateHubConfig();
     const saved = savedCfg.projects.find((p) => p.id === id) ?? project as unknown as ProjectConfig;
+
+    // Update hub-level metadata: cache credential hints, lastTunnelServerUrl, tunnel secret hint.
+    // Only update hints for keys the user explicitly provided (not auto-filled from cache).
+    const hasNewEnvVars = Object.keys(explicitEnvVars).length > 0;
+    const hasTunnel = resolvedTunnel !== undefined;
+    if (hasNewEnvVars || hasTunnel) {
+      const root = hubRoot();
+      const meta: { lastTunnelServerUrl?: string; lastTunnelSecretHint?: CredentialHint; credentialHints?: HubCredentialCache } = {};
+      if (hasTunnel) {
+        meta.lastTunnelServerUrl = resolvedTunnel!.serverUrl;
+        meta.lastTunnelSecretHint = {
+          masked: maskSecretValue(resolvedTunnel!.secret),
+          encrypted: encryptValue(resolvedTunnel!.secret, root),
+        };
+      }
+      if (hasNewEnvVars) {
+        meta.credentialHints = buildCredentialHints(savedCfg.credentialHints, resolvedEngine, explicitEnvVars);
+      }
+      updateHubMeta(savedCfg, meta);
+    }
+
     res.status(201).json(enrichProject(saved));
   } catch (err) {
     if (err instanceof ProjectExistsError) {
@@ -235,6 +344,20 @@ projectsRouter.patch('/:id', (req: Request, res: Response) => {
     }
     const next = updateProject(cfg, req.params.id!, patch);
     const updated = next.projects.find((p) => p.id === req.params.id)!;
+
+    // If a new tunnel was set, update lastTunnelServerUrl and lastTunnelSecretHint in hub meta.
+    if (patch.tunnel) {
+      const root = hubRoot();
+      const freshCfg = loadOrCreateHubConfig();
+      updateHubMeta(freshCfg, {
+        lastTunnelServerUrl: patch.tunnel.serverUrl,
+        lastTunnelSecretHint: {
+          masked: maskSecretValue(patch.tunnel.secret),
+          encrypted: encryptValue(patch.tunnel.secret, root),
+        },
+      });
+    }
+
     res.json(enrichProject(updated));
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {
@@ -282,13 +405,23 @@ projectsRouter.post('/:id/stop', async (req: Request, res: Response) => {
 
 // ── envvars ────────────────────────────────────────────────────────
 
-/** GET /api/projects/:id/envvars — list key names only, values masked */
+/** GET /api/projects/:id/envvars — list keys with masked values (first/last chars visible) */
 projectsRouter.get('/:id/envvars', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const p = getProject(cfg, req.params.id!);
-    const keys = Object.keys(p.envVars ?? {});
-    res.json(keys.map((key) => ({ key, value: '(masked)' })));
+    const root = hubRoot();
+    const result = Object.entries(p.envVars ?? {}).map(([key, encrypted]) => {
+      let masked = '••••••••';
+      try {
+        const plain = decryptValue(encrypted, root);
+        masked = maskSecretValue(plain);
+      } catch {
+        // decryption failed — fall back to generic mask
+      }
+      return { key, value: masked };
+    });
+    res.json(result);
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {
       res.status(404).json({ error: err.message });
@@ -302,13 +435,20 @@ projectsRouter.get('/:id/envvars', (req: Request, res: Response) => {
 projectsRouter.put('/:id/envvars/:key', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
+    const p = getProject(cfg, req.params.id!);
     const { value } = req.body as Record<string, unknown>;
     if (typeof value !== 'string') {
       res.status(400).json({ error: '"value" must be a string' });
       return;
     }
     setProjectEnvVar(cfg, req.params.id!, req.params.key!, value);
+    // Update credential hints cache for this engine.
+    if (value.length > 0) {
+      const freshCfg = loadOrCreateHubConfig();
+      updateHubMeta(freshCfg, {
+        credentialHints: buildCredentialHints(freshCfg.credentialHints, p.engine, { [req.params.key!]: value }),
+      });
+    }
     res.json({ ok: true, key: req.params.key });
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {

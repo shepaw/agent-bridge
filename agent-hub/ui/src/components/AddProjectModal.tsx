@@ -1,6 +1,31 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../api/client.js';
-import type { AgentEngine } from '../api/types.js';
+import type { AgentEngine, HubMeta } from '../api/types.js';
+
+// Engine-specific credential field definitions (mirrors ProjectDetail)
+interface CredField {
+  key: string;
+  label: string;
+  type: 'password' | 'text';
+  required?: boolean;
+}
+
+const ENGINE_CREDS: Record<AgentEngine, CredField[]> = {
+  'codebuddy': [
+    { key: 'CODEBUDDY_API_KEY', label: 'API Key', type: 'password' },
+    { key: 'CODEBUDDY_AUTH_TOKEN', label: 'Auth Token', type: 'password' },
+  ],
+  'claude-code': [
+    { key: 'ANTHROPIC_API_KEY', label: 'API Key', required: true, type: 'password' },
+    { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
+    { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
+  ],
+  'codex': [
+    { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
+    { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
+  ],
+  'opencode': [],
+};
 
 interface AddProjectModalProps {
   onClose: () => void;
@@ -14,31 +39,111 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   const [cwd, setCwd] = useState('');
   const [host, setHost] = useState('127.0.0.1');
   const [baseUrl, setBaseUrl] = useState('');
+
+  // Credentials (per engine key)
+  const [credValues, setCredValues] = useState<Record<string, string>>({});
+  // Credential hint display (masked): '' means no hint, non-empty shows the cached mask
+  const [credHints, setCredHints] = useState<Record<string, string>>({});
+  // Whether credential field is in "use cached" mode (showing hint, not entering new value)
+  const [credUsingCache, setCredUsingCache] = useState<Record<string, boolean>>({});
+
   // Tunnel fields
   const [tunnelServer, setTunnelServer] = useState('');
   const [tunnelChannelId, setTunnelChannelId] = useState('');
   const [tunnelSecret, setTunnelSecret] = useState('');
   const [showTunnel, setShowTunnel] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
+
+  // Load hub metadata once for pre-filling hints
+  useEffect(() => {
+    api.projects.meta().then((meta) => {
+      setHubMeta(meta);
+      if (meta.lastTunnelServerUrl) {
+        setTunnelServer(meta.lastTunnelServerUrl);
+      }
+    }).catch(() => { /* ignore — hub meta is optional UX enhancement */ });
+  }, []);
+
+  // When engine changes, update credential hints for the new engine
+  useEffect(() => {
+    if (!hubMeta) return;
+    const hints = hubMeta.credentialHints[engine] ?? {};
+    setCredHints(hints);
+    // Pre-select "use cached" for keys that have hints, clear the input value
+    const usingCache: Record<string, boolean> = {};
+    const values: Record<string, string> = {};
+    for (const field of ENGINE_CREDS[engine]) {
+      if (hints[field.key]) {
+        usingCache[field.key] = true;
+        values[field.key] = ''; // empty = will use cached (sent as undefined to API)
+      } else {
+        usingCache[field.key] = false;
+        values[field.key] = '';
+      }
+    }
+    setCredUsingCache(usingCache);
+    setCredValues(values);
+  }, [engine, hubMeta]);
+
+  const handleCredChange = (key: string, value: string) => {
+    // Once user types, they are no longer using the cache for this field
+    setCredUsingCache((prev) => ({ ...prev, [key]: false }));
+    setCredValues((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleCacheForKey = (key: string) => {
+    const nowUsingCache = !credUsingCache[key];
+    setCredUsingCache((prev) => ({ ...prev, [key]: nowUsingCache }));
+    if (nowUsingCache) {
+      // Clear typed value when switching back to cached
+      setCredValues((prev) => ({ ...prev, [key]: '' }));
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErr(null);
     try {
-      const hasTunnel = tunnelServer && tunnelChannelId && tunnelSecret;
-      if ((tunnelServer || tunnelChannelId || tunnelSecret) && !hasTunnel) {
+      // Treat '__use_cache__' sentinel as empty (secret hint is display-only)
+      const effectiveSecret = tunnelSecret === '__use_cache__' ? '' : tunnelSecret;
+      const hasTunnel = tunnelServer && tunnelChannelId && effectiveSecret;
+      if ((tunnelServer || tunnelChannelId || effectiveSecret) && !hasTunnel) {
         setErr('All three tunnel fields (server, channel ID, secret) are required together.');
         setLoading(false);
         return;
       }
       const tunnel = hasTunnel
-        ? { serverUrl: tunnelServer, channelId: tunnelChannelId, secret: tunnelSecret }
+        ? { serverUrl: tunnelServer, channelId: tunnelChannelId, secret: effectiveSecret }
         : undefined;
+
       // Auto-derive baseUrl from tunnel if not explicitly set
       const resolvedBaseUrl = baseUrl || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
-      await api.projects.create({ id, label: label || id, engine, cwd, host, baseUrl: resolvedBaseUrl, tunnel });
+
+      // Build envVars: only include keys with an explicit new value (not "using cache").
+      // Keys in "use cache" mode are omitted — the backend will auto-fill them from
+      // the hub-level credentialHints store.
+      const envVars: Record<string, string> = {};
+      for (const field of ENGINE_CREDS[engine]) {
+        const val = credValues[field.key] ?? '';
+        if (!credUsingCache[field.key] && val.length > 0) {
+          envVars[field.key] = val;
+        }
+      }
+
+      await api.projects.create({
+        id,
+        label: label || id,
+        engine,
+        cwd,
+        host,
+        baseUrl: resolvedBaseUrl,
+        tunnel,
+        envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
+      });
       onCreated();
       onClose();
     } catch (ex) {
@@ -47,6 +152,8 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
       setLoading(false);
     }
   };
+
+  const credFields = ENGINE_CREDS[engine];
 
   return (
     <div style={overlay} onClick={onClose}>
@@ -83,6 +190,54 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
           <label style={lbl}>Base URL <span style={{ color: '#6c7086', fontSize: 11 }}>(optional — auto-derived from tunnel)</span></label>
           <input style={inp} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="wss://example.com (leave blank if using tunnel)" />
 
+          {/* Credentials section */}
+          {credFields.length > 0 && (
+            <>
+              <div style={sectionDivider} />
+              <p style={sectionTitle}>Credentials</p>
+              {credFields.map((field) => {
+                const hint = credHints[field.key];
+                const usingCache = credUsingCache[field.key];
+                return (
+                  <div key={field.key}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label style={lbl}>
+                        {field.label}
+                        {field.required && <span style={req}> *</span>}
+                      </label>
+                      {hint && (
+                        <button
+                          type="button"
+                          style={hintToggleBtn}
+                          onClick={() => toggleCacheForKey(field.key)}
+                          title={usingCache ? 'Click to enter a different key' : `Click to use cached: ${hint}`}
+                        >
+                          {usingCache ? `Using: ${hint}` : `Cached: ${hint}`}
+                        </button>
+                      )}
+                    </div>
+                    {!usingCache && (
+                      <input
+                        style={inp}
+                        type={field.type}
+                        value={credValues[field.key] ?? ''}
+                        onChange={(e) => handleCredChange(field.key, e.target.value)}
+                        placeholder={hint ? 'Enter new value to override cached key' : `Enter ${field.label}`}
+                        required={field.required && !hint}
+                      />
+                    )}
+                    {usingCache && hint && (
+                      <div style={cachedValueDisplay}>
+                        <span style={{ color: '#a6e3a1', fontSize: 13 }}>{hint}</span>
+                        <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>(cached — click above to change)</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
           {/* Tunnel section */}
           <button
             type="button"
@@ -99,7 +254,12 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
                 All three fields are required together. The Base URL above will be auto-derived
                 from Server URL + Channel ID if left blank.
               </p>
-              <label style={lbl}>Server URL</label>
+              <label style={lbl}>
+                Server URL
+                {hubMeta?.lastTunnelServerUrl && tunnelServer === hubMeta.lastTunnelServerUrl && (
+                  <span style={reuseTag}> reused from last session</span>
+                )}
+              </label>
               <input
                 style={inp}
                 value={tunnelServer}
@@ -113,14 +273,35 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
                 onChange={(e) => setTunnelChannelId(e.target.value)}
                 placeholder="ch_abc123"
               />
-              <label style={lbl}>Secret</label>
-              <input
-                style={inp}
-                type="password"
-                value={tunnelSecret}
-                onChange={(e) => setTunnelSecret(e.target.value)}
-                placeholder="HMAC-SHA256 signing secret"
-              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label style={lbl}>Secret</label>
+                {hubMeta?.lastTunnelSecretHint && (
+                  <button
+                    type="button"
+                    style={hintToggleBtn}
+                    onClick={() => setTunnelSecret((v) => v ? '' : '__use_cache__')}
+                    title="Click to toggle cached secret"
+                  >
+                    {tunnelSecret === '__use_cache__'
+                      ? `Using: ${hubMeta.lastTunnelSecretHint}`
+                      : `Cached: ${hubMeta.lastTunnelSecretHint}`}
+                  </button>
+                )}
+              </div>
+              {tunnelSecret === '__use_cache__' ? (
+                <div style={cachedValueDisplay}>
+                  <span style={{ color: '#a6e3a1', fontSize: 13 }}>{hubMeta?.lastTunnelSecretHint}</span>
+                  <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>(cached — click above to change)</span>
+                </div>
+              ) : (
+                <input
+                  style={inp}
+                  type="password"
+                  value={tunnelSecret}
+                  onChange={(e) => setTunnelSecret(e.target.value)}
+                  placeholder={hubMeta?.lastTunnelSecretHint ? 'Enter new secret to override cached' : 'HMAC-SHA256 signing secret'}
+                />
+              )}
             </div>
           )}
 
@@ -148,7 +329,8 @@ const overlay: React.CSSProperties = {
 };
 const modal: React.CSSProperties = {
   background: '#1e1e2e', border: '1px solid #45475a',
-  borderRadius: 10, width: '90%', maxWidth: 460,
+  borderRadius: 10, width: '90%', maxWidth: 480,
+  maxHeight: '90vh', overflowY: 'auto',
 };
 const header: React.CSSProperties = {
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -185,4 +367,24 @@ const tunnelBox: React.CSSProperties = {
 };
 const tunnelNote: React.CSSProperties = {
   color: '#6c7086', fontSize: 12, margin: '0 0 4px',
+};
+const sectionDivider: React.CSSProperties = {
+  borderTop: '1px solid #313244', marginTop: 4, marginBottom: 2,
+};
+const sectionTitle: React.CSSProperties = {
+  color: '#a6adc8', fontSize: 12, fontWeight: 600, margin: '0 0 2px',
+  textTransform: 'uppercase', letterSpacing: '0.05em',
+};
+const hintToggleBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #313244', color: '#89b4fa',
+  borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer',
+  fontFamily: 'monospace', whiteSpace: 'nowrap',
+};
+const cachedValueDisplay: React.CSSProperties = {
+  background: '#11111b', border: '1px solid #313244', borderRadius: 5,
+  padding: '6px 10px', fontSize: 13, fontFamily: 'monospace',
+  display: 'flex', alignItems: 'center',
+};
+const reuseTag: React.CSSProperties = {
+  color: '#a6e3a1', fontSize: 11, fontStyle: 'italic',
 };

@@ -17,9 +17,10 @@ export {
   removeProject,
   saveHubConfig,
   setProjectEnvVar,
+  updateHubMeta,
   updateProject,
 } from './config.js';
-export type { AgentEngine, HubConfig, ProjectConfig, LoadHubOptions } from './config.js';
+export type { AgentEngine, CredentialHint, HubConfig, HubCredentialCache, LoadHubOptions, ProjectConfig, TunnelConfig } from './config.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 

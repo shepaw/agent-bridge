@@ -1,6 +1,7 @@
 import type {
   CreateProjectInput,
   EnrollToken,
+  HubMeta,
   Peer,
   Project,
   UpdateProjectInput,
@@ -25,6 +26,9 @@ export const api = {
     list: (): Promise<Project[]> => request('/projects'),
 
     get: (id: string): Promise<Project> => request(`/projects/${id}`),
+
+    /** Get hub-level metadata: lastTunnelServerUrl and credential hints. */
+    meta: (): Promise<HubMeta> => request('/projects/meta'),
 
     create: (input: CreateProjectInput): Promise<Project> =>
       request('/projects', { method: 'POST', body: JSON.stringify(input) }),

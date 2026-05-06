@@ -1,13 +1,36 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useProjects } from './hooks/useProjects.js';
 import { ProjectCard } from './components/ProjectCard.js';
 import { ProjectDetail } from './components/ProjectDetail.js';
 import { AddProjectModal } from './components/AddProjectModal.js';
 
+/** Read project id from URL hash, e.g. "#project/my-project" → "my-project" */
+function getHashProjectId(): string | null {
+  const match = location.hash.match(/^#project\/(.+)$/);
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
 export function App() {
   const { projects, loading, error, reload } = useProjects();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(getHashProjectId);
   const [showAdd, setShowAdd] = useState(false);
+
+  // Keep URL hash in sync with selected project
+  useEffect(() => {
+    if (selected) {
+      location.hash = `project/${encodeURIComponent(selected)}`;
+    } else {
+      // Remove hash without adding a history entry
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  }, [selected]);
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const onHashChange = () => setSelected(getHashProjectId());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   if (selected) {
     return (
