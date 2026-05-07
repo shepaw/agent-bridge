@@ -229,6 +229,13 @@ export class ACPAgentServer {
   protected readonly activeTasks = new Map<string, AbortController>();
   private readonly pendingHubRequests = new Map<string, Deferred<unknown>>();
   private readonly pendingResponses = new Map<string, Deferred<Record<string, unknown>>>();
+  /**
+   * Per-session FIFO queue tail. Each `handleChatDispatch` call chains onto
+   * the previous promise for the same sessionId so that concurrent `agent.chat`
+   * calls (e.g. multiple simultaneous "Allow All Similar" taps) are serialized
+   * and never race against the underlying SDK session lock.
+   */
+  private readonly chatQueues = new Map<string, Promise<void>>();
 
   /**
    * Optional slash-command registry. When set, the default
@@ -460,6 +467,7 @@ export class ACPAgentServer {
     // Cancel all running tasks.
     for (const ctrl of this.activeTasks.values()) ctrl.abort();
     this.activeTasks.clear();
+    this.chatQueues.clear();
 
     this.stopPeersWatcher();
 
@@ -816,6 +824,7 @@ export class ACPAgentServer {
       }
       for (const ctrl of this.activeTasks.values()) ctrl.abort();
       this.activeTasks.clear();
+      this.chatQueues.clear();
       for (const d of this.pendingHubRequests.values()) d.reject(new Error('Connection closed'));
       this.pendingHubRequests.clear();
       for (const d of this.pendingResponses.values()) d.reject(new Error('Connection closed'));
@@ -1156,8 +1165,19 @@ export class ACPAgentServer {
       pendingResponses: this.pendingResponses,
     });
 
-    // Run lifecycle in a detached task so the WS reader keeps flowing.
-    void this.runChatTask(ctx, message, params, appHistory, abortController.signal);
+    // Enqueue this task behind any already-running task for the same session.
+    // This prevents concurrent agent.chat calls (e.g. multiple simultaneous
+    // "Allow All Similar" taps) from racing on the underlying SDK session lock
+    // and producing "Session … is already in use" errors.
+    const prev = this.chatQueues.get(sessionId) ?? Promise.resolve();
+    const next = prev.then(() =>
+      this.runChatTask(ctx, message, params, appHistory, abortController.signal),
+    );
+    // Store a no-reject tail so the queue head never becomes a rejected promise
+    // that would swallow subsequent entries.
+    this.chatQueues.set(sessionId, next.then(() => undefined, () => undefined));
+    // Detach so the WS reader keeps flowing.
+    void next;
   }
 
   private async runChatTask(
