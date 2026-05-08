@@ -62,6 +62,7 @@ import { join } from 'node:path';
 import {
   createOpencodeClient,
   createOpencodeServer,
+  type Config,
   type Event,
   type EventMessagePartUpdated,
   type EventPermissionUpdated,
@@ -146,6 +147,25 @@ export interface OpenCodeAgentOptions {
    * Passed as the `system` field in the prompt body.
    */
   systemPrompt?: string;
+  /**
+   * Per-provider API key overrides, keyed by provider ID (e.g. `"anthropic"`).
+   * These are injected into the OpenCode server's `config.provider` block so
+   * credentials can be supplied programmatically without relying on environment
+   * variables.
+   *
+   * Example:
+   * ```ts
+   * providerApiKeys: { anthropic: 'sk-ant-...', openai: 'sk-...' }
+   * ```
+   */
+  providerApiKeys?: Record<string, string>;
+  /**
+   * Full OpenCode `Config` override. Merged (shallow) into the config passed to
+   * `createOpencodeServer`. Useful for fine-grained provider/model settings not
+   * covered by the higher-level options above. `providerApiKeys` takes precedence
+   * over any `provider[id].options.apiKey` set here.
+   */
+  opencodeConfig?: Config;
 }
 
 interface CommandsDirEntry {
@@ -159,6 +179,12 @@ export class OpenCodeAgent extends ACPAgentServer {
   private readonly extraSystemPrompt: string | undefined;
   private readonly opencodePort: number | undefined;
   private readonly sessionStore: SessionStore;
+
+  /** Per-provider API keys supplied at construction time (no env-var required). */
+  private readonly providerApiKeys: Record<string, string>;
+
+  /** Base OpenCode config merged with providerApiKeys at init time. */
+  private readonly opencodeConfig: Config;
 
   /** Currently-selected model as `{ providerID, modelID }` (may be undefined). */
   private currentModel: { providerID: string; modelID: string } | undefined;
@@ -194,6 +220,9 @@ export class OpenCodeAgent extends ACPAgentServer {
     this.cwd = opts.cwd ?? process.cwd();
     this.extraSystemPrompt = opts.systemPrompt;
     this.opencodePort = opts.opencodePort;
+
+    this.providerApiKeys = opts.providerApiKeys ?? {};
+    this.opencodeConfig = opts.opencodeConfig ?? {};
 
     this.sessionStore = new SessionStore(
       opts.sessionStoreOptions ?? { gatewayDirName: GATEWAY_DIR_NAME },
@@ -234,11 +263,30 @@ export class OpenCodeAgent extends ACPAgentServer {
 
     // Start the OpenCode server process.
     log.gateway('starting opencode server (cwd=%s)', this.cwd);
+
+    // Build the provider config block from providerApiKeys, merged over any
+    // base opencodeConfig the caller provided.
+    const providerOverrides: Config['provider'] = {};
+    for (const [providerId, apiKey] of Object.entries(this.providerApiKeys)) {
+      providerOverrides[providerId] = {
+        ...(this.opencodeConfig.provider?.[providerId] ?? {}),
+        options: {
+          ...(this.opencodeConfig.provider?.[providerId]?.options ?? {}),
+          apiKey,
+        },
+      };
+    }
+    const resolvedConfig: Config = {
+      ...this.opencodeConfig,
+      provider: {
+        ...this.opencodeConfig.provider,
+        ...providerOverrides,
+      },
+    };
+
     this.opencodeServer = await createOpencodeServer({
       port: this.opencodePort,
-      config: {
-        // Use the working directory as the project root.
-      },
+      config: resolvedConfig,
     });
     log.gateway('opencode server listening at %s', this.opencodeServer.url);
 

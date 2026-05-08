@@ -92,6 +92,11 @@ cli
     '--tunnel-endpoint <name>',
     'Optional short-name endpoint (or PAW_ACP_TUNNEL_ENDPOINT)',
   )
+  .option(
+    '--provider-api-key <providerID=apiKey>',
+    'Set an API key for a provider without using env vars, e.g. anthropic=sk-ant-... (repeatable)',
+    { default: [] },
+  )
   .action(async (opts) => {
     const port = Number(opts.port);
 
@@ -133,6 +138,7 @@ cli
         ? { path: opts.sessionStorePath }
         : undefined,
       tunnelConfig,
+      providerApiKeys: parseProviderApiKeys(opts.providerApiKey),
     });
 
     await agent.init();
@@ -335,5 +341,23 @@ cli.help((sections) => {
   return sections;
 });
 cli.version('0.1.0');
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Parse repeated `--provider-api-key providerID=apiKey` flags into a map.
+ * Silently skips malformed entries (no `=`).
+ */
+function parseProviderApiKeys(raw: string | string[] | undefined): Record<string, string> {
+  if (!raw) return {};
+  const entries = Array.isArray(raw) ? raw : [raw];
+  const out: Record<string, string> = {};
+  for (const entry of entries) {
+    const eq = entry.indexOf('=');
+    if (eq < 1) continue;
+    out[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  return out;
+}
 
 cli.parse();
