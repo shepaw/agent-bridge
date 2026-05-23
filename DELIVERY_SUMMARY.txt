@@ -1,0 +1,241 @@
+================================================================================
+SHEPAW AGENT-BRIDGE/AGENT-HUB CODEBASE EXPLORATION - DELIVERY SUMMARY
+================================================================================
+
+EXPLORATION COMPLETE: May 8, 2026
+
+================================================================================
+DELIVERABLES
+================================================================================
+
+✅ DOCUMENTATION_INDEX.md (3.8 KB)
+   - Master index and navigation guide for all documentation
+   - Learning paths for different use cases
+   - Quick reference facts and technology stack
+   - File locations and dependencies
+
+✅ EXPLORATION_SUMMARY.md (10.5 KB)
+   - High-level overview of all five exploration areas
+   - Key findings and architectural patterns
+   - Data flow summaries for common operations
+   - Development environment setup
+   - File locations quick reference
+
+✅ CODEBASE_EXPLORATION.md (13.9 KB)
+   - Complete directory structure
+   - Detailed file-by-file breakdown
+   - Component hierarchy
+   - API endpoint documentation
+   - State management explanation
+   - Routing implementation details
+
+✅ AGENT_DATA_MODEL.md (15.7 KB)
+   - Project interface specification
+   - EnrollToken interface for QR codes
+   - Credential storage architecture
+   - Environment variables by engine
+   - Secret masking algorithm
+   - API response examples
+   - Security matrix
+
+✅ QR_CODE_IMPLEMENTATION_GUIDE.md (11.4 KB)
+   - qrcode.react library details
+   - QRCodeSVG component props
+   - Implementation patterns
+   - Data flow for device pairing
+   - Catppuccin color reference
+   - Troubleshooting guide
+
+✅ ARCHITECTURE_DIAGRAMS.md (35.6 KB)
+   - System architecture diagram
+   - React component tree
+   - Data flow visualizations
+   - Device pairing flow
+   - Component dependencies
+   - File permissions matrix
+
+Plus additional reference files:
+   - TECHNICAL_REFERENCE.md
+   - SECURITY.md
+   - AUDIT_REPORT.md
+   - IMPLEMENTATION_GUIDE.md
+
+================================================================================
+EXPLORATION AREAS COVERED (5/5 ✅)
+================================================================================
+
+1. PROJECT STRUCTURE ✅
+   - Monorepo with npm workspaces
+   - Four packages: core, api, ui, cli
+   - Clear separation of concerns
+   - Documented directory layout
+
+2. AGENT DETAIL PAGE IMPLEMENTATION ✅
+   - Hash-based routing (#project/:id)
+   - 776-line ProjectDetail.tsx component
+   - Comprehensive UI for agent management
+   - Real-time log streaming via WebSocket
+   - Device pairing and enrollment flows
+
+3. CONNECTION INFORMATION STORAGE ✅
+   - Agent metadata: id, label, engine, host, port, baseUrl
+   - Infrastructure: cwd, extraArgs, tunnel config
+   - Credentials: encrypted at rest (AES-256-GCM)
+   - Only key names exposed via API (values never transmitted)
+   - Secret masking for UI display
+
+4. QR CODE LIBRARIES ✅
+   - qrcode.react 4.2.0 (lightweight SVG-based)
+   - Used in EnrollModal.tsx
+   - Backend generates QR payload JSON
+   - Single-use tokens with 10-min TTL
+   - Catppuccin theme colors
+
+5. FRONTEND TECH STACK ✅
+   - Framework: React 19.1.0
+   - Bundler: Vite 5.4.0
+   - Language: TypeScript 5.7.2
+   - State: React hooks only (no Redux/Zustand/Context)
+   - Components: Custom (no Material-UI/Chakra)
+   - Styling: Inline CSS-in-JS (Catppuccin theme)
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+ARCHITECTURE:
+   - Monorepo structure (npm workspaces)
+   - Express REST API on port 4000
+   - Vite dev server on port 5173 (proxies to :4000)
+   - Hash-based routing (no third-party router)
+   - React hooks for all state management
+
+SECURITY:
+   - Strong encryption (AES-256-GCM) for credentials at rest
+   - API never exposes credential values
+   - Masked display in UI (e.g., "sk-ant***789")
+   - File permissions 0600 (owner-only readable)
+   - QR tokens are single-use with TTL
+
+DATA MODEL:
+   - Agent (Project) stores: id, label, engine, cwd, host, port, tunnel config
+   - Status tracks: running, pid, startedAt, stoppedAt, lastResult
+   - Credentials: 4 engines with engine-specific env vars
+   - Tunnel: serverUrl, channelId, encrypted secret
+   - Peers: Device fingerprint, label, addedAt, revocation
+
+PATTERNS:
+   - Sentinel values prevent re-transmitting unchanged secrets
+   - Component composition from router → detail → modals
+   - Try/catch/finally with busy + error states
+   - Parallel data fetching for related resources
+
+================================================================================
+TECHNOLOGY SUMMARY
+================================================================================
+
+Production Dependencies:
+   - react@19.1.0
+   - react-dom@19.1.0
+   - qrcode.react@4.2.0
+
+Dev Dependencies:
+   - vite@5.4.0
+   - typescript@5.7.2
+   - @vitejs/plugin-react@4.3.4
+
+Build Scripts:
+   - npm run dev     → Vite dev server (port 5173)
+   - npm run build   → Production build
+   - npm run typecheck → TypeScript validation
+
+File Locations:
+   - App router:              ui/src/App.tsx (98 lines)
+   - Agent detail page:       ui/src/components/ProjectDetail.tsx (776 lines)
+   - QR code modal:           ui/src/components/EnrollModal.tsx (237 lines)
+   - REST client:             ui/src/api/client.ts (89 lines)
+   - Type definitions:        ui/src/api/types.ts (101 lines)
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+For QR Code Enhancement (Low Effort):
+   [ ] Add download/print button for QR code
+   [ ] Display countdown timer to code expiration
+   [ ] Add copy-to-clipboard for manual code entry
+   [ ] Larger QR size option for accessibility
+
+For Data Security:
+   [ ] Consider masking tunnel.secret in API responses
+   [ ] Add audit logging for credential access
+
+For Developer Experience (If App Scales):
+   [ ] Add React Query for data fetching/caching
+   [ ] Consider Headless UI or Radix for components
+   [ ] Migrate to CSS/Tailwind for maintainability
+
+================================================================================
+DOCUMENTATION LOCATIONS
+================================================================================
+
+All files are in: /Users/edenzou/workspace/shepaw/agent-bridge/
+
+Main Documentation:
+   1. DOCUMENTATION_INDEX.md ← START HERE
+   2. EXPLORATION_SUMMARY.md
+   3. CODEBASE_EXPLORATION.md
+   4. AGENT_DATA_MODEL.md
+   5. QR_CODE_IMPLEMENTATION_GUIDE.md
+   6. ARCHITECTURE_DIAGRAMS.md
+
+Reference Files:
+   - TECHNICAL_REFERENCE.md
+   - SECURITY.md
+   - AUDIT_REPORT.md
+   - IMPLEMENTATION_GUIDE.md
+   - VERIFICATION_SUMMARY.md
+   - AUDIT_AND_FINDINGS.md
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+Choose your path based on your needs:
+
+Path 1: Understanding Architecture (~20 min)
+   - Read EXPLORATION_SUMMARY.md
+   - Review ARCHITECTURE_DIAGRAMS.md
+   - Read CODEBASE_EXPLORATION.md
+
+Path 2: Working with Agent Data (~12 min)
+   - Read EXPLORATION_SUMMARY.md (Agent Data section)
+   - Read AGENT_DATA_MODEL.md
+   - Reference type definitions as needed
+
+Path 3: Implementing QR Features (~17 min)
+   - Read EXPLORATION_SUMMARY.md (QR Code section)
+   - Read QR_CODE_IMPLEMENTATION_GUIDE.md
+   - Reference EnrollModal.tsx implementation
+
+Path 4: Understanding Security (~12 min)
+   - Read EXPLORATION_SUMMARY.md (Security section)
+   - Read AGENT_DATA_MODEL.md (Credential Storage)
+   - Read SECURITY.md for deep dive
+
+================================================================================
+SUMMARY
+================================================================================
+
+The Shepaw Agent Hub is a well-architected monorepo with:
+✅ Clean separation between core logic, API, UI, and CLI
+✅ Strong security practices for credential management
+✅ Modern frontend stack (React 19, TypeScript, Vite)
+✅ Comprehensive agent management UI with device pairing
+✅ Real-time log streaming and WebSocket support
+✅ Lightweight QR code implementation (qrcode.react)
+✅ Clear architectural patterns and conventions
+
+All exploration work is complete and thoroughly documented.
+
+================================================================================

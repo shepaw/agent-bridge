@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
-import type { Project, Peer, AgentEngine } from '../api/types.js';
+import type { Project, Peer, AgentEngine, EnrollToken } from '../api/types.js';
 import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
@@ -48,6 +49,13 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   const [err, setErr] = useState<string | null>(null);
   const [showEnroll, setShowEnroll] = useState(false);
   const [showResume, setShowResume] = useState(false);
+  // Inline QR code section
+  const [showQr, setShowQr] = useState(false);
+  const [qrToken, setQrToken] = useState<EnrollToken | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrErr, setQrErr] = useState<string | null>(null);
+  const [qrSecondsLeft, setQrSecondsLeft] = useState(0);
+  const qrTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // envvars state: key -> pending input value (undefined = not editing)
   const [envEditing, setEnvEditing] = useState<Record<string, string>>({});
   const [envBusy, setEnvBusy] = useState<Record<string, boolean>>({});
@@ -93,7 +101,42 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
 
   useEffect(() => { void load(); }, [projectId]);
 
-  const toggle = async () => {
+  // QR expiry countdown
+  useEffect(() => {
+    if (!qrToken) { setQrSecondsLeft(0); return; }
+    const update = () => {
+      const diff = Math.max(0, Math.floor((new Date(qrToken.expiresAt).getTime() - Date.now()) / 1000));
+      setQrSecondsLeft(diff);
+      if (diff === 0) {
+        setQrToken(null);
+        if (qrTimerRef.current) clearInterval(qrTimerRef.current);
+      }
+    };
+    update();
+    qrTimerRef.current = setInterval(update, 1000);
+    return () => { if (qrTimerRef.current) clearInterval(qrTimerRef.current); };
+  }, [qrToken]);
+
+  const mintQr = async () => {
+    setQrLoading(true);
+    setQrErr(null);
+    try {
+      const t = await api.enroll.mint(projectId, {
+        ttlMinutes: 10,
+        baseUrl: project?.baseUrl || undefined,
+      });
+      setQrToken(t);
+    } catch (e) {
+      setQrErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const openQr = () => {
+    setShowQr(true);
+    if (!qrToken) void mintQr();
+  };
     if (!project) return;
     setBusy(true);
     setErr(null);
@@ -282,6 +325,9 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
           >
             {busy ? '...' : project.status.running ? 'Stop' : 'Start'}
           </button>
+          <button style={actionBtn('#89dceb')} onClick={openQr}>
+            📷 Scan to Connect
+          </button>
           <button style={actionBtn('#8e44ad')} onClick={() => setShowEnroll(true)}>
             Pair Device
           </button>
@@ -298,6 +344,62 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
       </div>
 
       {err && <p style={{ color: '#f38ba8', margin: '8px 0' }}>{err}</p>}
+
+      {/* Inline QR Code Section */}
+      {showQr && (
+        <div style={qrSection}>
+          <div style={qrSectionHeader}>
+            <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 14 }}>📷 连接二维码</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {qrToken && qrSecondsLeft > 0 && (
+                <span style={{ color: qrSecondsLeft <= 60 ? '#f38ba8' : '#a6adc8', fontSize: 12 }}>
+                  {Math.floor(qrSecondsLeft / 60)}:{String(qrSecondsLeft % 60).padStart(2, '0')} 后过期
+                </span>
+              )}
+              <button style={qrRefreshBtn} disabled={qrLoading} onClick={() => void mintQr()}>
+                {qrLoading ? '生成中...' : '↻ 刷新'}
+              </button>
+              <button style={qrCloseBtn} onClick={() => { setShowQr(false); setQrToken(null); setQrErr(null); }}>✕</button>
+            </div>
+          </div>
+          <div style={qrBody}>
+            {qrErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{qrErr}</p>}
+            {qrLoading && <p style={{ color: '#a6adc8', margin: 0 }}>正在生成二维码...</p>}
+            {!qrLoading && qrToken?.qrPayload && (
+              <div style={qrContentWrap}>
+                <div style={qrCodeWrap}>
+                  <QRCodeSVG
+                    value={qrToken.qrPayload}
+                    size={200}
+                    bgColor="#1e1e2e"
+                    fgColor="#cdd6f4"
+                    level="M"
+                  />
+                </div>
+                <div style={qrInfoBlock}>
+                  <p style={qrInfoRow}>
+                    <span style={qrInfoLabel}>配对码</span>
+                    <code style={qrCodeBox}>{qrToken.display ?? qrToken.code}</code>
+                  </p>
+                  {qrToken.pairUrl && (
+                    <p style={qrInfoRow}>
+                      <span style={qrInfoLabel}>配对地址</span>
+                      <code style={{ ...qrCodeBox, fontSize: 11, wordBreak: 'break-all' }}>{qrToken.pairUrl}</code>
+                    </p>
+                  )}
+                  <p style={{ color: '#6c7086', fontSize: 12, marginTop: 12, lineHeight: 1.5 }}>
+                    使用 Shepaw 移动端扫描二维码，或手动输入配对码和地址。
+                    二维码为一次性使用，首次握手后自动失效。
+                  </p>
+                </div>
+              </div>
+            )}
+            {!qrLoading && !qrToken && !qrErr && (
+              <p style={{ color: '#a6adc8', margin: 0, fontSize: 13 }}>点击"刷新"生成新的二维码。</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Edit form */}
       {showEdit && (
@@ -772,4 +874,59 @@ const credCancelBtn: React.CSSProperties = {
 const credDeleteBtn: React.CSSProperties = {
   background: 'transparent', border: '1px solid #f38ba8', color: '#f38ba8',
   borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 12,
+};
+
+// ── QR code section styles ────────────────────────────────────────
+
+const qrSection: React.CSSProperties = {
+  background: '#11111b', border: '1px solid #89dceb44',
+  borderRadius: 8, marginBottom: 20, overflow: 'hidden',
+};
+
+const qrSectionHeader: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  padding: '10px 14px', borderBottom: '1px solid #313244',
+  background: '#1e1e2e',
+};
+
+const qrBody: React.CSSProperties = {
+  padding: '16px 20px',
+};
+
+const qrContentWrap: React.CSSProperties = {
+  display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap',
+};
+
+const qrCodeWrap: React.CSSProperties = {
+  padding: 16, background: '#1e1e2e', borderRadius: 8,
+  border: '1px solid #313244', flexShrink: 0,
+};
+
+const qrInfoBlock: React.CSSProperties = {
+  flex: 1, minWidth: 200,
+};
+
+const qrInfoRow: React.CSSProperties = {
+  margin: '8px 0', display: 'flex', gap: 12,
+  alignItems: 'flex-start', color: '#cdd6f4', fontSize: 14,
+};
+
+const qrInfoLabel: React.CSSProperties = {
+  color: '#a6adc8', minWidth: 64, fontWeight: 500, fontSize: 13,
+};
+
+const qrCodeBox: React.CSSProperties = {
+  background: '#313244', padding: '2px 8px', borderRadius: 4,
+  fontSize: 14, letterSpacing: 2, color: '#cba6f7',
+};
+
+const qrRefreshBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #89dceb',
+  color: '#89dceb', borderRadius: 4, padding: '2px 10px',
+  cursor: 'pointer', fontSize: 12,
+};
+
+const qrCloseBtn: React.CSSProperties = {
+  background: 'transparent', border: 'none',
+  color: '#6c7086', fontSize: 16, cursor: 'pointer', padding: '0 2px',
 };

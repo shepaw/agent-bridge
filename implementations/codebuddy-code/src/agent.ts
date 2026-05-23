@@ -482,7 +482,12 @@ export class CodeBuddyCodeAgent extends ACPAgentServer {
     if (this.cfg.model !== undefined) options.model = this.cfg.model;
     if (this.cfg.maxTurns !== undefined) options.maxTurns = this.cfg.maxTurns;
     if (this.cfg.allowedTools && this.cfg.allowedTools.length > 0) {
-      options.allowedTools = this.cfg.allowedTools;
+      // Ensure AskUserQuestion is always allowed — it's not a "tool to approve"
+      // but rather a form for gathering user input. The SDK's handleAskUserQuestion
+      // already manages the async-confirmation flow via ui.form + FormAnswerStage.
+      const tools = new Set(this.cfg.allowedTools);
+      tools.add('AskUserQuestion');
+      options.allowedTools = Array.from(tools);
     }
     if (resumeId !== undefined) options.resume = resumeId;
     if (systemPrompt !== undefined) options.systemPrompt = systemPrompt;
