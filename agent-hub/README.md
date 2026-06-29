@@ -186,6 +186,14 @@ The web server exposes a REST API at `/api`. All requests/responses use JSON.
 | `GET` | `/api/projects/:id/sessions` | List persisted Shepaw→ACP session mappings |
 | `DELETE` | `/api/projects/:id/sessions/:shepawSessionId` | Remove a stale mapping |
 
+### Custom engines
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/engines` | List built-in + custom engines |
+| `POST` | `/api/engines` | Register `{ id, displayName, acpCommand }` |
+| `DELETE` | `/api/engines/:id` | Remove a custom engine (409 if in use) |
+
 ### WebSocket Log Streaming
 
 Connect to `ws://<host>:<port>/ws/logs/<projectId>[?tail=N]`.

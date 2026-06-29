@@ -26,16 +26,17 @@ import {
 
 import { AcpSubprocess } from './acp-subprocess.js';
 import {
-  type AcpEngineId,
-  getEngineSpec,
-  isAcpEngineId,
+  resolveEngineSpec,
+  type AcpEngineSpec,
 } from './engines.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
 export interface AcpProxyAgentOptions {
-  /** Which upstream ACP agent to spawn. */
-  engine: AcpEngineId;
+  /** Engine id (built-in or custom). */
+  engine: string;
+  /** Override upstream spawn spec (custom engines from Hub). */
+  engineSpec?: AcpEngineSpec;
   name?: string;
   peersPath?: string;
   enrollmentsPath?: string;
@@ -59,11 +60,8 @@ export class AcpProxyAgent extends ACPAgentServer {
   private lastShepawSessionId: string | undefined;
 
   constructor(opts: AcpProxyAgentOptions) {
-    if (!isAcpEngineId(opts.engine)) {
-      throw new Error(`Unknown ACP engine: ${String(opts.engine)}`);
-    }
+    const spec = opts.engineSpec ?? resolveEngineSpec(opts.engine);
 
-    const spec = getEngineSpec(opts.engine);
     super({
       name: opts.name ?? spec.defaultAgentName,
       peersPath: opts.peersPath,
@@ -140,5 +138,16 @@ export class AcpProxyAgent extends ACPAgentServer {
   }
 }
 
-export { isAcpEngineId, listEngineIds, ACP_ENGINES } from './engines.js';
-export type { AcpEngineId } from './engines.js';
+export {
+  ACP_ENGINES,
+  BUILTIN_ENGINE_IDS,
+  getBuiltinEngineSpec,
+  getEngineSpec,
+  isAcpEngineId,
+  isBuiltinEngineId,
+  listBuiltinEngineIds,
+  listEngineIds,
+  resolveEngineSpec,
+} from './engines.js';
+export type { AcpEngineId, AcpEngineSpec, BuiltinEngineId, ResolveEngineSpecOptions } from './engines.js';
+export { formatShellCommand, parseShellCommand } from './command-line.js';

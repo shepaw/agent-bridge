@@ -47,14 +47,20 @@ import {
 
 import {
   addProject,
+  addCustomEngineToHub,
   findProject,
   getProject,
   loadOrCreateHubConfig,
+  listEngineInfos,
   ProjectExistsError,
   ProjectNotFoundError,
-  type AgentEngine,
+  removeCustomEngineFromHub,
+  isKnownEngine,
   type ProjectConfig,
   type TunnelConfig,
+  CustomEngineExistsError,
+  CustomEngineInUseError,
+  CustomEngineNotFoundError,
 } from '@shepaw/agent-hub-core';
 import {
   ensureProjectDir,
@@ -105,7 +111,7 @@ cli
 
 cli
   .command('project-add <id>', 'Register a new agent project')
-  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code | tclaude | codex | tcodex | opencode | openclaw | cursor | hermes', { default: 'codebuddy' })
+  .option('--engine <engine>', 'Gateway engine id (built-in or custom; see shepaw-hub engine list)', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
   .option('--label <text>', 'Display name shown in `status`')
   .option('--port <n>', 'Bind port (default: next free port from 8090)')
@@ -131,7 +137,7 @@ cli
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      const engine = parseEngine(opts.engine);
+      const engine = parseEngine(opts.engine, cfg);
       const reservedPorts = cfg.projects.map((p) => p.port);
       const port = opts.port !== undefined
         ? Number(opts.port)
@@ -706,6 +712,60 @@ cli
     }
   });
 
+// ── custom engines ────────────────────────────────────────────────
+
+cli
+  .command('engine list', 'List built-in and custom ACP engines')
+  .action(() => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      const engines = listEngineInfos(cfg.customEngines);
+      console.log('  ID              DISPLAY NAME           TYPE       ACP COMMAND');
+      for (const e of engines) {
+        const cmd = e.acpCommand.length > 40 ? `${e.acpCommand.slice(0, 37)}...` : e.acpCommand;
+        console.log(
+          `  ${e.id.padEnd(16)}${e.displayName.padEnd(23)}${(e.builtin ? 'built-in' : 'custom').padEnd(11)}${cmd || '—'}`,
+        );
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('engine add <id>', 'Register a custom local ACP CLI')
+  .option('--display <name>', 'Human-readable name shown in Hub UI')
+  .option('--command <cmd>', 'Upstream ACP spawn command, e.g. "my-agent acp"')
+  .action((id: string, opts: { display?: string; command?: string }) => {
+    try {
+      if (!opts.command || opts.command.trim().length === 0) {
+        console.error('Error: --command is required.');
+        process.exit(1);
+      }
+      const cfg = loadOrCreateHubConfig();
+      addCustomEngineToHub(cfg, {
+        id,
+        displayName: opts.display ?? id,
+        acpCommand: opts.command,
+      });
+      console.log(`Registered custom engine "${id}".`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('engine remove <id>', 'Remove a custom engine definition')
+  .action((id: string) => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      removeCustomEngineFromHub(cfg, id);
+      console.log(`Removed custom engine "${id}".`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
 // ── web dashboard ──────────────────────────────────────────────────
 
 cli
@@ -762,27 +822,23 @@ cli.parse();
 
 // ── helpers ────────────────────────────────────────────────────────
 
-function parseEngine(raw: string): AgentEngine {
-  if (
-    raw === 'codebuddy'
-    || raw === 'claude-code'
-    || raw === 'tclaude'
-    || raw === 'codex'
-    || raw === 'tcodex'
-    || raw === 'opencode'
-    || raw === 'openclaw'
-    || raw === 'cursor'
-    || raw === 'hermes'
-  ) {
-    return raw;
+function parseEngine(raw: string, cfg: ReturnType<typeof loadOrCreateHubConfig>): string {
+  if (!isKnownEngine(raw, cfg.customEngines)) {
+    throw new Error(
+      `Invalid --engine: "${raw}". Run 'shepaw-hub engine list' for built-in and custom engines.`,
+    );
   }
-  throw new Error(
-    `Invalid --engine: "${raw}". Expected codebuddy, claude-code, tclaude, codex, tcodex, opencode, openclaw, cursor, or hermes.`,
-  );
+  return raw;
 }
 
 function exitWithError(err: unknown): never {
-  if (err instanceof ProjectNotFoundError || err instanceof ProjectExistsError) {
+  if (
+    err instanceof ProjectNotFoundError
+    || err instanceof ProjectExistsError
+    || err instanceof CustomEngineExistsError
+    || err instanceof CustomEngineNotFoundError
+    || err instanceof CustomEngineInUseError
+  ) {
     console.error(err.message);
     process.exit(1);
   }

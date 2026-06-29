@@ -1,6 +1,8 @@
 import type {
+  CreateCustomEngineInput,
   CreateProjectInput,
   EnrollToken,
+  EngineInfo,
   HubMeta,
   Peer,
   Project,
@@ -95,5 +97,15 @@ export const api = {
       request(`/projects/${projectId}/sessions/${encodeURIComponent(shepawSessionId)}`, {
         method: 'DELETE',
       }),
+  },
+
+  engines: {
+    list: (): Promise<{ engines: EngineInfo[] }> => request('/engines'),
+
+    create: (input: CreateCustomEngineInput): Promise<{ engine: EngineInfo }> =>
+      request('/engines', { method: 'POST', body: JSON.stringify(input) }),
+
+    remove: (id: string): Promise<void> =>
+      request(`/engines/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 };

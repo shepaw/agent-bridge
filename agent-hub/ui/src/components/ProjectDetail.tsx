@@ -504,7 +504,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
 
       {/* Credentials */}
       {(() => {
-        const fields = ENGINE_CREDS[project.engine] ?? [];
+        const fields = ENGINE_CREDS[project.engine as AgentEngine] ?? [];
         // Also show any custom keys not in the predefined list
         const knownKeys = new Set(fields.map((f) => f.key));
         const extraKeys = (project.envVarKeys ?? []).filter((k) => !knownKeys.has(k));

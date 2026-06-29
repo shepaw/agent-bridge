@@ -20,7 +20,12 @@ import {
 } from 'shepaw-acp-sdk';
 
 import { AcpProxyAgent } from './agent.js';
-import { getEngineSpec, isAcpEngineId, listEngineIds } from './engines.js';
+import {
+  formatShellCommand,
+  getBuiltinEngineSpec,
+  listBuiltinEngineIds,
+  resolveEngineSpec,
+} from './engines.js';
 import { listUpstreamAcpSessions, readStoredSessions } from './sessions-list.js';
 
 if (process.argv[2] === 'peers' && typeof process.argv[3] === 'string' && !process.argv[3].startsWith('-')) {
@@ -32,9 +37,11 @@ const cli = cac('shepaw-acp-proxy');
 
 cli
   .command('serve', 'Start the Shepaw ACP proxy gateway')
-  .option('--engine <id>', `Upstream ACP agent (${listEngineIds().join(', ')})`, {
+  .option('--engine <id>', `Engine id (built-in: ${listBuiltinEngineIds().join(', ')})`, {
     default: process.env.SHEPAW_ACP_ENGINE ?? 'claude-code',
   })
+  .option('--engine-display-name <name>', 'Display name for custom engines')
+  .option('--acp-command <cmd>', 'Upstream ACP spawn command (required for custom engines)')
   .option('--cwd <dir>', 'Working directory for the upstream agent', {
     default: process.cwd(),
   })
@@ -52,17 +59,38 @@ cli
   .option('--tunnel-channel-id <id>', 'Channel ID')
   .option('--tunnel-secret <secret>', 'Channel secret')
   .option('--tunnel-endpoint <name>', 'Optional tunnel endpoint alias')
-  .action(async (opts) => {
+  .action(async (opts: {
+    engine: string;
+    engineDisplayName?: string;
+    acpCommand?: string;
+    cwd: string;
+    port: string | number;
+    host: string;
+    name?: string;
+    peersPath?: string;
+    enrollmentsPath?: string;
+    identityPath?: string;
+    sessionStorePath?: string;
+    tunnel?: boolean;
+    tunnelServer?: string;
+    tunnelChannelId?: string;
+    tunnelSecret?: string;
+    tunnelEndpoint?: string;
+  }) => {
     const engine = String(opts.engine);
-    if (!isAcpEngineId(engine)) {
-      console.error(
-        `Unknown --engine "${engine}". Supported: ${listEngineIds().join(', ')}`,
-      );
+
+    let spec;
+    try {
+      spec = resolveEngineSpec(engine, {
+        displayName: opts.engineDisplayName,
+        acpCommand: opts.acpCommand,
+      });
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }
 
     const port = Number(opts.port);
-    const spec = getEngineSpec(engine);
 
     let tunnelConfig: ChannelTunnelConfig | undefined;
     const serverUrl: string | undefined = opts.tunnelServer ?? process.env.PAW_ACP_TUNNEL_SERVER_URL;
@@ -85,6 +113,7 @@ cli
 
     const agent = new AcpProxyAgent({
       engine,
+      engineSpec: spec,
       name: opts.name ?? spec.defaultAgentName,
       cwd: opts.cwd,
       peersPath: opts.peersPath,
@@ -102,15 +131,15 @@ cli
   });
 
 cli
-  .command('engines', 'List supported upstream ACP agents')
+  .command('engines', 'List built-in upstream ACP agents')
   .action(() => {
-    console.log('Supported --engine values:\n');
-    for (const id of listEngineIds()) {
-      const spec = getEngineSpec(id);
+    console.log('Built-in --engine values:\n');
+    for (const id of listBuiltinEngineIds()) {
+      const spec = getBuiltinEngineSpec(id);
       console.log(`  ${id.padEnd(14)}  ${spec.displayName}`);
-      console.log(`  ${''.padEnd(14)}  ${spec.command} ${spec.args.join(' ')}`);
+      console.log(`  ${''.padEnd(14)}  ${formatShellCommand(spec.command, spec.args)}`);
     }
-    console.log('');
+    console.log('\nCustom engines: register via Agent Hub or pass --acp-command on serve.\n');
   });
 
 cli
@@ -243,23 +272,25 @@ cli
 
 cli
   .command('sessions acp-list', 'List upstream ACP agent sessions (session/list)')
-  .option('--engine <id>', `Upstream ACP agent (${listEngineIds().join(', ')})`, {
+  .option('--engine <id>', `Upstream ACP agent (${listBuiltinEngineIds().join(', ')})`, {
     default: process.env.SHEPAW_ACP_ENGINE ?? 'claude-code',
   })
+  .option('--acp-command <cmd>', 'Upstream ACP spawn command (for custom engines)')
   .option('--cwd <dir>', 'Working directory filter', { default: process.cwd() })
-  .action(async (opts: { engine: string; cwd: string }) => {
+  .action(async (opts: { engine: string; acpCommand?: string; cwd: string }) => {
     const engine = String(opts.engine);
-    if (!isAcpEngineId(engine)) {
-      console.error(`Unknown --engine "${engine}". Supported: ${listEngineIds().join(', ')}`);
+    try {
+      const spec = resolveEngineSpec(engine, { acpCommand: opts.acpCommand });
+      const sessions = await listUpstreamAcpSessions(spec, opts.cwd);
+      if (sessions.length === 0) {
+        console.log('No upstream ACP sessions.');
+        return;
+      }
+      console.log(JSON.stringify(sessions, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }
-    const spec = getEngineSpec(engine);
-    const sessions = await listUpstreamAcpSessions(spec, opts.cwd);
-    if (sessions.length === 0) {
-      console.log('No upstream ACP sessions.');
-      return;
-    }
-    console.log(JSON.stringify(sessions, null, 2));
   });
 
 cli.help((sections) => {

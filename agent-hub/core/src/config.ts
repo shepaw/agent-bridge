@@ -33,25 +33,41 @@ import { dirname } from 'node:path';
 
 import { hubConfigPath, validateProjectId, normalizeCwd, hubRoot } from './paths.js';
 import { encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
+import {
+  addCustomEngine,
+  BUILTIN_ENGINE_IDS,
+  isKnownEngine,
+  parseCustomEngines,
+  removeCustomEngine,
+  type CustomEngineDefinition,
+  type BuiltinAgentEngine,
+  CustomEngineInUseError,
+} from './engines.js';
+
+export {
+  BUILTIN_ENGINE_IDS,
+  BUILTIN_ENGINE_LABELS,
+  addCustomEngine,
+  findCustomEngine,
+  formatShellCommand,
+  isBuiltinEngine,
+  isKnownEngine,
+  listEngineInfos,
+  parseShellCommand,
+  removeCustomEngine,
+  validateCustomEngineId,
+  CustomEngineExistsError,
+  CustomEngineInUseError,
+  CustomEngineNotFoundError,
+} from './engines.js';
+export type {
+  AgentEngine,
+  BuiltinAgentEngine,
+  CustomEngineDefinition,
+  EngineInfo,
+} from './engines.js';
 
 // ── types ──────────────────────────────────────────────────────────
-
-/**
- * Which gateway binary the hub spawns for this project.
- *
- * Keeping this as a string union (not an enum) so adding a new engine later
- * only requires editing this file and `resolveEngineCliPath` in spawn.ts.
- */
-export type AgentEngine =
-  | 'codebuddy'
-  | 'claude-code'
-  | 'tclaude'
-  | 'codex'
-  | 'tcodex'
-  | 'opencode'
-  | 'openclaw'
-  | 'cursor'
-  | 'hermes';
 
 /**
  * Tunnel configuration for a Shepaw Channel Service channel.
@@ -78,8 +94,8 @@ export interface ProjectConfig {
   readonly id: string;
   /** Display name shown in `shepaw-hub status`. Free-form string. */
   readonly label: string;
-  /** Gateway implementation to spawn. */
-  readonly engine: AgentEngine;
+  /** Built-in or custom engine id. */
+  readonly engine: string;
   /** Absolute path to the working directory the gateway runs in. */
   readonly cwd: string;
   /** Local TCP port to bind to. Allocated by `ports.nextFreePort` on add. */
@@ -135,11 +151,13 @@ export interface CredentialHint {
  * Stored at the hub (global) level so adding a new project with the same
  * engine can pre-fill credentials without the user having to re-enter them.
  */
-export type HubCredentialCache = Partial<Record<AgentEngine, Record<string, CredentialHint>>>;
+export type HubCredentialCache = Partial<Record<BuiltinAgentEngine, Record<string, CredentialHint>>>;
 
 export interface HubConfig {
   readonly path: string;
   readonly projects: ReadonlyArray<ProjectConfig>;
+  /** User-registered local ACP CLIs. */
+  readonly customEngines: ReadonlyArray<CustomEngineDefinition>;
   /** Last Tunnel Server URL used — pre-filled when creating a new project. */
   readonly lastTunnelServerUrl?: string;
   /** Last Tunnel Secret hint (masked + encrypted) — pre-filled when creating a new project. */
@@ -163,8 +181,8 @@ export interface LoadHubOptions {
 export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
   const path = opts.path ?? hubConfigPath();
   if (!existsSync(path)) {
-    persist(path, [], {});
-    return { path, projects: [] };
+    persist(path, [], { customEngines: [] });
+    return { path, projects: [], customEngines: [] };
   }
   return loadExisting(path);
 }
@@ -174,8 +192,8 @@ export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
  * if the file's permission bits have been loosened (to catch accidental
  * `chmod -R 755 ~/.config/shepaw-hub`).
  */
-export function saveHubConfig(path: string, projects: ReadonlyArray<ProjectConfig>): void {
-  persist(path, projects);
+export function saveHubConfig(path: string, config: Pick<HubConfig, 'projects' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints'>): void {
+  persist(path, config.projects, hubPersistMeta(config));
 }
 
 /**
@@ -193,11 +211,28 @@ export function updateHubMeta(
     ...(meta.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: meta.lastTunnelSecretHint }),
     ...(meta.credentialHints !== undefined && { credentialHints: meta.credentialHints }),
   };
-  persist(next.path, next.projects, {
-    lastTunnelServerUrl: next.lastTunnelServerUrl,
-    lastTunnelSecretHint: next.lastTunnelSecretHint,
-    credentialHints: next.credentialHints,
-  });
+  persist(next.path, next.projects, hubPersistMeta(next));
+  return next;
+}
+
+export function addCustomEngineToHub(
+  config: HubConfig,
+  input: { id: string; displayName: string; acpCommand: string },
+): HubConfig {
+  const customEngines = addCustomEngine(config.customEngines, input);
+  const next: HubConfig = { ...config, customEngines };
+  persist(next.path, next.projects, hubPersistMeta(next));
+  return next;
+}
+
+export function removeCustomEngineFromHub(config: HubConfig, id: string): HubConfig {
+  const inUse = config.projects.filter((p) => p.engine === id).map((p) => p.id);
+  if (inUse.length > 0) {
+    throw new CustomEngineInUseError(id, inUse);
+  }
+  const customEngines = removeCustomEngine(config.customEngines, id);
+  const next: HubConfig = { ...config, customEngines };
+  persist(next.path, next.projects, hubPersistMeta(next));
   return next;
 }
 
@@ -239,14 +274,16 @@ export function addProject(
         `Omit --port to let the hub pick the next free one, or choose a different port.`,
     );
   }
+  if (!isKnownEngine(normalized.engine, config.customEngines)) {
+    throw new Error(
+      `Unknown engine "${normalized.engine}". ` +
+        `Use a built-in engine or register a custom one (shepaw-hub engine add).`,
+    );
+  }
 
   const next = [...config.projects, normalized];
-  persist(config.path, next, {
-    lastTunnelServerUrl: config.lastTunnelServerUrl,
-    lastTunnelSecretHint: config.lastTunnelSecretHint,
-    credentialHints: config.credentialHints,
-  });
-  return { path: config.path, projects: next, lastTunnelServerUrl: config.lastTunnelServerUrl, lastTunnelSecretHint: config.lastTunnelSecretHint, credentialHints: config.credentialHints };
+  persist(config.path, next, hubPersistMeta(config));
+  return { ...config, projects: next };
 }
 
 /**
@@ -260,12 +297,8 @@ export function removeProject(config: HubConfig, id: string): HubConfig {
       `No project with id "${id}". Run 'shepaw-hub project list' to see registered projects.`,
     );
   }
-  persist(config.path, filtered, {
-    lastTunnelServerUrl: config.lastTunnelServerUrl,
-    lastTunnelSecretHint: config.lastTunnelSecretHint,
-    credentialHints: config.credentialHints,
-  });
-  return { path: config.path, projects: filtered, lastTunnelServerUrl: config.lastTunnelServerUrl, lastTunnelSecretHint: config.lastTunnelSecretHint, credentialHints: config.credentialHints };
+  persist(config.path, filtered, hubPersistMeta(config));
+  return { ...config, projects: filtered };
 }
 
 /**
@@ -326,6 +359,9 @@ export function updateProject(
   }
 
   const { mergeEnvVars: _m, clearEnvVars: _c, deleteEnvVarKey: _d, ...rest } = patch;
+  if (rest.engine !== undefined && !isKnownEngine(rest.engine, config.customEngines)) {
+    throw new Error(`Unknown engine "${rest.engine}".`);
+  }
   const next: ProjectConfig = {
     ...existing,
     ...rest,
@@ -334,12 +370,8 @@ export function updateProject(
     envVars,
   };
   const nextList = [...config.projects.slice(0, idx), next, ...config.projects.slice(idx + 1)];
-  persist(config.path, nextList, {
-    lastTunnelServerUrl: config.lastTunnelServerUrl,
-    lastTunnelSecretHint: config.lastTunnelSecretHint,
-    credentialHints: config.credentialHints,
-  });
-  return { path: config.path, projects: nextList, lastTunnelServerUrl: config.lastTunnelServerUrl, lastTunnelSecretHint: config.lastTunnelSecretHint, credentialHints: config.credentialHints };
+  persist(config.path, nextList, hubPersistMeta(config));
+  return { ...config, projects: nextList };
 }
 
 /**
@@ -383,9 +415,21 @@ export class ProjectNotFoundError extends Error {
 interface OnDiskSchema {
   version: 1;
   projects: Array<ProjectConfig>;
+  customEngines?: Array<CustomEngineDefinition>;
   lastTunnelServerUrl?: string;
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
+}
+
+function hubPersistMeta(
+  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines'>,
+): PersistOptions {
+  return {
+    lastTunnelServerUrl: config.lastTunnelServerUrl,
+    lastTunnelSecretHint: config.lastTunnelSecretHint,
+    credentialHints: config.credentialHints,
+    customEngines: config.customEngines,
+  };
 }
 
 function loadExisting(path: string): HubConfig {
@@ -422,6 +466,8 @@ function loadExisting(path: string): HubConfig {
     throw new Error(`Hub config at ${path}: 'projects' must be an array.`);
   }
 
+  const customEngines = parseCustomEngines(obj.customEngines);
+
   const projects: ProjectConfig[] = [];
   for (let i = 0; i < obj.projects.length; i++) {
     const raw = obj.projects[i];
@@ -429,12 +475,10 @@ function loadExisting(path: string): HubConfig {
       throw new Error(`Hub config at ${path}: entry #${i} must be a JSON object.`);
     }
     const p = raw as Record<string, unknown>;
-    // Fill in defaults for optional fields so older configs keep working
-    // after we add new fields.
     const entry: ProjectConfig = {
       id: requireString(p.id, `projects[${i}].id`, path),
       label: typeof p.label === 'string' ? p.label : '',
-      engine: requireEngine(p.engine, `projects[${i}].engine`, path),
+      engine: requireProjectEngine(p.engine, customEngines, `projects[${i}].engine`, path),
       cwd: requireString(p.cwd, `projects[${i}].cwd`, path),
       port: requireNumber(p.port, `projects[${i}].port`, path),
       host: typeof p.host === 'string' ? p.host : '127.0.0.1',
@@ -454,6 +498,7 @@ function loadExisting(path: string): HubConfig {
   return {
     path,
     projects,
+    customEngines,
     lastTunnelServerUrl: typeof obj.lastTunnelServerUrl === 'string' ? obj.lastTunnelServerUrl : undefined,
     lastTunnelSecretHint: parseCredentialHint(obj.lastTunnelSecretHint),
     credentialHints: parseCredentialHints(obj.credentialHints),
@@ -464,12 +509,14 @@ interface PersistOptions {
   lastTunnelServerUrl?: string;
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
+  customEngines?: ReadonlyArray<CustomEngineDefinition>;
 }
 
 function persist(path: string, projects: ReadonlyArray<ProjectConfig>, opts?: PersistOptions): void {
   const schema: OnDiskSchema = {
     version: 1,
     projects: [...projects],
+    ...(opts?.customEngines !== undefined && { customEngines: [...opts.customEngines] }),
     ...(opts?.lastTunnelServerUrl !== undefined && { lastTunnelServerUrl: opts.lastTunnelServerUrl }),
     ...(opts?.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: opts.lastTunnelSecretHint }),
     ...(opts?.credentialHints !== undefined && { credentialHints: opts.credentialHints }),
@@ -497,23 +544,22 @@ function requireNumber(v: unknown, field: string, file: string): number {
   return v;
 }
 
-function requireEngine(v: unknown, field: string, file: string): AgentEngine {
-  if (
-    v === 'codebuddy'
-    || v === 'claude-code'
-    || v === 'tclaude'
-    || v === 'codex'
-    || v === 'tcodex'
-    || v === 'opencode'
-    || v === 'openclaw'
-    || v === 'cursor'
-    || v === 'hermes'
-  ) {
-    return v;
+function requireProjectEngine(
+  v: unknown,
+  customEngines: ReadonlyArray<CustomEngineDefinition>,
+  field: string,
+  file: string,
+): string {
+  if (typeof v !== 'string' || v.length === 0) {
+    throw new Error(`Hub config at ${file}: ${field} must be a non-empty string.`);
   }
-  throw new Error(
-    `Hub config at ${file}: ${field} must be one of: codebuddy, claude-code, tclaude, codex, tcodex, opencode, openclaw, cursor, hermes (got ${JSON.stringify(v)}).`,
-  );
+  if (!isKnownEngine(v, customEngines)) {
+    throw new Error(
+      `Hub config at ${file}: ${field} references unknown engine "${v}". ` +
+        `Register it under customEngines or use a built-in id.`,
+    );
+  }
+  return v;
 }
 
 function parseEnvVarsConfig(v: unknown): Record<string, string> {
@@ -554,17 +600,7 @@ function parseCredentialHints(v: unknown): HubCredentialCache | undefined {
   if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
   const obj = v as Record<string, unknown>;
   const out: HubCredentialCache = {};
-  const engines: AgentEngine[] = [
-    'codebuddy',
-    'claude-code',
-    'tclaude',
-    'codex',
-    'tcodex',
-    'opencode',
-    'openclaw',
-    'cursor',
-    'hermes',
-  ];
+  const engines: BuiltinAgentEngine[] = [...BUILTIN_ENGINE_IDS];
   for (const engine of engines) {
     const hints = obj[engine];
     if (hints === null || typeof hints !== 'object' || Array.isArray(hints)) continue;

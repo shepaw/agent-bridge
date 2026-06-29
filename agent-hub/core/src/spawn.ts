@@ -45,7 +45,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
-import type { ProjectConfig, AgentEngine } from './config.js';
+import type { ProjectConfig } from './config.js';
+import { loadOrCreateHubConfig } from './config.js';
+import { findCustomEngine, formatShellCommand } from './engines.js';
 import { projectPaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
 
@@ -98,27 +100,15 @@ export async function startProject(project: ProjectConfig): Promise<{
     );
   }
 
-  const cliPath = resolveEngineCliPath(project.engine);
+  const cliPath = resolveEngineCliPath();
 
-  // Open a rotating log stream. Files rotated by size OR weekly, whichever
-  // comes first; keep last 7 rotated segments. Matches what a casual user
-  // would get from logrotate without them having to configure anything.
-  //
-  // rotating-file-stream is NOT a file descriptor, so to pass it to
-  // child.stdio we need to pipe() from the child's stdout/stderr. Easier
-  // path: open a plain file, use that as the FD for child stdio, and let
-  // rotation happen by renaming the file underneath the process (Node's
-  // write stream to a renamed file keeps working on Unix; on Windows we
-  // SIGHUP-style close-reopen is not trivial).
-  //
-  // Compromise: we open the FD directly. The rotating-file-stream is used
-  // from `hub logs` on read-time and from a separate lightweight rotation
-  // hook invoked by `hub logs rotate` / future cron. Simpler and 100%
-  // cross-platform.
   mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
   const logFd = openSync(paths.logFile, 'a');
 
   try {
+    const hubCfg = loadOrCreateHubConfig();
+    const customEngine = findCustomEngine(hubCfg.customEngines, project.engine);
+
     const args = [
       cliPath,
       'serve',
@@ -129,6 +119,11 @@ export async function startProject(project: ProjectConfig): Promise<{
       '--session-store-path', paths.sessionsPath,
       ...project.extraArgs,
     ];
+
+    if (customEngine !== undefined) {
+      args.push('--engine-display-name', customEngine.displayName);
+      args.push('--acp-command', formatShellCommand(customEngine.command, customEngine.args));
+    }
 
     const child = nodeSpawn(process.execPath, args, {
       // Detached so the child survives the hub CLI exiting. On Windows this
@@ -394,7 +389,7 @@ export async function rotateProjectLogs(projectId: string): Promise<void> {
  * packages must be installed globally too, or in the same project as the
  * hub. Standard npm workspace behavior handles this for our monorepo use.
  */
-function resolveEngineCliPath(_engine: AgentEngine): string {
+function resolveEngineCliPath(): string {
   const require = createRequire(import.meta.url);
   const pkg = 'shepaw-acp-proxy-gateway/cli';
   try {

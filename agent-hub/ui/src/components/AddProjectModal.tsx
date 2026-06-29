@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client.js';
-import type { AgentEngine, HubMeta } from '../api/types.js';
+import type { AgentEngine, EngineInfo, HubMeta } from '../api/types.js';
 
 // Engine-specific credential field definitions (mirrors ProjectDetail)
 interface CredField {
@@ -47,7 +47,8 @@ interface AddProjectModalProps {
 export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   const [id, setId] = useState('');
   const [label, setLabel] = useState('');
-  const [engine, setEngine] = useState<AgentEngine>('codebuddy');
+  const [engine, setEngine] = useState<string>('codebuddy');
+  const [engineOptions, setEngineOptions] = useState<EngineInfo[]>([]);
   const [cwd, setCwd] = useState('');
   const [host, setHost] = useState('127.0.0.1');
   const [baseUrl, setBaseUrl] = useState('');
@@ -69,6 +70,12 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   const [err, setErr] = useState<string | null>(null);
   const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
 
+  useEffect(() => {
+    api.engines.list()
+      .then(({ engines }) => setEngineOptions(engines))
+      .catch(() => { /* fallback to built-in only in select */ });
+  }, []);
+
   // Load hub metadata once for pre-filling hints
   useEffect(() => {
     api.projects.meta().then((meta) => {
@@ -82,12 +89,11 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   // When engine changes, update credential hints for the new engine
   useEffect(() => {
     if (!hubMeta) return;
-    const hints = hubMeta.credentialHints[engine] ?? {};
+    const hints = hubMeta.credentialHints[engine as AgentEngine] ?? {};
     setCredHints(hints);
-    // Pre-select "use cached" for keys that have hints, clear the input value
     const usingCache: Record<string, boolean> = {};
     const values: Record<string, string> = {};
-    for (const field of ENGINE_CREDS[engine]) {
+    for (const field of (ENGINE_CREDS[engine as AgentEngine] ?? [])) {
       if (hints[field.key]) {
         usingCache[field.key] = true;
         values[field.key] = ''; // empty = will use cached (sent as undefined to API)
@@ -139,7 +145,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
       // Keys in "use cache" mode are omitted — the backend will auto-fill them from
       // the hub-level credentialHints store.
       const envVars: Record<string, string> = {};
-      for (const field of ENGINE_CREDS[engine]) {
+      for (const field of (ENGINE_CREDS[engine as AgentEngine] ?? [])) {
         const val = credValues[field.key] ?? '';
         if (!credUsingCache[field.key] && val.length > 0) {
           envVars[field.key] = val;
@@ -165,7 +171,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
     }
   };
 
-  const credFields = ENGINE_CREDS[engine];
+  const credFields = ENGINE_CREDS[engine as AgentEngine] ?? [];
 
   return (
     <div style={overlay}>
@@ -183,16 +189,16 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
           <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Project" />
 
           <label style={lbl}>Engine <span style={req}>*</span></label>
-          <select style={inp} value={engine} onChange={(e) => setEngine(e.target.value as AgentEngine)}>
-            <option value="codebuddy">codebuddy</option>
-            <option value="claude-code">claude-code</option>
-            <option value="tclaude">tclaude</option>
-            <option value="codex">codex</option>
-            <option value="tcodex">tcodex</option>
-            <option value="opencode">opencode</option>
-            <option value="openclaw">openclaw</option>
-            <option value="cursor">cursor</option>
-            <option value="hermes">hermes</option>
+          <select style={inp} value={engine} onChange={(e) => setEngine(e.target.value)}>
+            {engineOptions.length > 0
+              ? engineOptions.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.builtin ? e.displayName : `${e.displayName} (custom)`}
+                </option>
+              ))
+              : Object.keys(ENGINE_CREDS).map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
           </select>
 
           <label style={lbl}>Working Directory <span style={req}>*</span></label>

@@ -4,9 +4,14 @@
  * Each entry spawns a subprocess that speaks JSON-RPC over stdio using the
  * Agent Client Protocol (https://agentclientprotocol.com). The unified proxy
  * acts as the ACP Client; these processes are the ACP Agents.
+ *
+ * Built-in engines are listed here; operators can also register custom local
+ * CLIs via Hub or `--acp-command` on the gateway CLI.
  */
 
-export type AcpEngineId =
+import { parseShellCommand } from './command-line.js';
+
+export type BuiltinEngineId =
   | 'claude-code'
   | 'tclaude'
   | 'codebuddy'
@@ -17,8 +22,11 @@ export type AcpEngineId =
   | 'cursor'
   | 'hermes';
 
+/** @deprecated Use BuiltinEngineId — kept for existing imports. */
+export type AcpEngineId = BuiltinEngineId;
+
 export interface AcpEngineSpec {
-  readonly id: AcpEngineId;
+  readonly id: string;
   readonly displayName: string;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -26,7 +34,15 @@ export interface AcpEngineSpec {
   readonly defaultAgentName: string;
 }
 
-export const ACP_ENGINES: Record<AcpEngineId, AcpEngineSpec> = {
+export interface ResolveEngineSpecOptions {
+  readonly displayName?: string;
+  /** Full shell command when overriding or defining a custom engine. */
+  readonly acpCommand?: string;
+  readonly command?: string;
+  readonly args?: ReadonlyArray<string>;
+}
+
+export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
   'claude-code': {
     id: 'claude-code',
     displayName: 'Claude Code',
@@ -92,16 +108,66 @@ export const ACP_ENGINES: Record<AcpEngineId, AcpEngineSpec> = {
   },
 };
 
-export function isAcpEngineId(value: string): value is AcpEngineId {
+export const BUILTIN_ENGINE_IDS = Object.keys(ACP_ENGINES) as BuiltinEngineId[];
+
+export function isBuiltinEngineId(value: string): value is BuiltinEngineId {
   return Object.prototype.hasOwnProperty.call(ACP_ENGINES, value);
 }
 
-export function getEngineSpec(id: AcpEngineId): AcpEngineSpec {
+/** @deprecated Use isBuiltinEngineId */
+export function isAcpEngineId(value: string): value is BuiltinEngineId {
+  return isBuiltinEngineId(value);
+}
+
+export function getBuiltinEngineSpec(id: BuiltinEngineId): AcpEngineSpec {
   return ACP_ENGINES[id];
 }
 
-export function listEngineIds(): AcpEngineId[] {
-  return Object.keys(ACP_ENGINES) as AcpEngineId[];
+/** @deprecated Use getBuiltinEngineSpec */
+export function getEngineSpec(id: BuiltinEngineId): AcpEngineSpec {
+  return getBuiltinEngineSpec(id);
+}
+
+export function listBuiltinEngineIds(): BuiltinEngineId[] {
+  return [...BUILTIN_ENGINE_IDS];
+}
+
+/** @deprecated Use listBuiltinEngineIds */
+export function listEngineIds(): BuiltinEngineId[] {
+  return listBuiltinEngineIds();
+}
+
+export function resolveEngineSpec(engineId: string, opts: ResolveEngineSpecOptions = {}): AcpEngineSpec {
+  if (opts.acpCommand !== undefined && opts.acpCommand.trim().length > 0) {
+    const parsed = parseShellCommand(opts.acpCommand);
+    const displayName = opts.displayName ?? engineId;
+    return {
+      id: engineId,
+      displayName,
+      command: parsed.command,
+      args: parsed.args,
+      defaultAgentName: displayName,
+    };
+  }
+
+  if (opts.command !== undefined) {
+    const displayName = opts.displayName ?? engineId;
+    return {
+      id: engineId,
+      displayName,
+      command: opts.command,
+      args: opts.args ?? [],
+      defaultAgentName: displayName,
+    };
+  }
+
+  if (isBuiltinEngineId(engineId)) {
+    return ACP_ENGINES[engineId];
+  }
+
+  throw new Error(
+    `Unknown engine "${engineId}". Register it in Agent Hub or pass --acp-command.`,
+  );
 }
 
 /** Resolve npx on Windows (.cmd shim). */

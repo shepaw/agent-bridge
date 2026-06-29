@@ -3,6 +3,7 @@ import { useProjects } from './hooks/useProjects.js';
 import { ProjectCard } from './components/ProjectCard.js';
 import { ProjectDetail } from './components/ProjectDetail.js';
 import { AddProjectModal } from './components/AddProjectModal.js';
+import { CustomEnginesModal } from './components/CustomEnginesModal.js';
 
 /** Read project id from URL hash, e.g. "#project/my-project" → "my-project" */
 function getHashProjectId(): string | null {
@@ -14,6 +15,7 @@ export function App() {
   const { projects, loading, error, reload } = useProjects();
   const [selected, setSelected] = useState<string | null>(getHashProjectId);
   const [showAdd, setShowAdd] = useState(false);
+  const [showEngines, setShowEngines] = useState(false);
 
   // Keep URL hash in sync with selected project
   useEffect(() => {
@@ -60,9 +62,14 @@ export function App() {
                 : `${projects.length} project${projects.length === 1 ? '' : 's'} · ${running} running`}
           </p>
         </div>
-        <button style={addBtn} onClick={() => setShowAdd(true)}>
-          + Add Project
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={secondaryBtn} onClick={() => setShowEngines(true)}>
+            Custom Engines
+          </button>
+          <button style={addBtn} onClick={() => setShowAdd(true)}>
+            + Add Project
+          </button>
+        </div>
       </div>
 
       {/* ── Project grid ───────────────────────────────────────── */}
@@ -92,6 +99,10 @@ export function App() {
           onClose={() => setShowAdd(false)}
           onCreated={reload}
         />
+      )}
+
+      {showEngines && (
+        <CustomEnginesModal onClose={() => setShowEngines(false)} />
       )}
     </Layout>
   );
@@ -146,6 +157,17 @@ const addBtn: React.CSSProperties = {
   background: '#89b4fa',
   color: '#11111b',
   border: 'none',
+  borderRadius: 6,
+  padding: '8px 18px',
+  cursor: 'pointer',
+  fontWeight: 600,
+  fontSize: 14,
+};
+
+const secondaryBtn: React.CSSProperties = {
+  background: 'transparent',
+  color: '#cdd6f4',
+  border: '1px solid #45475a',
   borderRadius: 6,
   padding: '8px 18px',
   cursor: 'pointer',

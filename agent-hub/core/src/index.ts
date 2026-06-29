@@ -8,12 +8,14 @@
 
 export {
   addProject,
+  addCustomEngineToHub,
   deleteProjectEnvVar,
   findProject,
   getProject,
   loadOrCreateHubConfig,
   ProjectExistsError,
   ProjectNotFoundError,
+  removeCustomEngineFromHub,
   removeProject,
   saveHubConfig,
   setProjectEnvVar,
@@ -52,3 +54,19 @@ export type { TailOptions } from './logs.js';
 
 export { deleteProjectSession, listProjectSessions } from './sessions.js';
 export type { ProjectSessionEntry } from './sessions.js';
+
+export {
+  BUILTIN_ENGINE_IDS,
+  BUILTIN_ENGINE_LABELS,
+  CustomEngineExistsError,
+  CustomEngineInUseError,
+  CustomEngineNotFoundError,
+  findCustomEngine,
+  formatShellCommand,
+  isBuiltinEngine,
+  isKnownEngine,
+  listEngineInfos,
+  parseShellCommand,
+  validateCustomEngineId,
+} from './engines.js';
+export type { AgentEngine, BuiltinAgentEngine, CustomEngineDefinition, EngineInfo } from './engines.js';

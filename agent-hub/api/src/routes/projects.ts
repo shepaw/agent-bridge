@@ -61,6 +61,7 @@ import {
   type HubCredentialCache,
   type ProjectConfig,
   type TunnelConfig,
+  isKnownEngine,
 } from '@shepaw/agent-hub-core';
 
 export const projectsRouter = Router();
@@ -90,24 +91,17 @@ function enrichProject(p: ProjectConfig) {
   };
 }
 
-function parseEngine(raw: unknown): AgentEngine {
-  const engines: AgentEngine[] = [
-    'codebuddy',
-    'claude-code',
-    'tclaude',
-    'codex',
-    'tcodex',
-    'opencode',
-    'openclaw',
-    'cursor',
-    'hermes',
-  ];
-  if (typeof raw === 'string' && (engines as string[]).includes(raw)) {
-    return raw as AgentEngine;
+function parseEngine(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error('Engine must be a non-empty string.');
   }
-  throw new Error(
-    `Invalid engine "${String(raw)}". Expected one of: ${engines.join(', ')}.`,
-  );
+  const cfg = loadOrCreateHubConfig();
+  if (!isKnownEngine(raw, cfg.customEngines)) {
+    throw new Error(
+      `Invalid engine "${raw}". Use a built-in engine or register a custom one under /api/engines.`,
+    );
+  }
+  return raw;
 }
 
 /**

@@ -23,6 +23,22 @@ Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
 - **Smarter load replay** — idle-based drain after `session/load` instead of a
   fixed 2s timeout
 
+## Custom local engines
+
+Built-in engines cannot cover every ACP CLI. Register your own:
+
+```sh
+# Agent Hub CLI
+shepaw-hub engine add my-agent --display "My Local Agent" --command "my-cli acp"
+
+# Gateway CLI (without Hub)
+node dist/cli.js serve --engine my-agent --engine-display-name "My Agent" \
+  --acp-command "my-cli acp" --cwd ~/project --port 8090
+```
+
+Custom engines are stored in `hub.json` under `customEngines` and appear in the Hub UI
+**Custom Engines** dialog and project engine picker.
+
 ## Supported upstream agents
 
 | `--engine`   | Upstream command |

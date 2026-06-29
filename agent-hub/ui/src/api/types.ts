@@ -40,7 +40,7 @@ export interface ProjectStatus {
 export interface Project {
   id: string;
   label: string;
-  engine: AgentEngine;
+  engine: string;
   cwd: string;
   port: number;
   host: string;
@@ -77,6 +77,19 @@ export interface ConversationMessage {
   content: string;
 }
 
+export interface EngineInfo {
+  id: string;
+  displayName: string;
+  acpCommand: string;
+  builtin: boolean;
+}
+
+export interface CreateCustomEngineInput {
+  id: string;
+  displayName: string;
+  acpCommand: string;
+}
+
 export interface SessionResume {
   sessionId: string;
   message?: string;
@@ -91,7 +104,7 @@ export interface StoredSession {
 
 export interface CreateProjectInput {
   id: string;
-  engine?: AgentEngine;
+  engine?: string;
   cwd: string;
   label?: string;
   port?: number;
