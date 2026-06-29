@@ -49,3 +49,6 @@ export type { ProjectState, StopResult } from './spawn.js';
 
 export { tailLog } from './logs.js';
 export type { TailOptions } from './logs.js';
+
+export { deleteProjectSession, listProjectSessions } from './sessions.js';
+export type { ProjectSessionEntry } from './sessions.js';

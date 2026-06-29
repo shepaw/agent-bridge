@@ -21,6 +21,7 @@ import {
 
 import { AcpProxyAgent } from './agent.js';
 import { getEngineSpec, isAcpEngineId, listEngineIds } from './engines.js';
+import { listUpstreamAcpSessions, readStoredSessions } from './sessions-list.js';
 
 if (process.argv[2] === 'peers' && typeof process.argv[3] === 'string' && !process.argv[3].startsWith('-')) {
   const sub = process.argv[3];
@@ -219,6 +220,46 @@ cli
   .action((code: string, opts: { enrollmentsPath?: string }) => {
     const ok = revokeEnrollmentToken(resolveEnrollmentsPath(opts.enrollmentsPath), code);
     process.exit(ok ? 0 : 1);
+  });
+
+cli
+  .command('sessions list', 'List persisted Shepaw→ACP session mappings')
+  .option('--session-store-path <path>', 'Path to sessions.json')
+  .action(async (opts: { sessionStorePath?: string }) => {
+    const path = opts.sessionStorePath ?? process.env.SHEPAW_SESSION_STORE_PATH;
+    if (path === undefined || path.length === 0) {
+      console.error('Provide --session-store-path or set SHEPAW_SESSION_STORE_PATH.');
+      process.exit(1);
+    }
+    const entries = await readStoredSessions(path);
+    if (entries.length === 0) {
+      console.log(`No sessions in ${path}`);
+      return;
+    }
+    for (const e of entries) {
+      console.log(`${e.shepawSessionId}\t${e.acpSessionId}`);
+    }
+  });
+
+cli
+  .command('sessions acp-list', 'List upstream ACP agent sessions (session/list)')
+  .option('--engine <id>', `Upstream ACP agent (${listEngineIds().join(', ')})`, {
+    default: process.env.SHEPAW_ACP_ENGINE ?? 'claude-code',
+  })
+  .option('--cwd <dir>', 'Working directory filter', { default: process.cwd() })
+  .action(async (opts: { engine: string; cwd: string }) => {
+    const engine = String(opts.engine);
+    if (!isAcpEngineId(engine)) {
+      console.error(`Unknown --engine "${engine}". Supported: ${listEngineIds().join(', ')}`);
+      process.exit(1);
+    }
+    const spec = getEngineSpec(engine);
+    const sessions = await listUpstreamAcpSessions(spec, opts.cwd);
+    if (sessions.length === 0) {
+      console.log('No upstream ACP sessions.');
+      return;
+    }
+    console.log(JSON.stringify(sessions, null, 2));
   });
 
 cli.help((sections) => {

@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import type { ConversationMessage } from '../api/types.js';
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api/client.js';
+import type { StoredSession } from '../api/types.js';
 
 interface SessionResumeProps {
   projectId: string;
@@ -7,95 +8,138 @@ interface SessionResumeProps {
 }
 
 export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
-  const [sessionId, setSessionId] = useState('');
-  const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [sessions, setSessions] = useState<StoredSession[]>([]);
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sessionId.trim()) {
-      setErr('Session ID is required');
-      return;
-    }
-
+  const loadSessions = useCallback(async () => {
     setLoading(true);
     setErr(null);
-    setSuccess(null);
-
     try {
-      // In a real scenario, this would call the agent.chat API with resume parameters.
-      // For now, we provide instructions since hub doesn't expose agent.chat yet.
-      
-      const resumePayload = {
-        session_id: sessionId,
-        message: message || 'continue',
-        history: [] as ConversationMessage[],
-      };
-
-      setSuccess(
-        `Resume request prepared. Use the CLI or app to send:\n\n` +
-        JSON.stringify(resumePayload, null, 2),
-      );
-      
-      // Clear form
-      setSessionId('');
-      setMessage('');
+      const { sessions: list } = await api.sessions.list(projectId);
+      setSessions(list);
+      if (list.length === 1) setSelectedId(list[0]!.shepawSessionId);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
+
+  const selected = sessions.find((s) => s.shepawSessionId === selectedId);
+
+  const copySessionId = async () => {
+    if (selected === undefined) return;
+    try {
+      await navigator.clipboard.writeText(selected.shepawSessionId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setErr('Failed to copy to clipboard');
+    }
+  };
+
+  const removeSession = async (shepawSessionId: string) => {
+    setDeleting(shepawSessionId);
+    setErr(null);
+    try {
+      await api.sessions.remove(projectId, shepawSessionId);
+      setSessions((prev) => prev.filter((s) => s.shepawSessionId !== shepawSessionId));
+      if (selectedId === shepawSessionId) setSelectedId(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(null);
+    }
   };
 
   return (
-    <div style={overlay}>
+    <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <h3 style={{ margin: 0, color: '#cdd6f4' }}>Resume Session — {projectId}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
-        <form onSubmit={(e) => void submit(e)} style={form}>
-          <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 16px' }}>
-            Continue a previous conversation by session ID. The agent will restore
-            its internal state and process your new message in context.
+        <div style={body}>
+          <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 12px' }}>
+            These are persisted Shepaw session IDs mapped to upstream ACP sessions.
+            In the Shepaw app, start a chat with the same session ID to continue
+            where you left off after a gateway restart.
           </p>
 
-          <label style={lbl}>Session ID <span style={req}>*</span></label>
-          <input
-            style={inp}
-            value={sessionId}
-            onChange={(e) => setSessionId(e.target.value)}
-            placeholder="shepaw-s1"
-            required
-          />
-
-          <label style={lbl}>Your Message (optional)</label>
-          <textarea
-            style={{ ...inp, minHeight: 80, resize: 'vertical' }}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="What would you like to continue with?"
-          />
-
+          {loading && <p style={{ color: '#a6adc8', fontSize: 13 }}>Loading sessions…</p>}
           {err && <p style={{ color: '#f38ba8', margin: '8px 0' }}>{err}</p>}
-          {success && (
-            <pre style={{ background: '#11111b', color: '#a6e3a1', padding: 12, borderRadius: 4, fontSize: 11, overflow: 'auto', maxHeight: 200, margin: '8px 0' }}>
-              {success}
-            </pre>
+
+          {!loading && sessions.length === 0 && !err && (
+            <p style={{ color: '#a6adc8', fontSize: 13 }}>
+              No saved sessions yet. Mappings appear here after you chat from the Shepaw app.
+            </p>
           )}
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-            <button type="submit" style={submitBtn} disabled={loading}>
-              {loading ? 'Preparing...' : 'Prepare Resume'}
+          {!loading && sessions.length > 0 && (
+            <div style={table}>
+              <div style={rowHeader}>
+                <span style={th}>SHEPAW SESSION</span>
+                <span style={th}>ACP SESSION</span>
+                <span style={th} />
+              </div>
+              {sessions.map((s) => (
+                <div
+                  key={s.shepawSessionId}
+                  style={{
+                    ...row,
+                    background: selectedId === s.shepawSessionId ? '#313244' : 'transparent',
+                  }}
+                  onClick={() => setSelectedId(s.shepawSessionId)}
+                >
+                  <code style={cellCode}>{s.shepawSessionId}</code>
+                  <code style={{ ...cellCode, color: '#a6adc8' }}>{s.acpSessionId}</code>
+                  <button
+                    style={removeBtn}
+                    disabled={deleting === s.shepawSessionId}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void removeSession(s.shepawSessionId);
+                    }}
+                  >
+                    {deleting === s.shepawSessionId ? '…' : 'Remove'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {selected !== undefined && (
+            <div style={detailBox}>
+              <p style={{ color: '#cdd6f4', fontSize: 13, margin: '0 0 8px' }}>
+                Use this session ID in the Shepaw app:
+              </p>
+              <code style={highlightCode}>{selected.shepawSessionId}</code>
+              <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                <button type="button" style={submitBtn} onClick={() => void copySessionId()}>
+                  {copied ? 'Copied!' : 'Copy Session ID'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <button type="button" style={cancelBtn} onClick={() => void loadSessions()} disabled={loading}>
+              Refresh
             </button>
             <button type="button" style={cancelBtn} onClick={onClose}>
               Close
             </button>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );
@@ -112,7 +156,7 @@ const overlay: React.CSSProperties = {
 
 const modal: React.CSSProperties = {
   background: '#1e1e2e', border: '1px solid #45475a',
-  borderRadius: 10, width: '90%', maxWidth: 520,
+  borderRadius: 10, width: '90%', maxWidth: 640,
 };
 
 const header: React.CSSProperties = {
@@ -120,20 +164,41 @@ const header: React.CSSProperties = {
   padding: '14px 20px', borderBottom: '1px solid #313244',
 };
 
+const body: React.CSSProperties = { padding: 20 };
+
 const closeBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: '#a6adc8', fontSize: 18, cursor: 'pointer',
 };
 
-const form: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: 10, padding: 20,
+const table: React.CSSProperties = {
+  border: '1px solid #313244', borderRadius: 6, overflow: 'hidden', marginBottom: 12,
 };
 
-const lbl: React.CSSProperties = { color: '#a6adc8', fontSize: 13 };
-const req: React.CSSProperties = { color: '#f38ba8' };
+const rowHeader: React.CSSProperties = {
+  display: 'grid', gridTemplateColumns: '1fr 1fr 72px',
+  gap: 8, padding: '8px 12px', background: '#11111b',
+};
 
-const inp: React.CSSProperties = {
-  background: '#11111b', border: '1px solid #45475a', borderRadius: 5,
-  color: '#cdd6f4', padding: '8px 12px', fontSize: 13, outline: 'none', fontFamily: 'inherit',
+const row: React.CSSProperties = {
+  display: 'grid', gridTemplateColumns: '1fr 1fr 72px',
+  gap: 8, padding: '8px 12px', cursor: 'pointer', borderTop: '1px solid #313244',
+};
+
+const th: React.CSSProperties = { color: '#6c7086', fontSize: 11, fontWeight: 600 };
+
+const cellCode: React.CSSProperties = { fontSize: 12, color: '#cdd6f4', wordBreak: 'break-all' };
+
+const removeBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #45475a', color: '#f38ba8',
+  borderRadius: 4, padding: '2px 6px', fontSize: 11, cursor: 'pointer',
+};
+
+const detailBox: React.CSSProperties = {
+  background: '#11111b', borderRadius: 6, padding: 12, marginTop: 8,
+};
+
+const highlightCode: React.CSSProperties = {
+  display: 'block', fontSize: 13, color: '#a6e3a1', wordBreak: 'break-all',
 };
 
 const submitBtn: React.CSSProperties = {

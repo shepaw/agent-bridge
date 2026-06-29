@@ -5,10 +5,6 @@
   "description": "Shepaw agent-bridge monorepo: ACP SDKs (Python + TypeScript) and agent implementations",
   "workspaces": [
     "sdks/shepaw-acp-sdk-typescript",
-    "implementations/claude-code-ts",
-    "implementations/codebuddy-code",
-    "implementations/codex-ts",
-    "implementations/opencode-ts",
     "implementations/acp-proxy-ts",
     "agent-hub/core",
     "agent-hub/api",

@@ -142,7 +142,7 @@ The dashboard runs on `http://127.0.0.1:4000` by default.
 | **Real-time logs** | WebSocket-streamed log viewer with auto-scroll (tail N lines) |
 | **Pair device** | Modal dialog for generating single-use enrollment codes |
 | **Peer management** | View authorized devices and revoke access |
-| **Session Resume** | Continue previous conversations by session ID (prepare resume payloads) |
+| **Session Resume** | List persisted Shepaw→ACP session mappings, copy session IDs, remove stale entries |
 | **Auto-refresh** | Status polling every 3 seconds — CLI and Web stay in sync |
 
 ---
@@ -178,6 +178,13 @@ The web server exposes a REST API at `/api`. All requests/responses use JSON.
 | `GET` | `/api/projects/:id/enroll` | List outstanding pairing codes |
 | `POST` | `/api/projects/:id/enroll` | Mint new code `{ label?, ttlMinutes? }` |
 | `DELETE` | `/api/projects/:id/enroll/:code` | Revoke a pairing code |
+
+### Sessions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/projects/:id/sessions` | List persisted Shepaw→ACP session mappings |
+| `DELETE` | `/api/projects/:id/sessions/:shepawSessionId` | Remove a stale mapping |
 
 ### WebSocket Log Streaming
 

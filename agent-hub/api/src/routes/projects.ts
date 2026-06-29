@@ -15,6 +15,8 @@
  * POST   /api/projects/:id/enroll    — mint a new pairing code { label?, ttlMinutes? }
  * GET    /api/projects/:id/enroll    — list outstanding pairing codes
  * DELETE /api/projects/:id/enroll/:code — revoke a pairing code
+ * GET    /api/projects/:id/sessions   — list persisted Shepaw→ACP session mappings
+ * DELETE /api/projects/:id/sessions/:shepawSessionId — remove a stale mapping
  * GET    /api/projects/:id/envvars   — list env var keys (values masked)
  * PUT    /api/projects/:id/envvars/:key — set a single env var (also updates credential hints cache)
  * DELETE /api/projects/:id/envvars/:key — delete a single env var
@@ -40,6 +42,8 @@ import {
   getProject,
   hubRoot,
   isAlive,
+  listProjectSessions,
+  deleteProjectSession,
   loadOrCreateHubConfig,
   nextFreePort,
   projectPaths,
@@ -87,8 +91,21 @@ function enrichProject(p: ProjectConfig) {
 }
 
 function parseEngine(raw: unknown): AgentEngine {
-  if (raw === 'codebuddy' || raw === 'claude-code' || raw === 'codex' || raw === 'opencode') return raw;
-  throw new Error(`Invalid engine "${String(raw)}". Expected "codebuddy", "claude-code", "codex", or "opencode".`);
+  const engines: AgentEngine[] = [
+    'codebuddy',
+    'claude-code',
+    'codex',
+    'opencode',
+    'openclaw',
+    'cursor',
+    'hermes',
+  ];
+  if (typeof raw === 'string' && (engines as string[]).includes(raw)) {
+    return raw as AgentEngine;
+  }
+  throw new Error(
+    `Invalid engine "${String(raw)}". Expected one of: ${engines.join(', ')}.`,
+  );
 }
 
 /**
@@ -669,6 +686,42 @@ projectsRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
     } else {
       res.status(404).json({ error: `No outstanding code matching "${req.params.code}"` });
     }
+  } catch (err) {
+    if (err instanceof ProjectNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+// ── sessions ─────────────────────────────────────────────────────
+
+projectsRouter.get('/:id/sessions', (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getProject(cfg, req.params.id!);
+    const sessions = listProjectSessions(req.params.id!);
+    res.json({ sessions });
+  } catch (err) {
+    if (err instanceof ProjectNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+projectsRouter.delete('/:id/sessions/:shepawSessionId', (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getProject(cfg, req.params.id!);
+    const removed = deleteProjectSession(req.params.id!, req.params.shepawSessionId!);
+    if (!removed) {
+      res.status(404).json({ error: `No session mapping for "${req.params.shepawSessionId}".` });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {
       res.status(404).json({ error: err.message });

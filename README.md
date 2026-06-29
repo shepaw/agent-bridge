@@ -1,8 +1,7 @@
 # agent-bridge
 
-SDKs and reference implementations for building ACP (Agent Client
-Protocol) agents that plug into the [Shepaw](https://shepaw.com)
-mobile app.
+SDKs and reference implementations for building agents that plug into the
+[Shepaw](https://shepaw.com) mobile app.
 
 ## Layout
 
@@ -13,17 +12,31 @@ agent-bridge/
 │   └── shepaw-acp-sdk-typescript/    # TypeScript SDK (npm i shepaw-acp-sdk)
 │
 ├── implementations/
-│   ├── claude-code-ts/               # Claude Code as a Shepaw agent (TS, current)
-│   ├── codebuddy-code/               # CodeBuddy Code as a Shepaw agent (TS)
-│   ├── shepaw-agent-hub/             # Multi-project supervisor CLI (TS) — see below
+│   ├── acp-proxy-ts/                 # Unified ACP proxy gateway (recommended)
+│   ├── _archived/                    # Legacy vendor-SDK gateways (deprecated)
 │   ├── claude-code-py/               # Claude Code as a Shepaw agent (Python, older)
 │   └── paw-agent-py/                 # Multi-platform OS control agent (Python, unmaintained)
+│
+├── agent-hub/                        # Multi-project supervisor (CLI + Web UI)
 │
 └── tools/
     └── debug-clients/                # One-off WS clients used during protocol bring-up
 ```
 
-Both SDKs speak the **same wire protocol** — a Python agent and a
+## Two protocols
+
+| Protocol | Purpose |
+|----------|---------|
+| **Shepaw ACP v2.1** | Wire protocol between the Shepaw app and your gateway (WebSocket + Noise). Implemented by `shepaw-acp-sdk`. |
+| **Agent Client Protocol (ACP)** | Industry stdio JSON-RPC between a client and coding agents (Claude Code, Codex, CodeBuddy, …). Implemented by `@agentclientprotocol/sdk`. |
+
+The recommended gateway (`shepaw-acp-proxy`) bridges them:
+
+```
+Shepaw app → Shepaw ACP v2.1 → AcpProxyAgent → @agentclientprotocol/sdk → upstream agent subprocess
+```
+
+Both SDKs speak the **same Shepaw wire protocol** — a Python agent and a
 TypeScript agent are interchangeable from the Shepaw app's point of view.
 JSON field names stay `snake_case` in both, method names match exactly,
 and Tunnel / Channel-Service framing is byte-for-byte identical.
@@ -41,40 +54,42 @@ and Tunnel / Channel-Service framing is byte-for-byte identical.
 
 ## Quick start
 
-### Run Claude Code on your phone (TypeScript gateway)
+### Run any ACP agent on your phone (recommended)
 
 ```sh
-cd implementations/claude-code-ts
+cd implementations/acp-proxy-ts
 npm install && npm run build
-export ANTHROPIC_API_KEY=sk-ant-...
-node dist/cli.js serve --cwd ~/your-project --port 8090
-# The banner prints your agent's fingerprint + "Authorized peers: 0".
-# Copy your Shepaw app's public key from the "Add agent" screen, then run:
+export ANTHROPIC_API_KEY=sk-ant-...   # when using --engine claude-code
+node dist/cli.js serve --engine claude-code --cwd ~/your-project --port 8090
 node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
-# Paste the banner's ws:// URL (including #fp=...) into Shepaw to connect.
 ```
 
-For external access via the Shepaw Channel Service, see
-[`implementations/claude-code-ts/README.md`](implementations/claude-code-ts/README.md).
+Supported `--engine` values: `claude-code`, `codebuddy`, `codex`, `opencode`,
+`openclaw`, `cursor`, `hermes`. See
+[`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
 
-### Run multiple agents from one CLI (`shepaw-agent-hub`)
+Legacy vendor-SDK gateways (`claude-code-ts`, `codebuddy-code`, …) are
+archived — see [`implementations/_archived/README.md`](implementations/_archived/README.md).
 
-One host, many projects — each with its own identity and authorized-peers
-list. `shepaw-hub` is a cross-platform supervisor that spawns the unmodified
-gateway binaries with per-project configuration:
+### Run multiple agents from one CLI (`shepaw-hub`)
+
+One host, many projects — each with its own identity, session store, and
+authorized-peers list. Agent Hub spawns `shepaw-acp-proxy` with per-project
+configuration:
 
 ```sh
-cd implementations/shepaw-agent-hub
 npm install && npm run build
+cd agent-hub/cli && npm link   # or npx shepaw-hub
 
 shepaw-hub init
-shepaw-hub project add work-api --engine codebuddy --cwd ~/code/work-api \
+shepaw-hub project add work-api --engine claude-code --cwd ~/code/work-api \
     --base-url "wss://channel.shepaw.com/c/work-api"
 shepaw-hub start work-api
 shepaw-hub pair work-api --label "My iPhone"   # prints QR + short code
 ```
 
-See [`implementations/shepaw-agent-hub/README.md`](implementations/shepaw-agent-hub/README.md) for the full command reference and Windows notes.
+See [`agent-hub/README.md`](agent-hub/README.md) for the full command reference,
+Web UI, and Windows notes.
 
 ### Build a custom agent (Python)
 
@@ -117,9 +132,10 @@ await new MyAgent({ name: 'My Agent' }).run({ port: 8080 });
 Root scripts run across the TypeScript workspaces:
 
 ```sh
-npm run typecheck    # tsc --noEmit in both TS packages
-npm run build        # tsup in both TS packages
-npm test             # vitest in both TS packages (SDK has 33 tests; gateway has none yet)
+npm install
+npm run typecheck
+npm run build
+npm test
 ```
 
 Python packages are independent — `cd` into each and use `pytest` /

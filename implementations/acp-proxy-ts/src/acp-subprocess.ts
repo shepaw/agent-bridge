@@ -23,6 +23,7 @@ import { log } from './debug.js';
 import { mapSessionUpdate } from './session-mapper.js';
 import {
   attachActiveSession,
+  discardLoadReplayUpdates,
   supportsSessionLoad,
   supportsSessionResume,
 } from './session-lifecycle.js';
@@ -359,8 +360,8 @@ export class AcpSubprocess {
         });
         const session = attachActiveSession(agent, storedId, response);
         this.rememberConfigOptions(shepawSessionId, response.configOptions);
-        await this.discardReplayUpdates(session);
-        log('loaded ACP session %s', storedId);
+        const discarded = await discardLoadReplayUpdates(session);
+        log('loaded ACP session %s (discarded %d replay updates)', storedId, discarded);
         return session;
       } catch (err) {
         log(
@@ -372,24 +373,6 @@ export class AcpSubprocess {
     }
 
     return undefined;
-  }
-
-  /** Drop history replay chunks emitted after session/load. */
-  private async discardReplayUpdates(session: acp.ActiveSession): Promise<void> {
-    const deadline = Date.now() + 2_000;
-    while (Date.now() < deadline) {
-      let pending: acp.ActiveSessionMessage | undefined;
-      try {
-        pending = await Promise.race([
-          session.nextUpdate(),
-          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 150)),
-        ]);
-      } catch {
-        break;
-      }
-      if (pending === undefined) break;
-      if (pending.kind === 'stop') break;
-    }
   }
 
   private async applyModelToSession(

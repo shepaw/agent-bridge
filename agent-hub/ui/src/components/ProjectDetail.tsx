@@ -140,6 +140,8 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setShowQr(true);
     if (!qrToken) void mintQr();
   };
+
+  const toggle = async () => {
     if (!project) return;
     setBusy(true);
     setErr(null);

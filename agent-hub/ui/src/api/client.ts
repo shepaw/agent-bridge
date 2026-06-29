@@ -4,6 +4,7 @@ import type {
   HubMeta,
   Peer,
   Project,
+  StoredSession,
   UpdateProjectInput,
 } from './types.js';
 
@@ -84,5 +85,15 @@ export const api = {
 
     revoke: (projectId: string, code: string): Promise<void> =>
       request(`/projects/${projectId}/enroll/${code}`, { method: 'DELETE' }),
+  },
+
+  sessions: {
+    list: (projectId: string): Promise<{ sessions: StoredSession[] }> =>
+      request(`/projects/${projectId}/sessions`),
+
+    remove: (projectId: string, shepawSessionId: string): Promise<void> =>
+      request(`/projects/${projectId}/sessions/${encodeURIComponent(shepawSessionId)}`, {
+        method: 'DELETE',
+      }),
   },
 };

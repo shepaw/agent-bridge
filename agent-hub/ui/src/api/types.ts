@@ -81,6 +81,12 @@ export interface SessionResume {
   history?: ConversationMessage[];
 }
 
+/** Persisted Shepaw → upstream ACP session mapping from sessions.json. */
+export interface StoredSession {
+  shepawSessionId: string;
+  acpSessionId: string;
+}
+
 export interface CreateProjectInput {
   id: string;
   engine?: AgentEngine;

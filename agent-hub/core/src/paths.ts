@@ -10,6 +10,7 @@
  *         ├── authorized_peers.json   — per-project allowlist
  *         ├── enrollments.json        — per-project pairing-code store
  *         ├── state.json              — pid / port / startedAt / exitCode
+ *         ├── sessions.json           — Shepaw session_id → upstream ACP session_id
  *         └── logs/
  *             └── agent.log           — stdout+stderr from the gateway child
  * ```
@@ -41,6 +42,7 @@ export interface ProjectPaths {
   readonly peersPath: string;
   readonly enrollmentsPath: string;
   readonly statePath: string;
+  readonly sessionsPath: string;
   readonly logsDir: string;
   readonly logFile: string;
 }
@@ -82,6 +84,7 @@ export function projectPaths(projectId: string, root: string = hubRoot()): Proje
     peersPath: join(projectRoot, 'authorized_peers.json'),
     enrollmentsPath: join(projectRoot, 'enrollments.json'),
     statePath: join(projectRoot, 'state.json'),
+    sessionsPath: join(projectRoot, 'sessions.json'),
     logsDir: join(projectRoot, 'logs'),
     logFile: join(projectRoot, 'logs', 'agent.log'),
   };

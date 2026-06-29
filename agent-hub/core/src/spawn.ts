@@ -126,6 +126,7 @@ export async function startProject(project: ProjectConfig): Promise<{
       '--cwd', project.cwd,
       '--port', String(project.port),
       '--host', project.host,
+      '--session-store-path', paths.sessionsPath,
       ...project.extraArgs,
     ];
 

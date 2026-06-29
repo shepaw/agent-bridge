@@ -13,6 +13,16 @@ Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
   `terminal/*` client methods
 - **Hub default** — `shepaw-hub` spawns this gateway for all engine types
 
+## Phase 3 capabilities
+
+- **Per-project session store** — Agent Hub passes `--session-store-path` so each
+  project keeps isolated `sessions.json` mappings
+- **Hub session UI** — Web UI lists persisted sessions and supports copy/remove
+- **Sessions CLI** — `sessions list` (local mappings) and `sessions acp-list`
+  (upstream `session/list`)
+- **Smarter load replay** — idle-based drain after `session/load` instead of a
+  fixed 2s timeout
+
 ## Supported upstream agents
 
 | `--engine`   | Upstream command |
