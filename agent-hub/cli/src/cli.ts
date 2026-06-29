@@ -105,7 +105,7 @@ cli
 
 cli
   .command('project-add <id>', 'Register a new agent project')
-  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code | codex | opencode', { default: 'codebuddy' })
+  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code | codex | opencode | openclaw | cursor | hermes', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
   .option('--label <text>', 'Display name shown in `status`')
   .option('--port <n>', 'Bind port (default: next free port from 8090)')
@@ -763,8 +763,20 @@ cli.parse();
 // ── helpers ────────────────────────────────────────────────────────
 
 function parseEngine(raw: string): AgentEngine {
-  if (raw === 'codebuddy' || raw === 'claude-code' || raw === 'codex' || raw === 'opencode') return raw;
-  throw new Error(`Invalid --engine: "${raw}". Expected "codebuddy", "claude-code", "codex", or "opencode".`);
+  if (
+    raw === 'codebuddy'
+    || raw === 'claude-code'
+    || raw === 'codex'
+    || raw === 'opencode'
+    || raw === 'openclaw'
+    || raw === 'cursor'
+    || raw === 'hermes'
+  ) {
+    return raw;
+  }
+  throw new Error(
+    `Invalid --engine: "${raw}". Expected codebuddy, claude-code, codex, opencode, openclaw, cursor, or hermes.`,
+  );
 }
 
 function exitWithError(err: unknown): never {

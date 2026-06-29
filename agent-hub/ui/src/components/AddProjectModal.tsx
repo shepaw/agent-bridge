@@ -25,6 +25,9 @@ const ENGINE_CREDS: Record<AgentEngine, CredField[]> = {
     { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
   ],
   'opencode': [],
+  'openclaw': [],
+  'cursor': [],
+  'hermes': [],
 };
 
 interface AddProjectModalProps {
@@ -176,6 +179,9 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
             <option value="claude-code">claude-code</option>
             <option value="codex">codex</option>
             <option value="opencode">opencode</option>
+            <option value="openclaw">openclaw</option>
+            <option value="cursor">cursor</option>
+            <option value="hermes">hermes</option>
           </select>
 
           <label style={lbl}>Working Directory <span style={req}>*</span></label>

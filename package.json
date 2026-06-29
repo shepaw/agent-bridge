@@ -9,6 +9,7 @@
     "implementations/codebuddy-code",
     "implementations/codex-ts",
     "implementations/opencode-ts",
+    "implementations/acp-proxy-ts",
     "agent-hub/core",
     "agent-hub/api",
     "agent-hub/ui",

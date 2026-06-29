@@ -1,0 +1,61 @@
+{
+  "name": "shepaw-acp-proxy-gateway",
+  "version": "0.1.0",
+  "description": "Unified Shepaw gateway that connects to industry-standard ACP agents (Claude Code, Codex, CodeBuddy, etc.)",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./cli": "./dist/cli.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "shepaw-acp-proxy": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "shepaw",
+    "acp",
+    "agent-client-protocol",
+    "claude-code",
+    "codex",
+    "codebuddy"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.1.0",
+    "cac": "^7.0.0",
+    "debug": "^4.4.0",
+    "qrcode-terminal": "^0.12.0",
+    "shepaw-acp-sdk": "*"
+  },
+  "devDependencies": {
+    "@types/debug": "^4.1.12",
+    "@types/node": "^22.10.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}

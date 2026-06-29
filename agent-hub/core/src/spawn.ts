@@ -122,6 +122,7 @@ export async function startProject(project: ProjectConfig): Promise<{
     const args = [
       cliPath,
       'serve',
+      '--engine', project.engine,
       '--cwd', project.cwd,
       '--port', String(project.port),
       '--host', project.host,
@@ -392,24 +393,14 @@ export async function rotateProjectLogs(projectId: string): Promise<void> {
  * packages must be installed globally too, or in the same project as the
  * hub. Standard npm workspace behavior handles this for our monorepo use.
  */
-function resolveEngineCliPath(engine: AgentEngine): string {
+function resolveEngineCliPath(_engine: AgentEngine): string {
   const require = createRequire(import.meta.url);
-  // Each gateway package exposes `./cli` as a subpath export pointing at
-  // `dist/cli.js`. This is a stable contract; don't reach past it into
-  // `/dist/...` directly — the gateway is free to reorganize its build.
-  const pkg =
-    engine === 'codebuddy'
-      ? 'shepaw-codebuddy-code-gateway/cli'
-      : engine === 'claude-code'
-        ? 'shepaw-claude-code-gateway/cli'
-        : engine === 'codex'
-          ? 'shepaw-codex-gateway/cli'
-          : 'shepaw-opencode-gateway/cli';
+  const pkg = 'shepaw-acp-proxy-gateway/cli';
   try {
     return require.resolve(pkg);
   } catch (err) {
     throw new Error(
-      `Cannot locate ${pkg}. Make sure the corresponding gateway package is ` +
+      `Cannot locate ${pkg}. Make sure shepaw-acp-proxy-gateway is ` +
         `installed alongside shepaw-hub (via npm/pnpm/yarn). ` +
         `Original error: ${formatErr(err)}`,
     );

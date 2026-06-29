@@ -42,7 +42,14 @@ import { encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
  * Keeping this as a string union (not an enum) so adding a new engine later
  * only requires editing this file and `resolveEngineCliPath` in spawn.ts.
  */
-export type AgentEngine = 'codebuddy' | 'claude-code' | 'codex' | 'opencode';
+export type AgentEngine =
+  | 'codebuddy'
+  | 'claude-code'
+  | 'codex'
+  | 'opencode'
+  | 'openclaw'
+  | 'cursor'
+  | 'hermes';
 
 /**
  * Tunnel configuration for a Shepaw Channel Service channel.
@@ -489,9 +496,19 @@ function requireNumber(v: unknown, field: string, file: string): number {
 }
 
 function requireEngine(v: unknown, field: string, file: string): AgentEngine {
-  if (v === 'codebuddy' || v === 'claude-code' || v === 'codex' || v === 'opencode') return v;
+  if (
+    v === 'codebuddy'
+    || v === 'claude-code'
+    || v === 'codex'
+    || v === 'opencode'
+    || v === 'openclaw'
+    || v === 'cursor'
+    || v === 'hermes'
+  ) {
+    return v;
+  }
   throw new Error(
-    `Hub config at ${file}: ${field} must be "codebuddy", "claude-code", "codex", or "opencode" (got ${JSON.stringify(v)}).`,
+    `Hub config at ${file}: ${field} must be one of: codebuddy, claude-code, codex, opencode, openclaw, cursor, hermes (got ${JSON.stringify(v)}).`,
   );
 }
 
@@ -533,7 +550,15 @@ function parseCredentialHints(v: unknown): HubCredentialCache | undefined {
   if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
   const obj = v as Record<string, unknown>;
   const out: HubCredentialCache = {};
-  const engines: AgentEngine[] = ['codebuddy', 'claude-code', 'codex', 'opencode'];
+  const engines: AgentEngine[] = [
+    'codebuddy',
+    'claude-code',
+    'codex',
+    'opencode',
+    'openclaw',
+    'cursor',
+    'hermes',
+  ];
   for (const engine of engines) {
     const hints = obj[engine];
     if (hints === null || typeof hints !== 'object' || Array.isArray(hints)) continue;

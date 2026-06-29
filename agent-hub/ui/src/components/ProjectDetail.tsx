@@ -31,6 +31,9 @@ const ENGINE_CREDS: Record<AgentEngine, CredField[]> = {
     { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
   ],
   'opencode': [],
+  'openclaw': [],
+  'cursor': [],
+  'hermes': [],
 };
 
 interface ProjectDetailProps {

@@ -1,6 +1,13 @@
 // Shared types mirroring the API responses
 
-export type AgentEngine = 'codebuddy' | 'claude-code' | 'codex' | 'opencode';
+export type AgentEngine =
+  | 'codebuddy'
+  | 'claude-code'
+  | 'codex'
+  | 'opencode'
+  | 'openclaw'
+  | 'cursor'
+  | 'hermes';
 
 export interface TunnelConfig {
   serverUrl: string;
