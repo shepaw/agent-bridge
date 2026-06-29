@@ -30,6 +30,7 @@ import {
   getEngineSpec,
   isAcpEngineId,
 } from './engines.js';
+
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
 export interface AcpProxyAgentOptions {
@@ -50,10 +51,12 @@ export interface AcpProxyAgentOptions {
 }
 
 export class AcpProxyAgent extends ACPAgentServer {
-  private readonly engine: AcpEngineId;
   private readonly cwd: string;
   private readonly subprocess: AcpSubprocess;
   private readonly sessionStore: SessionStore;
+
+  /** Last active Shepaw session — used for model picker when no session in params. */
+  private lastShepawSessionId: string | undefined;
 
   constructor(opts: AcpProxyAgentOptions) {
     if (!isAcpEngineId(opts.engine)) {
@@ -69,7 +72,6 @@ export class AcpProxyAgent extends ACPAgentServer {
       tunnelConfig: opts.tunnelConfig,
     });
 
-    this.engine = opts.engine;
     this.cwd = opts.cwd ?? process.cwd();
     this.subprocess =
       opts.subprocess ??
@@ -91,14 +93,16 @@ export class AcpProxyAgent extends ACPAgentServer {
 
   override async onChat(ctx: TaskContext, message: string, kwargs: ChatKwargs): Promise<void> {
     const shepawSessionId = kwargs.session_id ?? ctx.sessionId;
+    this.lastShepawSessionId = shepawSessionId;
     const signal = this.activeTasks.get(ctx.taskId)?.signal ?? new AbortController().signal;
 
     await this.subprocess.runPromptTurn(
       shepawSessionId,
       message,
       { taskCtx: ctx, signal },
-      (acpSessionId) => {
-        this.sessionStore.set(shepawSessionId, acpSessionId);
+      {
+        getStoredAcpSessionId: (id) => this.sessionStore.get(id),
+        onAcpSessionId: (id, acpId) => this.sessionStore.set(id, acpId),
       },
     );
   }
@@ -114,12 +118,11 @@ export class AcpProxyAgent extends ACPAgentServer {
   }
 
   override async onModelsList(_params: ModelsListParams): Promise<ModelsListResult> {
-    // Model selection is agent-specific; expose config options when available.
-    return { models: [], current: undefined };
+    return this.subprocess.modelsList();
   }
 
   override async onModelsSetCurrent(params: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
-    return { model: params.model };
+    return this.subprocess.setModel(params.model, this.lastShepawSessionId);
   }
 
   /** Gracefully tear down the upstream ACP subprocess. */

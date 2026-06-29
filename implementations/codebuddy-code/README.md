@@ -1,5 +1,9 @@
 # shepaw-codebuddy-code-gateway
 
+> **Deprecated:** Prefer [`shepaw-acp-proxy`](../acp-proxy-ts) with
+> `--engine codebuddy` for new deployments. Agent Hub now spawns the ACP proxy
+> by default.
+
 Run [CodeBuddy Code](https://cnb.cool/codebuddy/codebuddy-code) as an agent
 for the [Shepaw](https://shepaw.com) mobile app — approve tool calls, fill
 in clarifying questions, and watch the stream from your phone.

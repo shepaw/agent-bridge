@@ -3,11 +3,15 @@
 Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com) compatible coding agent.
 
-Instead of wrapping each vendor SDK directly, this gateway:
+## Phase 2 capabilities
 
-1. Speaks **Shepaw ACP v2.1** to the mobile app (WebSocket + Noise encryption)
-2. Acts as an **ACP Client** to a subprocess using `@agentclientprotocol/sdk`
-3. Spawns the industry-standard ACP entry point for the selected agent
+- **Session resume** — after gateway restart, restores upstream ACP sessions via
+  `session/resume` (preferred) or `session/load`, using `sessions.json` mappings
+- **Model picker** — maps ACP `configOptions` (category `model`) to Shepaw
+  `agent.models.list` / `agent.models.setCurrent` via `session/set_config_option`
+- **Terminal proxy** — runs shell commands on the gateway host when agents request
+  `terminal/*` client methods
+- **Hub default** — `shepaw-hub` spawns this gateway for all engine types
 
 ## Supported upstream agents
 

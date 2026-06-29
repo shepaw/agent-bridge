@@ -9,16 +9,33 @@ import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
 import { TaskCancelledError } from 'shepaw-acp-sdk';
-import type { TaskContext } from 'shepaw-acp-sdk';
+import type { ModelsListResult, ModelsSetCurrentResult, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
 import { spawnCommand } from './engines.js';
+import {
+  buildSetModelResult,
+  configOptionsToModelsList,
+  findModelConfigOption,
+  mergeConfigOptions,
+} from './config-options.js';
 import { log } from './debug.js';
 import { mapSessionUpdate } from './session-mapper.js';
+import {
+  attachActiveSession,
+  supportsSessionLoad,
+  supportsSessionResume,
+} from './session-lifecycle.js';
+import { TerminalHost } from './terminal-host.js';
 
 export interface TurnContext {
   readonly taskCtx: TaskContext;
   readonly signal: AbortSignal;
+}
+
+export interface RunPromptTurnOptions {
+  readonly getStoredAcpSessionId?: (shepawSessionId: string) => string | undefined;
+  readonly onAcpSessionId?: (shepawSessionId: string, acpSessionId: string) => void;
 }
 
 export interface AcpSubprocessOptions {
@@ -37,8 +54,16 @@ export class AcpSubprocess {
   private initPromise: Promise<void> | undefined;
   private agentCaps: acp.InitializeResponse | undefined;
 
+  private readonly terminals = new TerminalHost();
+
   /** Active ACP sessions keyed by Shepaw session_id. */
   private readonly sessions = new Map<string, acp.ActiveSession>();
+
+  /** Latest config options per Shepaw session (for model picker). */
+  private readonly configByShepawSession = new Map<string, acp.SessionConfigOption[]>();
+
+  /** Preferred model value applied to newly created sessions. */
+  private preferredModelValue: string | undefined;
 
   /** Current in-flight turn — used by permission/fs handlers. */
   private currentTurn: TurnContext | undefined;
@@ -93,10 +118,7 @@ export class AcpSubprocess {
       this.connection = undefined;
       this.child = undefined;
       this.initPromise = undefined;
-      for (const session of this.sessions.values()) {
-        session.dispose();
-      }
-      this.sessions.clear();
+      this.disposeSessions();
     });
 
     if (child.stdin === null || child.stdout === null) {
@@ -119,6 +141,21 @@ export class AcpSubprocess {
       )
       .onRequest(acp.methods.client.fs.writeTextFile, (ctx) =>
         this.handleWriteTextFile(ctx.params),
+      )
+      .onRequest(acp.methods.client.terminal.create, (ctx) =>
+        Promise.resolve(this.terminals.create(ctx.params)),
+      )
+      .onRequest(acp.methods.client.terminal.output, (ctx) =>
+        Promise.resolve(this.terminals.output(ctx.params)),
+      )
+      .onRequest(acp.methods.client.terminal.waitForExit, (ctx) =>
+        this.terminals.waitForExit(ctx.params),
+      )
+      .onRequest(acp.methods.client.terminal.kill, (ctx) =>
+        Promise.resolve(this.terminals.kill(ctx.params)),
+      )
+      .onRequest(acp.methods.client.terminal.release, (ctx) =>
+        Promise.resolve(this.terminals.release(ctx.params)),
       );
 
     this.connection = clientApp.connect(stream);
@@ -130,27 +167,28 @@ export class AcpSubprocess {
           readTextFile: true,
           writeTextFile: true,
         },
+        terminal: true,
       },
       clientInfo: {
         name: 'shepaw-acp-proxy',
         title: 'Shepaw ACP Proxy',
-        version: '0.1.0',
+        version: '0.2.0',
       },
     });
 
     this.agentCaps = initResult;
     log(
-      'ACP initialized: protocol v%s agent=%s',
+      'ACP initialized: protocol v%s agent=%s resume=%s load=%s',
       initResult.protocolVersion,
       initResult.agentInfo?.title ?? initResult.agentInfo?.name ?? 'unknown',
+      supportsSessionResume(initResult),
+      supportsSessionLoad(initResult),
     );
   }
 
   async stop(): Promise<void> {
-    for (const session of this.sessions.values()) {
-      session.dispose();
-    }
-    this.sessions.clear();
+    this.disposeSessions();
+    this.terminals.disposeAll();
     this.connection?.close();
     this.connection = undefined;
     if (this.child !== undefined && !this.child.killed) {
@@ -160,12 +198,41 @@ export class AcpSubprocess {
     this.initPromise = undefined;
   }
 
+  modelsList(): ModelsListResult {
+    for (const opts of this.configByShepawSession.values()) {
+      const list = configOptionsToModelsList(opts);
+      if (list.models.length > 0) return list;
+    }
+    return { models: [], current: undefined };
+  }
+
+  async setModel(modelValue: string, shepawSessionId?: string): Promise<ModelsSetCurrentResult> {
+    this.preferredModelValue = modelValue;
+
+    if (shepawSessionId !== undefined) {
+      const session = this.sessions.get(shepawSessionId);
+      if (session !== undefined) {
+        await this.applyModelToSession(session, shepawSessionId, modelValue);
+        const opts = this.configByShepawSession.get(shepawSessionId);
+        return buildSetModelResult(opts, modelValue);
+      }
+    }
+
+    for (const [sid, session] of this.sessions) {
+      await this.applyModelToSession(session, sid, modelValue);
+      const opts = this.configByShepawSession.get(sid);
+      return buildSetModelResult(opts, modelValue);
+    }
+
+    return { model: modelValue };
+  }
+
   /** Run one user prompt turn, streaming updates to TaskContext. */
   async runPromptTurn(
     shepawSessionId: string,
     message: string,
     turn: TurnContext,
-    onAcpSessionCreated?: (acpSessionId: string) => void,
+    opts: RunPromptTurnOptions = {},
   ): Promise<void> {
     await this.start();
     if (this.connection === undefined) {
@@ -175,10 +242,10 @@ export class AcpSubprocess {
     this.currentTurn = turn;
 
     try {
-      const session = await this.getOrCreateSession(shepawSessionId, onAcpSessionCreated);
+      const session = await this.getOrCreateSession(shepawSessionId, opts);
 
       const promptPromise = session.prompt(message);
-      const updatesLoop = this.drainUpdates(session, turn);
+      const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
 
       const abortPromise = new Promise<never>((_, reject) => {
         if (turn.signal.aborted) {
@@ -201,9 +268,26 @@ export class AcpSubprocess {
     }
   }
 
+  private disposeSessions(): void {
+    for (const session of this.sessions.values()) {
+      session.dispose();
+    }
+    this.sessions.clear();
+    this.configByShepawSession.clear();
+  }
+
+  private rememberConfigOptions(
+    shepawSessionId: string,
+    configOptions: ReadonlyArray<acp.SessionConfigOption> | undefined | null,
+  ): void {
+    if (configOptions === undefined || configOptions === null) return;
+    const merged = mergeConfigOptions(this.configByShepawSession.get(shepawSessionId), configOptions);
+    this.configByShepawSession.set(shepawSessionId, merged);
+  }
+
   private async getOrCreateSession(
     shepawSessionId: string,
-    onCreated?: (acpSessionId: string) => void,
+    opts: RunPromptTurnOptions,
   ): Promise<acp.ActiveSession> {
     const existing = this.sessions.get(shepawSessionId);
     if (existing !== undefined) {
@@ -211,16 +295,132 @@ export class AcpSubprocess {
     }
 
     const agent = this.connection!.agent;
+    const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
+
+    if (storedId !== undefined && storedId.length > 0) {
+      const restored = await this.tryRestoreSession(agent, shepawSessionId, storedId);
+      if (restored !== undefined) {
+        this.sessions.set(shepawSessionId, restored);
+        opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
+        if (this.preferredModelValue !== undefined) {
+          await this.applyModelToSession(restored, shepawSessionId, this.preferredModelValue);
+        }
+        return restored;
+      }
+      log('stored ACP session %s unavailable; creating new session', storedId);
+    }
+
     const session = await agent.buildSession(this.cwd).start();
     this.sessions.set(shepawSessionId, session);
-    onCreated?.(session.sessionId);
+    opts.onAcpSessionId?.(shepawSessionId, session.sessionId);
+    this.rememberConfigOptions(shepawSessionId, session.newSessionResponse.configOptions);
     log('created ACP session %s for shepaw session %s', session.sessionId, shepawSessionId);
+
+    if (this.preferredModelValue !== undefined) {
+      await this.applyModelToSession(session, shepawSessionId, this.preferredModelValue);
+    }
+
     return session;
+  }
+
+  private async tryRestoreSession(
+    agent: acp.ClientContext,
+    shepawSessionId: string,
+    storedId: string,
+  ): Promise<acp.ActiveSession | undefined> {
+    const mcpServers: acp.McpServer[] = [];
+
+    if (supportsSessionResume(this.agentCaps)) {
+      try {
+        const response = await agent.request(acp.methods.agent.session.resume, {
+          sessionId: storedId,
+          cwd: this.cwd,
+          mcpServers,
+        });
+        const session = attachActiveSession(agent, storedId, response);
+        this.rememberConfigOptions(shepawSessionId, response.configOptions);
+        log('resumed ACP session %s', storedId);
+        return session;
+      } catch (err) {
+        log(
+          'session/resume failed for %s: %s',
+          storedId,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    if (supportsSessionLoad(this.agentCaps)) {
+      try {
+        const response = await agent.request(acp.methods.agent.session.load, {
+          sessionId: storedId,
+          cwd: this.cwd,
+          mcpServers,
+        });
+        const session = attachActiveSession(agent, storedId, response);
+        this.rememberConfigOptions(shepawSessionId, response.configOptions);
+        await this.discardReplayUpdates(session);
+        log('loaded ACP session %s', storedId);
+        return session;
+      } catch (err) {
+        log(
+          'session/load failed for %s: %s',
+          storedId,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    return undefined;
+  }
+
+  /** Drop history replay chunks emitted after session/load. */
+  private async discardReplayUpdates(session: acp.ActiveSession): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      let pending: acp.ActiveSessionMessage | undefined;
+      try {
+        pending = await Promise.race([
+          session.nextUpdate(),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 150)),
+        ]);
+      } catch {
+        break;
+      }
+      if (pending === undefined) break;
+      if (pending.kind === 'stop') break;
+    }
+  }
+
+  private async applyModelToSession(
+    session: acp.ActiveSession,
+    shepawSessionId: string,
+    modelValue: string,
+  ): Promise<void> {
+    const opts =
+      this.configByShepawSession.get(shepawSessionId) ??
+      session.newSessionResponse.configOptions ??
+      [];
+
+    const modelOpt = findModelConfigOption(opts);
+    if (modelOpt === undefined) return;
+
+    const response = await this.connection!.agent.request(
+      acp.methods.agent.session.setConfigOption,
+      {
+        sessionId: session.sessionId,
+        configId: modelOpt.id,
+        value: modelValue,
+        type: 'select',
+      },
+    ) as acp.SetSessionConfigOptionResponse;
+    this.rememberConfigOptions(shepawSessionId, response.configOptions);
   }
 
   private async drainUpdates(
     session: acp.ActiveSession,
     turn: TurnContext,
+    shepawSessionId: string,
   ): Promise<void> {
     for (;;) {
       if (turn.signal.aborted) {
@@ -233,11 +433,14 @@ export class AcpSubprocess {
         return;
       }
 
-      await mapSessionUpdate(msg.update, turn.taskCtx);
-
-      if (msg.update.sessionUpdate === 'available_commands_update') {
-        this.cachedCommands = msg.update.availableCommands ?? [];
+      const update = msg.update;
+      if (update.sessionUpdate === 'available_commands_update') {
+        this.cachedCommands = update.availableCommands ?? [];
+      } else if (update.sessionUpdate === 'config_option_update') {
+        this.rememberConfigOptions(shepawSessionId, update.configOptions);
       }
+
+      await mapSessionUpdate(update, turn.taskCtx);
     }
   }
 
