@@ -13,10 +13,17 @@ describe('engines', () => {
   it('lists all supported agents', () => {
     const ids = listEngineIds();
     expect(ids).toContain('claude-code');
+    expect(ids).toContain('tclaude');
     expect(ids).toContain('codebuddy');
     expect(ids).toContain('codex');
+    expect(ids).toContain('tcodex');
     expect(ids).toContain('cursor');
     expect(ids.length).toBe(Object.keys(ACP_ENGINES).length);
+  });
+
+  it('tclaude and tcodex use the same spawn command as their upstream counterparts', () => {
+    expect(getEngineSpec('tclaude').args).toEqual(getEngineSpec('claude-code').args);
+    expect(getEngineSpec('tcodex').args).toEqual(getEngineSpec('codex').args);
   });
 
   it('validates engine ids', () => {

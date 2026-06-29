@@ -105,7 +105,7 @@ cli
 
 cli
   .command('project-add <id>', 'Register a new agent project')
-  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code | codex | opencode | openclaw | cursor | hermes', { default: 'codebuddy' })
+  .option('--engine <engine>', 'Gateway engine: codebuddy | claude-code | tclaude | codex | tcodex | opencode | openclaw | cursor | hermes', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
   .option('--label <text>', 'Display name shown in `status`')
   .option('--port <n>', 'Bind port (default: next free port from 8090)')
@@ -766,7 +766,9 @@ function parseEngine(raw: string): AgentEngine {
   if (
     raw === 'codebuddy'
     || raw === 'claude-code'
+    || raw === 'tclaude'
     || raw === 'codex'
+    || raw === 'tcodex'
     || raw === 'opencode'
     || raw === 'openclaw'
     || raw === 'cursor'
@@ -775,7 +777,7 @@ function parseEngine(raw: string): AgentEngine {
     return raw;
   }
   throw new Error(
-    `Invalid --engine: "${raw}". Expected codebuddy, claude-code, codex, opencode, openclaw, cursor, or hermes.`,
+    `Invalid --engine: "${raw}". Expected codebuddy, claude-code, tclaude, codex, tcodex, opencode, openclaw, cursor, or hermes.`,
   );
 }
 

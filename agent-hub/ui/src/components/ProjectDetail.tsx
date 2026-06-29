@@ -26,7 +26,16 @@ const ENGINE_CREDS: Record<AgentEngine, CredField[]> = {
     { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
     { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
   ],
+  tclaude: [
+    { key: 'ANTHROPIC_API_KEY', label: 'API Key', type: 'password' },
+    { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
+    { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
+  ],
   'codex': [
+    { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
+    { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
+  ],
+  tcodex: [
     { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
     { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
   ],

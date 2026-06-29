@@ -3,7 +3,9 @@
 export type AgentEngine =
   | 'codebuddy'
   | 'claude-code'
+  | 'tclaude'
   | 'codex'
+  | 'tcodex'
   | 'opencode'
   | 'openclaw'
   | 'cursor'

@@ -28,8 +28,10 @@ Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
 | `--engine`   | Upstream command |
 |-------------|------------------|
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp@latest` |
+| `tclaude`     | same as `claude-code` (internal auth/model routing wrapper) |
 | `codebuddy`   | `codebuddy --acp` |
 | `codex`       | `npx -y @zed-industries/codex-acp@latest` |
+| `tcodex`      | same as `codex` (internal auth/model routing wrapper) |
 | `opencode`    | `npx opencode-ai@latest acp` |
 | `openclaw`    | `npx openclaw acp` |
 | `cursor`      | `agent acp` |

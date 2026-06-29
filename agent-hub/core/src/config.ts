@@ -45,7 +45,9 @@ import { encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 export type AgentEngine =
   | 'codebuddy'
   | 'claude-code'
+  | 'tclaude'
   | 'codex'
+  | 'tcodex'
   | 'opencode'
   | 'openclaw'
   | 'cursor'
@@ -499,7 +501,9 @@ function requireEngine(v: unknown, field: string, file: string): AgentEngine {
   if (
     v === 'codebuddy'
     || v === 'claude-code'
+    || v === 'tclaude'
     || v === 'codex'
+    || v === 'tcodex'
     || v === 'opencode'
     || v === 'openclaw'
     || v === 'cursor'
@@ -508,7 +512,7 @@ function requireEngine(v: unknown, field: string, file: string): AgentEngine {
     return v;
   }
   throw new Error(
-    `Hub config at ${file}: ${field} must be one of: codebuddy, claude-code, codex, opencode, openclaw, cursor, hermes (got ${JSON.stringify(v)}).`,
+    `Hub config at ${file}: ${field} must be one of: codebuddy, claude-code, tclaude, codex, tcodex, opencode, openclaw, cursor, hermes (got ${JSON.stringify(v)}).`,
   );
 }
 
@@ -553,7 +557,9 @@ function parseCredentialHints(v: unknown): HubCredentialCache | undefined {
   const engines: AgentEngine[] = [
     'codebuddy',
     'claude-code',
+    'tclaude',
     'codex',
+    'tcodex',
     'opencode',
     'openclaw',
     'cursor',

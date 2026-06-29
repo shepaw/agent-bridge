@@ -64,8 +64,8 @@ node dist/cli.js serve --engine claude-code --cwd ~/your-project --port 8090
 node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
 ```
 
-Supported `--engine` values: `claude-code`, `codebuddy`, `codex`, `opencode`,
-`openclaw`, `cursor`, `hermes`. See
+Supported `--engine` values: `claude-code`, `tclaude`, `codebuddy`, `codex`, `tcodex`,
+`opencode`, `openclaw`, `cursor`, `hermes`. See
 [`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
 
 Legacy vendor-SDK gateways (`claude-code-ts`, `codebuddy-code`, …) are
