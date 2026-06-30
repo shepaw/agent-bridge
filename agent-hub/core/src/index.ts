@@ -52,6 +52,16 @@ export type { ProjectState, StopResult } from './spawn.js';
 export { tailLog } from './logs.js';
 export type { TailOptions } from './logs.js';
 
+export {
+  probeProjectRuntime,
+  readProjectProcessStatus,
+} from './runtime-status.js';
+export type {
+  AgentAvailability,
+  ProbeProjectRuntimeOptions,
+  ProjectProcessStatus,
+  ProjectRuntimeStatus,
+} from './runtime-status.js';
 export { deleteProjectSession, listProjectSessions } from './sessions.js';
 export type { ProjectSessionEntry } from './sessions.js';
 
@@ -69,4 +79,4 @@ export {
   parseShellCommand,
   validateCustomEngineId,
 } from './engines.js';
-export type { AgentEngine, BuiltinAgentEngine, CustomEngineDefinition, EngineInfo } from './engines.js';
+export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo } from './engines.js';

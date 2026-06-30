@@ -199,6 +199,19 @@ export class AcpSubprocess {
     this.initPromise = undefined;
   }
 
+  /** Upstream ACP subprocess metrics for Hub /status. */
+  getRuntimeSnapshot(): {
+    acpConnected: boolean;
+    acpSessionCount: number;
+    hasActiveTurn: boolean;
+  } {
+    return {
+      acpConnected: this.connection !== undefined && this.child !== undefined && !this.child.killed,
+      acpSessionCount: this.sessions.size,
+      hasActiveTurn: this.currentTurn !== undefined,
+    };
+  }
+
   modelsList(): ModelsListResult {
     for (const opts of this.configByShepawSession.values()) {
       const list = configOptionsToModelsList(opts);

@@ -903,5 +903,46 @@ describe('ACPAgentServer v2.1 — registerFormHandler', () => {
   });
 });
 
+describe('ACPAgentServer — /status', () => {
+  class EchoAgent extends ACPAgentServer {
+    override async onChat(ctx: TaskContext, message: string): Promise<void> {
+      await ctx.sendText(`Echo: ${message}`);
+    }
+  }
+
+  let port: number;
+  let stop: () => Promise<void>;
+  let workdir: string;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-status-'));
+    const agent = new EchoAgent({
+      name: 'Status',
+      peersPath: join(workdir, 'authorized_peers.json'),
+    });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('returns runtime metrics', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/status`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      status: string;
+      runtime: { activeTasks: number; connectedClients: number; busyLevel: string };
+    };
+    expect(body.status).toBe('ok');
+    expect(body.runtime.activeTasks).toBe(0);
+    expect(body.runtime.connectedClients).toBe(0);
+    expect(body.runtime.busyLevel).toBe('idle');
+  });
+});
+
 // eliminate unused-import lint warning
 void removePeerByFingerprint;

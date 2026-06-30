@@ -35,6 +35,16 @@ export interface ProjectStatus {
   startedAt: string | null;
   stoppedAt: string | null;
   lastResult: 'graceful' | 'hard' | 'crashed' | null;
+  availability: 'offline' | 'starting' | 'online' | 'degraded';
+  busyLevel: 'idle' | 'busy' | 'overloaded' | null;
+  activeTasks: number | null;
+  connectedClients: number | null;
+  acpConnected: boolean | null;
+  acpSessionCount: number | null;
+  hasActiveTurn: boolean | null;
+  uptimeMs: number | null;
+  probedAt: string;
+  probeError: string | null;
 }
 
 export interface Project {

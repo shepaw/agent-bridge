@@ -62,6 +62,7 @@ import type { ChannelTunnelConfig } from './tunnel.js';
 import { TunnelClient } from './tunnel.js';
 import type {
   AgentCard,
+  AgentRuntimeStatus,
   ChatKwargs,
   CommandsChangedParams,
   CommandsListParams,
@@ -74,7 +75,7 @@ import type {
   ModelsSetCurrentResult,
   SlashCommandInfo,
 } from './types.js';
-import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS } from './types.js';
+import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS, deriveBusyLevel } from './types.js';
 import type { SlashProviders } from './slash/types.js';
 import { SlashCommandRegistry } from './slash/registry.js';
 
@@ -221,6 +222,8 @@ export class ACPAgentServer {
 
   private httpServer: HttpServer | undefined;
   private wsServer: WebSocketServer | undefined;
+  /** Set when the HTTP server starts listening — used for uptime in /status. */
+  private startedAtMs = 0;
   private tunnelConfig: ChannelTunnelConfig | undefined;
   private tunnelClient: TunnelClient | undefined;
   private peersWatcher: FSWatcher | undefined;
@@ -281,6 +284,20 @@ export class ACPAgentServer {
    */
   async onChat(ctx: TaskContext, message: string, _kwargs: ChatKwargs): Promise<void> {
     await ctx.sendText(`Echo: ${message}`);
+  }
+
+  /**
+   * Runtime metrics for Hub supervision (`GET /status`).
+   * Override in gateway implementations to attach upstream-specific fields.
+   */
+  getRuntimeStatus(): AgentRuntimeStatus {
+    const activeTasks = this.activeTasks.size;
+    return {
+      uptimeMs: this.startedAtMs > 0 ? Date.now() - this.startedAtMs : 0,
+      activeTasks,
+      connectedClients: this.wsServer?.clients.size ?? 0,
+      busyLevel: deriveBusyLevel(activeTasks),
+    };
   }
 
   /** Return the agent card (override to customise). */
@@ -422,6 +439,7 @@ export class ACPAgentServer {
       httpServer.once('error', reject);
       httpServer.listen(port, host, () => {
         httpServer.off('error', reject);
+        this.startedAtMs = Date.now();
         resolve();
       });
     });
@@ -534,6 +552,17 @@ export class ACPAgentServer {
         agentId: this.agentId,
         fingerprint: this.identity.fingerprint,
         publicKey: pk,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(body);
+      return;
+    }
+    if (url === '/status') {
+      const body = JSON.stringify({
+        status: 'ok',
+        agentId: this.agentId,
+        fingerprint: this.identity.fingerprint,
+        runtime: this.getRuntimeStatus(),
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(body);
@@ -1513,6 +1542,7 @@ export class ACPAgentServer {
       '-'.repeat(60),
       `  ACP WS:           ws://${displayHost}:${port}/acp/ws?agentId=${this.agentId}#fp=${fp}&pk=${pkEncoded}`,
       `  Health:           http://${displayHost}:${port}/health`,
+      `  Status:           http://${displayHost}:${port}/status`,
       '='.repeat(60),
     ];
     if (peerCount === 0) {

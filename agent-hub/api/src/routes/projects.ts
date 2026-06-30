@@ -41,11 +41,11 @@ import {
   ensureProjectDir,
   getProject,
   hubRoot,
-  isAlive,
   listProjectSessions,
   deleteProjectSession,
   loadOrCreateHubConfig,
   nextFreePort,
+  probeProjectRuntime,
   projectPaths,
   ProjectExistsError,
   ProjectNotFoundError,
@@ -62,32 +62,24 @@ import {
   type ProjectConfig,
   type TunnelConfig,
   isKnownEngine,
+  isAlive,
 } from '@shepaw/agent-hub-core';
 
 export const projectsRouter = Router();
 
 // ── helpers ────────────────────────────────────────────────────────
 
-function projectStatus(id: string) {
-  const paths = projectPaths(id);
-  const state = readState(paths.statePath);
-  const running = state !== undefined && state.pid > 0 && isAlive(state.pid);
-  return {
-    running,
-    pid: running ? state!.pid : null,
-    startedAt: state?.startedAt ?? null,
-    stoppedAt: state?.stoppedAt ?? null,
-    lastResult: state?.lastResult ?? null,
-  };
+async function projectStatus(project: ProjectConfig) {
+  return probeProjectRuntime(project);
 }
 
-function enrichProject(p: ProjectConfig) {
+async function enrichProject(p: ProjectConfig) {
   return {
     ...p,
     // Never expose encrypted envVar values — only the key names.
     envVars: undefined,
     envVarKeys: Object.keys(p.envVars ?? {}),
-    status: projectStatus(p.id),
+    status: await projectStatus(p),
   };
 }
 
@@ -158,9 +150,14 @@ function buildCredentialHints(
 
 // ── list all ───────────────────────────────────────────────────────
 
-projectsRouter.get('/', (_req: Request, res: Response) => {
-  const cfg = loadOrCreateHubConfig();
-  res.json(cfg.projects.map(enrichProject));
+projectsRouter.get('/', async (_req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    const projects = await Promise.all(cfg.projects.map((p) => enrichProject(p)));
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // ── hub meta (credential hints + lastTunnelServerUrl) ──────────────
@@ -315,7 +312,7 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
       updateHubMeta(savedCfg, meta);
     }
 
-    res.status(201).json(enrichProject(saved));
+    res.status(201).json(await enrichProject(saved));
   } catch (err) {
     if (err instanceof ProjectExistsError) {
       res.status(409).json({ error: err.message });
@@ -327,11 +324,11 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
 
 // ── get one ────────────────────────────────────────────────────────
 
-projectsRouter.get('/:id', (req: Request, res: Response) => {
+projectsRouter.get('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const p = getProject(cfg, req.params.id!);
-    res.json(enrichProject(p));
+    res.json(await enrichProject(p));
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {
       res.status(404).json({ error: err.message });
@@ -365,7 +362,7 @@ projectsRouter.delete('/:id', async (req: Request, res: Response) => {
 
 // ── patch ──────────────────────────────────────────────────────────
 
-projectsRouter.patch('/:id', (req: Request, res: Response) => {
+projectsRouter.patch('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const existing = getProject(cfg, req.params.id!);
@@ -425,7 +422,7 @@ projectsRouter.patch('/:id', (req: Request, res: Response) => {
       });
     }
 
-    res.json(enrichProject(updated));
+    res.json(await enrichProject(updated));
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {
       res.status(404).json({ error: err.message });

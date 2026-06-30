@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import {
   ACPAgentServer,
   SessionStore,
+  type AgentRuntimeStatus,
   type ChannelTunnelConfig,
   type ChatKwargs,
   type CommandsListParams,
@@ -121,6 +122,13 @@ export class AcpProxyAgent extends ACPAgentServer {
 
   override async onModelsSetCurrent(params: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
     return this.subprocess.setModel(params.model, this.lastShepawSessionId);
+  }
+
+  override getRuntimeStatus(): AgentRuntimeStatus {
+    return {
+      ...super.getRuntimeStatus(),
+      ...this.subprocess.getRuntimeSnapshot(),
+    };
   }
 
   /** Gracefully tear down the upstream ACP subprocess. */

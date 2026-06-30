@@ -247,3 +247,30 @@ export interface JsonRpcNotification {
 }
 
 export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
+
+// ── Gateway runtime status (Hub supervision) ───────────────────────
+
+/** How busy the gateway is based on in-flight chat tasks. */
+export type AgentBusyLevel = 'idle' | 'busy' | 'overloaded';
+
+/** Snapshot returned by GET /status for Hub / supervisor tooling. */
+export interface AgentRuntimeStatus {
+  /** Milliseconds since the HTTP server started listening. */
+  uptimeMs: number;
+  /** In-flight agent.chat tasks (one per active turn). */
+  activeTasks: number;
+  /** Connected, authenticated WebSocket clients. */
+  connectedClients: number;
+  busyLevel: AgentBusyLevel;
+  /** Present when the gateway fronts an ACP subprocess (acp-proxy). */
+  acpConnected?: boolean;
+  acpSessionCount?: number;
+  hasActiveTurn?: boolean;
+}
+
+/** Derive busy level from the number of active chat tasks. */
+export function deriveBusyLevel(activeTasks: number): AgentBusyLevel {
+  if (activeTasks <= 0) return 'idle';
+  if (activeTasks < 3) return 'busy';
+  return 'overloaded';
+}

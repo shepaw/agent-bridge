@@ -1,5 +1,6 @@
 import type { Project } from '../api/types.js';
 import { api } from '../api/client.js';
+import { availabilityColor, busyColor, busyLabel, formatRuntimeSummary } from '../utils/runtimeStatus.js';
 import { useState } from 'react';
 
 interface ProjectCardProps {
@@ -32,17 +33,22 @@ export function ProjectCard({ project: p, onSelect, onReload }: ProjectCardProps
   return (
     <div style={card}>
       <div style={cardHeader}>
-        <span style={dot(p.status.running)} />
+        <span style={dot(p.status)} />
         <strong style={{ flex: 1, cursor: 'pointer' }} onClick={() => onSelect(p.id)}>
           {p.label}
         </strong>
+        {p.status.busyLevel !== null && p.status.availability === 'online' && (
+          <code style={{ ...badge, background: busyColor(p.status), color: '#1e1e2e' }}>
+            {busyLabel(p.status)}
+          </code>
+        )}
         <code style={badge}>{p.engine}</code>
       </div>
 
       <div style={meta}>
+        <span>{formatRuntimeSummary(p.status)}</span>
         <span>ID: <code>{p.id}</code></span>
         <span>Bind: <code>{p.host}:{p.port}</code></span>
-        {p.status.pid && <span>PID: <code>{p.status.pid}</code></span>}
       </div>
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
@@ -95,12 +101,12 @@ const badge: React.CSSProperties = {
   color: '#cdd6f4',
 };
 
-function dot(running: boolean): React.CSSProperties {
+function dot(status: Project['status']): React.CSSProperties {
   return {
     width: 10,
     height: 10,
     borderRadius: '50%',
-    background: running ? '#a6e3a1' : '#6c7086',
+    background: availabilityColor(status),
     flexShrink: 0,
   };
 }

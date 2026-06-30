@@ -6,6 +6,12 @@ import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
 import { maskSecret } from '../utils/maskSecret.js';
+import {
+  availabilityColor,
+  busyColor,
+  busyLabel,
+  formatRuntimeSummary,
+} from '../utils/runtimeStatus.js';
 
 interface ProjectDetailProps {
   projectId: string;
@@ -76,6 +82,11 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   };
 
   useEffect(() => { void load(); }, [projectId]);
+
+  useEffect(() => {
+    const id = setInterval(() => { void load(); }, 3000);
+    return () => clearInterval(id);
+  }, [projectId]);
 
   // QR expiry countdown
   useEffect(() => {
@@ -291,8 +302,13 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
       {/* Header */}
       <div style={header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={dot(project.status.running)} />
+          <span style={dot(project.status)} />
           <h2 style={{ margin: 0, color: '#cdd6f4' }}>{project.label}</h2>
+          {project.status.busyLevel !== null && project.status.availability === 'online' && (
+            <code style={{ ...badge, background: busyColor(project.status), color: '#1e1e2e' }}>
+              {busyLabel(project.status)}
+            </code>
+          )}
           <code style={badge}>{project.id}</code>
           <code style={{ ...badge, background: '#313244' }}>{project.engine}</code>
         </div>
@@ -461,7 +477,23 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
         <InfoItem label="Bind" value={`${project.host}:${project.port}`} />
         <InfoItem label="CWD" value={project.cwd} />
         {project.baseUrl && <InfoItem label="Base URL" value={project.baseUrl} />}
-        <InfoItem label="Status" value={project.status.running ? `Running (PID ${project.status.pid})` : 'Stopped'} />
+        <InfoItem label="Runtime" value={formatRuntimeSummary(project.status)} />
+        {project.status.activeTasks !== null && (
+          <InfoItem label="Active tasks" value={String(project.status.activeTasks)} />
+        )}
+        {project.status.connectedClients !== null && (
+          <InfoItem label="Connected clients" value={String(project.status.connectedClients)} />
+        )}
+        {project.status.acpSessionCount !== null && (
+          <InfoItem label="ACP sessions" value={String(project.status.acpSessionCount)} />
+        )}
+        {project.status.uptimeMs !== null && project.status.uptimeMs > 0 && (
+          <InfoItem label="Uptime" value={formatUptime(project.status.uptimeMs)} />
+        )}
+        {project.status.probeError && (
+          <InfoItem label="Probe error" value={project.status.probeError} />
+        )}
+        <InfoItem label="Last probe" value={new Date(project.status.probedAt).toLocaleTimeString()} />
         {project.status.startedAt && <InfoItem label="Started" value={new Date(project.status.startedAt).toLocaleString()} />}
         {project.status.stoppedAt && <InfoItem label="Stopped" value={new Date(project.status.stoppedAt).toLocaleString()} />}
         <InfoItem label="Created" value={new Date(project.createdAt).toLocaleString()} />
@@ -662,8 +694,18 @@ const badge: React.CSSProperties = {
   borderRadius: 4, color: '#cdd6f4',
 };
 
-function dot(running: boolean): React.CSSProperties {
-  return { width: 10, height: 10, borderRadius: '50%', background: running ? '#a6e3a1' : '#6c7086' };
+function dot(status: Project['status']): React.CSSProperties {
+  return { width: 10, height: 10, borderRadius: '50%', background: availabilityColor(status) };
+}
+
+function formatUptime(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 function actionBtn(bg: string): React.CSSProperties {

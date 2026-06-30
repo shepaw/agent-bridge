@@ -73,6 +73,7 @@ import {
 import { nextFreePort } from '@shepaw/agent-hub-core';
 import { projectPaths, hubRoot, hubConfigPath } from '@shepaw/agent-hub-core';
 import { tailLog } from '@shepaw/agent-hub-core';
+import { probeProjectRuntime } from '@shepaw/agent-hub-core';
 import { updateProject } from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
@@ -465,7 +466,7 @@ cli
 
 cli
   .command('status [id]', 'Show running state of one or all projects')
-  .action((id: string | undefined) => {
+  .action(async (id: string | undefined) => {
     const cfg = loadOrCreateHubConfig();
     const projects = id !== undefined ? [getProject(cfg, id)] : [...cfg.projects];
     if (projects.length === 0) {
@@ -473,14 +474,20 @@ cli
       return;
     }
     for (const p of projects) {
-      const paths = projectPaths(p.id);
-      const state = readState(paths.statePath);
-      const live = state !== undefined && state.pid > 0 && isAlive(state.pid);
-      const liveTag = live ? 'running' : 'stopped';
-      const pidTag = state?.pid !== undefined && state.pid > 0 ? ` pid=${state.pid}` : '';
-      console.log(`${p.id}: ${liveTag}${pidTag}  bind=${p.host}:${p.port}  engine=${p.engine}`);
-      if (state?.lastResult === 'crashed' && !live) {
-        console.log(`  ⚠ last run ended unexpectedly — check ${paths.logFile}`);
+      const st = await probeProjectRuntime(p);
+      const busyTag = st.busyLevel !== null ? `  busy=${st.busyLevel}` : '';
+      const pidTag = st.pid !== null ? `  pid=${st.pid}` : '';
+      console.log(`${p.id}: ${st.availability}${busyTag}${pidTag}  bind=${p.host}:${p.port}  engine=${p.engine}`);
+      if (st.activeTasks !== null || st.connectedClients !== null) {
+        console.log(
+          `  tasks=${st.activeTasks ?? '?'}  clients=${st.connectedClients ?? '?'}  acp=${st.acpConnected ?? '?'}`,
+        );
+      }
+      if (st.probeError) {
+        console.log(`  probe: ${st.probeError}`);
+      }
+      if (st.lastResult === 'crashed' && !st.running) {
+        console.log(`  last run ended unexpectedly — check ${projectPaths(p.id).logFile}`);
       }
     }
   });
