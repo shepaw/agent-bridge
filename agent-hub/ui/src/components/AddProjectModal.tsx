@@ -1,43 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client.js';
-import type { AgentEngine, EngineInfo, HubMeta } from '../api/types.js';
+import type { EngineInfo, HubMeta } from '../api/types.js';
 
-// Engine-specific credential field definitions (mirrors ProjectDetail)
-interface CredField {
-  key: string;
-  label: string;
-  type: 'password' | 'text';
-  required?: boolean;
-}
-
-const ENGINE_CREDS: Record<AgentEngine, CredField[]> = {
-  'codebuddy': [
-    { key: 'CODEBUDDY_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'CODEBUDDY_AUTH_TOKEN', label: 'Auth Token', type: 'password' },
-  ],
-  'claude-code': [
-    { key: 'ANTHROPIC_API_KEY', label: 'API Key', required: true, type: 'password' },
-    { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
-    { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  tclaude: [
-    { key: 'ANTHROPIC_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
-    { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  'codex': [
-    { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  tcodex: [
-    { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  'opencode': [],
-  'openclaw': [],
-  'cursor': [],
-  'hermes': [],
-};
+const FALLBACK_ENGINES = [
+  'codebuddy', 'claude-code', 'tclaude', 'codex', 'tcodex',
+  'opencode', 'openclaw', 'cursor', 'hermes',
+];
 
 interface AddProjectModalProps {
   onClose: () => void;
@@ -53,14 +21,6 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   const [host, setHost] = useState('127.0.0.1');
   const [baseUrl, setBaseUrl] = useState('');
 
-  // Credentials (per engine key)
-  const [credValues, setCredValues] = useState<Record<string, string>>({});
-  // Credential hint display (masked): '' means no hint, non-empty shows the cached mask
-  const [credHints, setCredHints] = useState<Record<string, string>>({});
-  // Whether credential field is in "use cached" mode (showing hint, not entering new value)
-  const [credUsingCache, setCredUsingCache] = useState<Record<string, boolean>>({});
-
-  // Tunnel fields
   const [tunnelServer, setTunnelServer] = useState('');
   const [tunnelChannelId, setTunnelChannelId] = useState('');
   const [tunnelSecret, setTunnelSecret] = useState('');
@@ -73,60 +33,23 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   useEffect(() => {
     api.engines.list()
       .then(({ engines }) => setEngineOptions(engines))
-      .catch(() => { /* fallback to built-in only in select */ });
+      .catch(() => { /* fallback engine ids below */ });
   }, []);
 
-  // Load hub metadata once for pre-filling hints
   useEffect(() => {
     api.projects.meta().then((meta) => {
       setHubMeta(meta);
       if (meta.lastTunnelServerUrl) {
         setTunnelServer(meta.lastTunnelServerUrl);
       }
-    }).catch(() => { /* ignore — hub meta is optional UX enhancement */ });
+    }).catch(() => { /* optional UX enhancement */ });
   }, []);
-
-  // When engine changes, update credential hints for the new engine
-  useEffect(() => {
-    if (!hubMeta) return;
-    const hints = hubMeta.credentialHints[engine as AgentEngine] ?? {};
-    setCredHints(hints);
-    const usingCache: Record<string, boolean> = {};
-    const values: Record<string, string> = {};
-    for (const field of (ENGINE_CREDS[engine as AgentEngine] ?? [])) {
-      if (hints[field.key]) {
-        usingCache[field.key] = true;
-        values[field.key] = ''; // empty = will use cached (sent as undefined to API)
-      } else {
-        usingCache[field.key] = false;
-        values[field.key] = '';
-      }
-    }
-    setCredUsingCache(usingCache);
-    setCredValues(values);
-  }, [engine, hubMeta]);
-
-  const handleCredChange = (key: string, value: string) => {
-    // Once user types, they are no longer using the cache for this field
-    setCredUsingCache((prev) => ({ ...prev, [key]: false }));
-    setCredValues((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const toggleCacheForKey = (key: string) => {
-    const nowUsingCache = !credUsingCache[key];
-    setCredUsingCache((prev) => ({ ...prev, [key]: nowUsingCache }));
-    if (nowUsingCache) {
-      // Clear typed value when switching back to cached
-      setCredValues((prev) => ({ ...prev, [key]: '' }));
-    }
-  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErr(null);
     try {
-      // Treat '__use_cache__' sentinel as empty (secret hint is display-only)
       const effectiveSecret = tunnelSecret === '__use_cache__' ? '' : tunnelSecret;
       const hasTunnel = tunnelServer && tunnelChannelId && effectiveSecret;
       if ((tunnelServer || tunnelChannelId || effectiveSecret) && !hasTunnel) {
@@ -138,19 +61,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
         ? { serverUrl: tunnelServer, channelId: tunnelChannelId, secret: effectiveSecret }
         : undefined;
 
-      // Auto-derive baseUrl from tunnel if not explicitly set
       const resolvedBaseUrl = baseUrl || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
-
-      // Build envVars: only include keys with an explicit new value (not "using cache").
-      // Keys in "use cache" mode are omitted — the backend will auto-fill them from
-      // the hub-level credentialHints store.
-      const envVars: Record<string, string> = {};
-      for (const field of (ENGINE_CREDS[engine as AgentEngine] ?? [])) {
-        const val = credValues[field.key] ?? '';
-        if (!credUsingCache[field.key] && val.length > 0) {
-          envVars[field.key] = val;
-        }
-      }
 
       await api.projects.create({
         id,
@@ -160,7 +71,6 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
         host,
         baseUrl: resolvedBaseUrl,
         tunnel,
-        envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
       });
       onCreated();
       onClose();
@@ -171,8 +81,6 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
     }
   };
 
-  const credFields = ENGINE_CREDS[engine as AgentEngine] ?? [];
-
   return (
     <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
@@ -182,6 +90,11 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
         </div>
 
         <form onSubmit={(e) => void submit(e)} style={form}>
+          <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
+            Upstream ACP agents handle their own login and API keys on the gateway host.
+            Hub only spawns the agent CLI — no credentials needed here.
+          </p>
+
           <label style={lbl}>ID <span style={req}>*</span></label>
           <input style={inp} value={id} onChange={(e) => setId(e.target.value)} placeholder="my-project" required />
 
@@ -196,7 +109,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
                   {e.builtin ? e.displayName : `${e.displayName} (custom)`}
                 </option>
               ))
-              : Object.keys(ENGINE_CREDS).map((id) => (
+              : FALLBACK_ENGINES.map((id) => (
                 <option key={id} value={id}>{id}</option>
               ))}
           </select>
@@ -213,55 +126,6 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
           <label style={lbl}>Base URL <span style={{ color: '#6c7086', fontSize: 11 }}>(optional — auto-derived from tunnel)</span></label>
           <input style={inp} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="wss://example.com (leave blank if using tunnel)" />
 
-          {/* Credentials section */}
-          {credFields.length > 0 && (
-            <>
-              <div style={sectionDivider} />
-              <p style={sectionTitle}>Credentials</p>
-              {credFields.map((field) => {
-                const hint = credHints[field.key];
-                const usingCache = credUsingCache[field.key];
-                return (
-                  <div key={field.key}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <label style={lbl}>
-                        {field.label}
-                        {field.required && <span style={req}> *</span>}
-                      </label>
-                      {hint && (
-                        <button
-                          type="button"
-                          style={hintToggleBtn}
-                          onClick={() => toggleCacheForKey(field.key)}
-                          title={usingCache ? 'Click to enter a different key' : `Click to use cached: ${hint}`}
-                        >
-                          {usingCache ? `Using: ${hint}` : `Cached: ${hint}`}
-                        </button>
-                      )}
-                    </div>
-                    {!usingCache && (
-                      <input
-                        style={inp}
-                        type={field.type}
-                        value={credValues[field.key] ?? ''}
-                        onChange={(e) => handleCredChange(field.key, e.target.value)}
-                        placeholder={hint ? 'Enter new value to override cached key' : `Enter ${field.label}`}
-                        required={field.required && !hint}
-                      />
-                    )}
-                    {usingCache && hint && (
-                      <div style={cachedValueDisplay}>
-                        <span style={{ color: '#a6e3a1', fontSize: 13 }}>{hint}</span>
-                        <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>(cached — click above to change)</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {/* Tunnel section */}
           <button
             type="button"
             style={tunnelToggle}
@@ -342,8 +206,6 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   );
 }
 
-// ── styles ────────────────────────────────────────────────────────
-
 const overlay: React.CSSProperties = {
   position: 'fixed', inset: 0,
   background: 'rgba(0,0,0,0.6)',
@@ -390,13 +252,6 @@ const tunnelBox: React.CSSProperties = {
 };
 const tunnelNote: React.CSSProperties = {
   color: '#6c7086', fontSize: 12, margin: '0 0 4px',
-};
-const sectionDivider: React.CSSProperties = {
-  borderTop: '1px solid #313244', marginTop: 4, marginBottom: 2,
-};
-const sectionTitle: React.CSSProperties = {
-  color: '#a6adc8', fontSize: 12, fontWeight: 600, margin: '0 0 2px',
-  textTransform: 'uppercase', letterSpacing: '0.05em',
 };
 const hintToggleBtn: React.CSSProperties = {
   background: 'transparent', border: '1px solid #313244', color: '#89b4fa',

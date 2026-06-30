@@ -1,49 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
-import type { Project, Peer, AgentEngine, EnrollToken } from '../api/types.js';
+import type { Project, Peer, EnrollToken } from '../api/types.js';
 import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
 import { maskSecret } from '../utils/maskSecret.js';
-
-// ── engine credential field definitions ───────────────────────────
-
-interface CredField {
-  key: string;
-  label: string;
-  required?: boolean;
-  type?: 'password' | 'text';
-}
-
-const ENGINE_CREDS: Record<AgentEngine, CredField[]> = {
-  'codebuddy': [
-    { key: 'CODEBUDDY_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'CODEBUDDY_AUTH_TOKEN', label: 'Auth Token', type: 'password' },
-  ],
-  'claude-code': [
-    { key: 'ANTHROPIC_API_KEY', label: 'API Key', required: true, type: 'password' },
-    { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
-    { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  tclaude: [
-    { key: 'ANTHROPIC_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Auth Token (alternative)', type: 'password' },
-    { key: 'ANTHROPIC_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  'codex': [
-    { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  tcodex: [
-    { key: 'OPENAI_API_KEY', label: 'API Key', type: 'password' },
-    { key: 'OPENAI_BASE_URL', label: 'Base URL (custom endpoint)', type: 'text' },
-  ],
-  'opencode': [],
-  'openclaw': [],
-  'cursor': [],
-  'hermes': [],
-};
 
 interface ProjectDetailProps {
   projectId: string;
@@ -93,17 +55,19 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
 
   const load = async () => {
     try {
-      const [p, ps, envvars] = await Promise.all([
-        api.projects.get(projectId),
-        api.peers.list(projectId),
-        api.envvars.list(projectId).catch(() => [] as { key: string; value: string }[]),
-      ]);
+      const p = await api.projects.get(projectId);
+      const ps = await api.peers.list(projectId);
       setProject(p);
       setPeers(ps);
-      // Build key -> masked string map
-      const masked: Record<string, string> = {};
-      for (const { key, value } of envvars) masked[key] = value;
-      setEnvMasked(masked);
+
+      if ((p.envVarKeys ?? []).length > 0) {
+        const envvars = await api.envvars.list(projectId).catch(() => [] as { key: string; value: string }[]);
+        const masked: Record<string, string> = {};
+        for (const { key, value } of envvars) masked[key] = value;
+        setEnvMasked(masked);
+      } else {
+        setEnvMasked({});
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -225,7 +189,8 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   const TUNNEL_SECRET_UNCHANGED = '\x00unchanged';
   const ENV_UNCHANGED = '\x00unchanged';
 
-  const openEdit = (p: typeof project) => {    if (!p) return;
+  const openEdit = (p: typeof project) => {
+    if (!p) return;
     setEditLabel(p.label);
     setEditCwd(p.cwd);
     setEditHost(p.host);
@@ -502,93 +467,69 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
         <InfoItem label="Created" value={new Date(project.createdAt).toLocaleString()} />
       </div>
 
-      {/* Credentials */}
-      {(() => {
-        const fields = ENGINE_CREDS[project.engine as AgentEngine] ?? [];
-        // Also show any custom keys not in the predefined list
-        const knownKeys = new Set(fields.map((f) => f.key));
-        const extraKeys = (project.envVarKeys ?? []).filter((k) => !knownKeys.has(k));
-        const allFields: CredField[] = [
-          ...fields,
-          ...extraKeys.map((k) => ({ key: k, label: k, type: 'password' as const })),
-        ];
-        if (allFields.length === 0 && (project.envVarKeys ?? []).length === 0) return null;
-        return (
-          <>
-            <h4 style={sectionTitle}>Credentials</h4>
-            {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
-            <div style={credTable}>
-              {allFields.map((field) => {
-                const isSet = (project.envVarKeys ?? []).includes(field.key);
-                const isEditing = envEditing[field.key] !== undefined;
-                const isBusy = envBusy[field.key] === true;
-                return (
-                  <div key={field.key} style={credRow}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <span style={{ fontSize: 12, color: '#a6adc8' }}>
-                        {field.label}
-                        {field.required && <span style={{ color: '#f38ba8' }}> *</span>}
-                      </span>
-                      <code style={{ fontSize: 11, color: '#6c7086' }}>{field.key}</code>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
-                      {isEditing ? (
-                        <>
-                          <input
-                            style={credInput}
-                            type={envEditing[field.key] === ENV_UNCHANGED ? 'text' : (field.type ?? 'password')}
-                            value={envEditing[field.key] === ENV_UNCHANGED
-                              ? (envMasked[field.key] ?? '••••••••')
-                              : envEditing[field.key]}
-                            onChange={(e) => setEnvEditing((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                            onFocus={() => {
-                              if (envEditing[field.key] === ENV_UNCHANGED)
-                                setEnvEditing((prev) => ({ ...prev, [field.key]: '' }));
-                            }}
-                            placeholder={isSet ? 'Enter new value to change' : `Enter ${field.label}`}
-                            autoFocus
-                          />
-                          <button style={credSaveBtn} disabled={isBusy} onClick={() => void saveEnvVar(field.key)}>
-                            {isBusy ? '...' : 'Save'}
-                          </button>
-                          <button style={credCancelBtn} onClick={() => setEnvEditing((e) => { const n = { ...e }; delete n[field.key]; return n; })}>
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          {isSet
-                            ? <code style={{ fontSize: 12, color: '#a6e3a1', fontFamily: 'monospace' }}>
-                                {envMasked[field.key] ?? '••••••••'}
-                              </code>
-                            : <span style={{ fontSize: 12, color: '#6c7086', fontStyle: 'italic' }}>not set</span>
-                          }
-                          <button
-                            style={credEditBtn}
-                            disabled={isBusy}
-                            onClick={() => setEnvEditing((e) => ({
-                              ...e,
-                              // Pre-fill sentinel for existing keys so user sees the masked value
-                              [field.key]: isSet ? ENV_UNCHANGED : '',
-                            }))}
-                          >
-                            {isSet ? 'Update' : 'Set'}
-                          </button>
-                          {isSet && (
-                            <button style={credDeleteBtn} disabled={isBusy} onClick={() => void deleteEnvVar(field.key)}>
-                              {isBusy ? '...' : 'Clear'}
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </div>
+      {/* Legacy env vars (only shown when a project already has stored keys) */}
+      {(project.envVarKeys ?? []).length > 0 && (
+        <>
+          <h4 style={sectionTitle}>Environment Variables</h4>
+          <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
+            Legacy per-project env injection. New ACP deployments normally do not need these.
+          </p>
+          {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
+          <div style={credTable}>
+            {(project.envVarKeys ?? []).map((key) => {
+              const isEditing = envEditing[key] !== undefined;
+              const isBusy = envBusy[key] === true;
+              return (
+                <div key={key} style={credRow}>
+                  <code style={{ fontSize: 11, color: '#6c7086' }}>{key}</code>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+                    {isEditing ? (
+                      <>
+                        <input
+                          style={credInput}
+                          type="password"
+                          value={envEditing[key] === ENV_UNCHANGED
+                            ? (envMasked[key] ?? '••••••••')
+                            : envEditing[key]}
+                          onChange={(e) => setEnvEditing((prev) => ({ ...prev, [key]: e.target.value }))}
+                          onFocus={() => {
+                            if (envEditing[key] === ENV_UNCHANGED)
+                              setEnvEditing((prev) => ({ ...prev, [key]: '' }));
+                          }}
+                          placeholder="Enter new value"
+                          autoFocus
+                        />
+                        <button style={credSaveBtn} disabled={isBusy} onClick={() => void saveEnvVar(key)}>
+                          {isBusy ? '...' : 'Save'}
+                        </button>
+                        <button style={credCancelBtn} onClick={() => setEnvEditing((e) => { const n = { ...e }; delete n[key]; return n; })}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <code style={{ fontSize: 12, color: '#a6e3a1', fontFamily: 'monospace' }}>
+                          {envMasked[key] ?? '••••••••'}
+                        </code>
+                        <button
+                          style={credEditBtn}
+                          disabled={isBusy}
+                          onClick={() => setEnvEditing((e) => ({ ...e, [key]: ENV_UNCHANGED }))}
+                        >
+                          Update
+                        </button>
+                        <button style={credDeleteBtn} disabled={isBusy} onClick={() => void deleteEnvVar(key)}>
+                          {isBusy ? '...' : 'Clear'}
+                        </button>
+                      </>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-          </>
-        );
-      })()}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Tunnel info */}
       {project.tunnel && (        <>
