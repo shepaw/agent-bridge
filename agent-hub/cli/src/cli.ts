@@ -73,7 +73,7 @@ import {
 import { nextFreePort } from '@shepaw/agent-hub-core';
 import { projectPaths, hubRoot, hubConfigPath } from '@shepaw/agent-hub-core';
 import { tailLog } from '@shepaw/agent-hub-core';
-import { probeProjectRuntime } from '@shepaw/agent-hub-core';
+import { probeProjectRuntime, createHubPairing } from '@shepaw/agent-hub-core';
 import { updateProject } from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
@@ -545,13 +545,17 @@ function runPair(
   const display = formatCodeForDisplay(token.code);
   const expires = new Date(token.expiresAt).toLocaleString();
 
+  const pkB64 = Buffer.from(identity.staticPublicKey).toString('base64');
+  const pkEncoded = encodeURIComponent(pkB64);
+  const fragmentParams = `fp=${identity.fingerprint}&pk=${pkEncoded}`;
+
   const base = opts.baseUrl ?? project.baseUrl;
   let pairUrl: string | undefined;
   if (base) {
     const clean = base.replace(/\/$/, '');
-    pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
+    pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   } else {
-    pairUrl = `ws://${project.host}:${project.port}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
+    pairUrl = `ws://${project.host}:${project.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   }
 
   const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
@@ -583,8 +587,58 @@ function runPair(
   console.log('');
 }
 
+function runHubPair(
+  opts: { label?: string; ttlMinutes?: number | string; qr?: boolean; baseUrl?: string },
+): void {
+  const ttlMs = Math.max(1, Math.floor(Number(opts.ttlMinutes ?? 10))) * 60 * 1000;
+  const result = createHubPairing({
+    label: opts.label ?? 'Shepaw device',
+    ttlMs,
+    baseUrl: opts.baseUrl,
+  });
+
+  console.log('');
+  console.log('╭──────────────────────────────────────────────╮');
+  console.log(`│  Hub pairing code:  ${result.display.padEnd(23, ' ')} │`);
+  console.log('╰──────────────────────────────────────────────╯');
+  console.log('');
+  console.log(`  Bootstrap agent: ${result.bootstrapProjectId}`);
+  console.log(`  Valid until:     ${new Date(result.expiresAt).toLocaleString()}`);
+  console.log(`  Agents:          ${result.agents.length} (all authorized after one scan)`);
+  console.log(`  Pair URL:        ${result.pairUrl}`);
+  console.log('');
+  console.log('  After pairing in the Shepaw app, add other agents using their WS URLs');
+  console.log('  (no pairing code needed — device is already authorized).');
+  console.log('');
+
+  if (opts.qr !== false) {
+    console.log('  Scan with Shepaw app:');
+    console.log('');
+    qrcode.generate(result.qrPayload, { small: true }, (qr: string) => {
+      process.stdout.write(qr);
+    });
+  }
+  console.log('');
+}
+
 cli
-  .command('pair <id>', 'Mint a pairing code + QR for a project (shortcut for enroll)')
+  .command('pair [id]', 'Mint pairing QR (all agents if no id, else one project)')
+  .option('--label <text>', 'Label to record on the peer that redeems the code')
+  .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
+  .option('--base-url <url>', 'Override public WS base URL for the QR')
+  .option('--no-qr', 'Suppress the terminal QR code')
+  .action((id: string | undefined, opts: { label?: string; ttlMinutes?: number | string; baseUrl?: string; qr?: boolean }) => {
+    try {
+      if (id === undefined) {
+        runHubPair(opts);
+      } else {
+        runPair(id, opts);
+      }
+    } catch (err) { exitWithError(err); }
+  });
+
+cli
+  .command('pair-project <id>', 'Mint a pairing code + QR for one project only')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
   .option('--base-url <url>', 'Override the project\'s configured base URL for this pairing')

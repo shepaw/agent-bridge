@@ -3,7 +3,10 @@ import type {
   CreateProjectInput,
   EnrollToken,
   EngineInfo,
+  HubAgentCatalogEntry,
   HubMeta,
+  HubPairedDevice,
+  HubPairingResult,
   Peer,
   Project,
   StoredSession,
@@ -107,5 +110,25 @@ export const api = {
 
     remove: (id: string): Promise<void> =>
       request(`/engines/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
+  pair: {
+    agents: (): Promise<{ agents: HubAgentCatalogEntry[] }> => request('/pair/agents'),
+
+    devices: (): Promise<{ devices: HubPairedDevice[] }> => request('/pair/devices'),
+
+    removeDevice: (fingerprint: string): Promise<void> =>
+      request(`/pair/devices/${fingerprint}`, { method: 'DELETE' }),
+
+    mint: (opts?: {
+      label?: string;
+      ttlMinutes?: number;
+      bootstrapProjectId?: string;
+      baseUrl?: string;
+    }): Promise<HubPairingResult> =>
+      request('/pair/enroll', { method: 'POST', body: JSON.stringify(opts ?? {}) }),
+
+    revoke: (code: string): Promise<void> =>
+      request(`/pair/enroll/${encodeURIComponent(code)}`, { method: 'DELETE' }),
   },
 };

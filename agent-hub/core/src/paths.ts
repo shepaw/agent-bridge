@@ -4,6 +4,7 @@
  * ```
  * $SHEPAW_HUB_HOME (or ~/.config/shepaw-hub/)
  * ├── hub.json                       — top-level config; list of projects
+ * ├── enrollments.json               — hub-wide pairing codes (device pairing)
  * └── projects/
  *     └── <project-id>/
  *         ├── identity.json           — per-project X25519 static keypair
@@ -66,6 +67,10 @@ export function hubRoot(): string {
 
 export function hubConfigPath(root: string = hubRoot()): string {
   return join(root, 'hub.json');
+}
+
+export function hubEnrollmentsPath(root: string = hubRoot()): string {
+  return join(root, 'enrollments.json');
 }
 
 /**

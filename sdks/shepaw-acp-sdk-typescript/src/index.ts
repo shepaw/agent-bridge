@@ -39,7 +39,7 @@ export type {
   TaskContextInit,
 } from './task-context.js';
 export { ACPAgentServer, TaskCancelledError } from './server.js';
-export type { ACPAgentServerOptions, RunOptions } from './server.js';
+export type { ACPAgentServerOptions, PeerEnrolledEvent, RunOptions } from './server.js';
 export { parseFrontmatter, scanCommandsDir } from './commands-scanner.js';
 export {
   derivedAgentId,
@@ -60,6 +60,8 @@ export type { AuthorizedPeer, AuthorizedPeers, LoadOrCreatePeersOptions } from '
 export {
   consumeEnrollmentToken,
   createEnrollmentToken,
+  syncEnrollmentToken,
+  removeEnrollmentTokenByCode,
   EnrollmentError,
   formatCodeForDisplay,
   loadOrCreateEnrollments,

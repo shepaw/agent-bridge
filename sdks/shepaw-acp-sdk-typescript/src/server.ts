@@ -141,6 +141,18 @@ export interface ACPAgentServerOptions {
    * reachable from the public internet. Can also be set via `runWithTunnel`.
    */
   tunnelConfig?: ChannelTunnelConfig;
+  /**
+   * Called after a peer is promoted into the allowlist via enrollment.
+   * Hub uses this to fan-out the device to every managed agent.
+   */
+  onPeerEnrolled?: (event: PeerEnrolledEvent) => void;
+}
+
+/** Fired when an enrollment token is consumed and the peer is authorized. */
+export interface PeerEnrolledEvent {
+  readonly publicKeyB64: string;
+  readonly label: string;
+  readonly code: string;
 }
 
 export interface RunOptions {
@@ -228,6 +240,7 @@ export class ACPAgentServer {
   private tunnelClient: TunnelClient | undefined;
   private peersWatcher: FSWatcher | undefined;
   private peersReloadTimer: NodeJS.Timeout | undefined;
+  private readonly onPeerEnrolledHook: ((event: PeerEnrolledEvent) => void) | undefined;
   /** shepaw session_id → AbortController for the running task (one per session). */
   protected readonly activeTasks = new Map<string, AbortController>();
   private readonly pendingHubRequests = new Map<string, Deferred<unknown>>();
@@ -267,6 +280,7 @@ export class ACPAgentServer {
     this.cleanDirectivesInHistory = opts.cleanDirectivesInHistory ?? true;
     this.convMgr = new ConversationManager({ maxHistory: opts.maxHistory ?? 20 });
     this.tunnelConfig = opts.tunnelConfig;
+    this.onPeerEnrolledHook = opts.onPeerEnrolled;
   }
 
   // ── override points ────────────────────────────────────────────
@@ -726,6 +740,16 @@ export class ACPAgentServer {
     console.log(
       `[ACP] ${remote}: enrolled via token ${consumed.token.code} → fingerprint ${entry?.fingerprint ?? '(unknown)'} (${label})`,
     );
+    try {
+      this.onPeerEnrolledHook?.({
+        publicKeyB64: pubB64,
+        label,
+        code: consumed.token.code,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[ACP] ${remote}: onPeerEnrolled hook failed:`, err);
+    }
     return entry;
   }
 

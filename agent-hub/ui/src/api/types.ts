@@ -112,6 +112,40 @@ export interface StoredSession {
   acpSessionId: string;
 }
 
+/** Hub-level agent catalog entry (GET /api/pair/agents). */
+export interface HubAgentCatalogEntry {
+  projectId: string;
+  label: string;
+  engine: string;
+  agentId: string;
+  fingerprint: string;
+  publicKey: string;
+  wsUrl: string;
+  host: string;
+  port: number;
+  running: boolean;
+}
+
+/** Result of POST /api/pair/enroll — one QR for all agents on this host. */
+export interface HubPairingResult {
+  code: string;
+  display: string;
+  label: string;
+  expiresAt: string;
+  createdAt: string;
+  bootstrapProjectId: string;
+  pairUrl: string;
+  qrPayload: string;
+  agents: HubAgentCatalogEntry[];
+}
+
+export interface HubPairedDevice {
+  fingerprint: string;
+  label: string;
+  projectIds: string[];
+  addedAt: string | null;
+}
+
 export interface CreateProjectInput {
   id: string;
   engine?: string;

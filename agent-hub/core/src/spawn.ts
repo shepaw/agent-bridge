@@ -47,6 +47,7 @@ import { createStream as createRotatingStream } from 'rotating-file-stream';
 
 import type { ProjectConfig } from './config.js';
 import { loadOrCreateHubConfig } from './config.js';
+import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
 import { projectPaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
@@ -146,6 +147,13 @@ export async function startProject(project: ProjectConfig): Promise<{
         SHEPAW_IDENTITY_PATH: paths.identityPath,
         SHEPAW_PEERS_PATH: paths.peersPath,
         SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
+        ...(() => {
+          const fanout = hubFanoutEnvPaths(hubCfg);
+          return {
+            SHEPAW_HUB_FANOUT_PEER_PATHS: fanout.peerPaths,
+            SHEPAW_HUB_FANOUT_ENROLLMENT_PATHS: fanout.enrollmentPaths,
+          };
+        })(),
         // Tunnel credentials — injected as env vars so they never appear in
         // `ps aux` argv. The gateway reads these to open the channel-service
         // tunnel. Omitted entirely when not configured (undefined entries are

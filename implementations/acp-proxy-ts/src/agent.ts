@@ -26,6 +26,7 @@ import {
 } from 'shepaw-acp-sdk';
 
 import { AcpSubprocess } from './acp-subprocess.js';
+import { createHubFanoutHandler } from './hub-fanout.js';
 import {
   resolveEngineSpec,
   type AcpEngineSpec,
@@ -50,6 +51,8 @@ export interface AcpProxyAgentOptions {
   agentEnv?: Record<string, string | undefined>;
   /** Inject a custom subprocess manager (tests). */
   subprocess?: AcpSubprocess;
+  /** Override hub fan-out hook (tests). */
+  onPeerEnrolled?: (event: import('shepaw-acp-sdk').PeerEnrolledEvent) => void;
 }
 
 export class AcpProxyAgent extends ACPAgentServer {
@@ -69,6 +72,7 @@ export class AcpProxyAgent extends ACPAgentServer {
       enrollmentsPath: opts.enrollmentsPath,
       identityPath: opts.identityPath,
       tunnelConfig: opts.tunnelConfig,
+      onPeerEnrolled: opts.onPeerEnrolled ?? createHubFanoutHandler(),
     });
 
     this.cwd = opts.cwd ?? process.cwd();

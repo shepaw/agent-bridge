@@ -4,6 +4,7 @@ import { ProjectCard } from './components/ProjectCard.js';
 import { ProjectDetail } from './components/ProjectDetail.js';
 import { AddProjectModal } from './components/AddProjectModal.js';
 import { CustomEnginesModal } from './components/CustomEnginesModal.js';
+import { DevicePairingModal } from './components/DevicePairingModal.js';
 
 /** Read project id from URL hash, e.g. "#project/my-project" → "my-project" */
 function getHashProjectId(): string | null {
@@ -16,6 +17,7 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(getHashProjectId);
   const [showAdd, setShowAdd] = useState(false);
   const [showEngines, setShowEngines] = useState(false);
+  const [showPair, setShowPair] = useState(false);
 
   // Keep URL hash in sync with selected project
   useEffect(() => {
@@ -63,6 +65,9 @@ export function App() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button style={secondaryBtn} onClick={() => setShowPair(true)}>
+            设备配对
+          </button>
           <button style={secondaryBtn} onClick={() => setShowEngines(true)}>
             Custom Engines
           </button>
@@ -103,6 +108,10 @@ export function App() {
 
       {showEngines && (
         <CustomEnginesModal onClose={() => setShowEngines(false)} />
+      )}
+
+      {showPair && (
+        <DevicePairingModal onClose={() => setShowPair(false)} />
       )}
     </Layout>
   );

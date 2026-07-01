@@ -22,6 +22,7 @@ import { WebSocketServer } from 'ws';
 
 import { projectsRouter } from './routes/projects.js';
 import { enginesRouter } from './routes/engines.js';
+import { pairRouter } from './routes/pair.js';
 import { attachLogsWss } from './ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // ── API routes ───────────────────────────────────────────────────
   app.use('/api/projects', projectsRouter);
   app.use('/api/engines', enginesRouter);
+  app.use('/api/pair', pairRouter);
 
   // ── Health check ─────────────────────────────────────────────────
   app.get('/api/health', (_req: Request, res: Response) => {

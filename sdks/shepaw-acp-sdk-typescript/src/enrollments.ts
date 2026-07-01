@@ -199,6 +199,29 @@ export function createEnrollmentToken(
 }
 
 /**
+ * Copy an already-minted token into another enrollments store (e.g. hub-wide
+ * pairing replicated to every project). Idempotent on code.
+ */
+export function syncEnrollmentToken(path: string, token: EnrollmentToken): void {
+  const current = loadOrCreateEnrollments({ path });
+  if (current.tokens.some((t) => t.code === token.code)) return;
+  persist(path, [...current.tokens, token]);
+}
+
+/**
+ * Remove a token by normalized code from a store. Returns whether it existed.
+ */
+export function removeEnrollmentTokenByCode(path: string, code: string): boolean {
+  const normalized = normalizeCode(code);
+  if (normalized.length !== CODE_LENGTH) return false;
+  const current = loadOrCreateEnrollments({ path });
+  const filtered = current.tokens.filter((t) => t.code !== normalized);
+  if (filtered.length === current.tokens.length) return false;
+  persist(path, filtered);
+  return true;
+}
+
+/**
  * Attempt to consume a token by its user-supplied code. Normalizes the input
  * (lowercase letters → upper, hyphens and spaces stripped, 0→O/1→I remapped
  * where unambiguous), rejects expired/missing tokens, and removes the token

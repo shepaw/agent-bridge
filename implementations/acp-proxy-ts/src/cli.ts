@@ -21,11 +21,11 @@ import {
 
 import { AcpProxyAgent } from './agent.js';
 import {
-  formatShellCommand,
   getBuiltinEngineSpec,
   listBuiltinEngineIds,
   resolveEngineSpec,
 } from './engines.js';
+import { formatShellCommand } from './command-line.js';
 import { listUpstreamAcpSessions, readStoredSessions } from './sessions-list.js';
 
 if (process.argv[2] === 'peers' && typeof process.argv[3] === 'string' && !process.argv[3].startsWith('-')) {

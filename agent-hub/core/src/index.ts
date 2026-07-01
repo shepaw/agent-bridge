@@ -28,6 +28,7 @@ export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './cr
 
 export {
   hubConfigPath,
+  hubEnrollmentsPath,
   hubRoot,
   normalizeCwd,
   projectPaths,
@@ -52,6 +53,24 @@ export type { ProjectState, StopResult } from './spawn.js';
 export { tailLog } from './logs.js';
 export type { TailOptions } from './logs.js';
 
+export {
+  createHubPairing,
+  ensureHubPairingDir,
+  fanOutHubPeer,
+  hubFanoutEnvPaths,
+  listHubAgentCatalog,
+  listHubEnrollments,
+  listHubPairedDevices,
+  removeHubPairedDevice,
+  revokeHubEnrollment,
+} from './pairing.js';
+export type {
+  CreateHubPairingOptions,
+  FanOutPeerOptions,
+  HubAgentCatalogEntry,
+  HubPairedDevice,
+  HubPairingResult,
+} from './pairing.js';
 export {
   probeProjectRuntime,
   readProjectProcessStatus,
