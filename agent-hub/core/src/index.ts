@@ -9,6 +9,8 @@
 export {
   addProject,
   addCustomEngineToHub,
+  DEFAULT_ROUTER_HOST,
+  DEFAULT_ROUTER_PORT,
   deleteProjectEnvVar,
   findProject,
   getProject,
@@ -17,16 +19,23 @@ export {
   ProjectNotFoundError,
   removeCustomEngineFromHub,
   removeProject,
+  resolveApprovalPolicy,
   saveHubConfig,
+  setHubGateway,
   setProjectEnvVar,
   updateHubMeta,
   updateProject,
 } from './config.js';
-export type { AgentEngine, CredentialHint, HubConfig, HubCredentialCache, LoadHubOptions, ProjectConfig, TunnelConfig } from './config.js';
+export type { AgentEngine, ApprovalMode, ApprovalPolicyConfig, CredentialHint, GatewayConfig, HubConfig, HubCredentialCache, LoadHubOptions, ProjectConfig, TunnelConfig } from './config.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
+export { detectLanIPv4, resolvePublicHost } from './network.js';
+
 export {
+  gatewayLogFile,
+  gatewayLogsDir,
+  gatewayStatePath,
   hubConfigPath,
   hubEnrollmentsPath,
   hubRoot,
@@ -35,6 +44,17 @@ export {
   validateProjectId,
 } from './paths.js';
 export type { ProjectPaths } from './paths.js';
+
+export { GatewayTunnelRouter } from './tunnel-router.js';
+export type { GatewayRouterOptions } from './tunnel-router.js';
+
+export {
+  isGatewayRunning,
+  readGatewayState,
+  startGatewayRouter,
+  stopGatewayRouter,
+} from './gateway-process.js';
+export type { GatewayState } from './gateway-process.js';
 
 export { nextFreePort, NoFreePortError, probeBindable } from './ports.js';
 export type { FindPortOptions } from './ports.js';

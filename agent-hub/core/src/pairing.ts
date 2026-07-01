@@ -28,6 +28,7 @@ import type { HubConfig, ProjectConfig } from './config.js';
 import { loadOrCreateHubConfig } from './config.js';
 import { hubEnrollmentsPath, projectPaths } from './paths.js';
 import { ensureProjectDir, isAlive, readState } from './spawn.js';
+import { resolvePublicHost } from './network.js';
 
 export interface HubAgentCatalogEntry {
   projectId: string;
@@ -80,20 +81,54 @@ export interface FanOutPeerOptions {
   enrollmentCode: string;
 }
 
+/**
+ * Derive the `wss://<server>/proxy/<channelId>` base for the shared,
+ * gateway-level channel. Returns undefined when no gateway tunnel is set.
+ * The Channel Service also accepts `/c/<alias>` routing, but the alias is
+ * resolved at runtime by the tunnel router, so pairing URLs use the always-
+ * valid `/proxy/<channelId>` form.
+ */
+function gatewayChannelWsBase(cfg: HubConfig): string | undefined {
+  const t = cfg.gateway?.tunnel;
+  if (t === undefined) return undefined;
+  const wsBase = t.serverUrl
+    .replace(/\/+$/, '')
+    .replace(/^https:\/\//, 'wss://')
+    .replace(/^http:\/\//, 'ws://');
+  return `${wsBase}/proxy/${t.channelId}`;
+}
+
 function buildWsPairUrl(
   project: ProjectConfig,
   identity: { agentId: string; fingerprint: string; staticPublicKey: Uint8Array },
-  baseUrl?: string,
+  opts: { baseUrl?: string; gatewayBase?: string } = {},
 ): string {
   const pkEncoded = encodeURIComponent(
     Buffer.from(identity.staticPublicKey).toString('base64'),
   );
   const fragment = `fp=${identity.fingerprint}&pk=${pkEncoded}`;
-  const resolvedBase = (baseUrl ?? project.baseUrl).replace(/\/$/, '');
+
+  // 1. Explicit --base-url override wins (LAN pairing, custom relays).
+  if (opts.baseUrl !== undefined && opts.baseUrl.length > 0) {
+    const resolvedBase = opts.baseUrl.replace(/\/$/, '');
+    return `${resolvedBase}/acp/ws?agentId=${identity.agentId}#${fragment}`;
+  }
+
+  // 2. Shared gateway channel: one channel fronts every agent, routed by the
+  //    `/p/<projectId>` prefix the tunnel router dispatches on.
+  if (opts.gatewayBase !== undefined && opts.gatewayBase.length > 0) {
+    return `${opts.gatewayBase}/p/${encodeURIComponent(project.id)}/acp/ws?agentId=${identity.agentId}#${fragment}`;
+  }
+
+  // 3. Legacy per-project base URL (deprecated per-agent tunnel).
+  const resolvedBase = project.baseUrl.replace(/\/$/, '');
   if (resolvedBase.length > 0) {
     return `${resolvedBase}/acp/ws?agentId=${identity.agentId}#${fragment}`;
   }
-  return `ws://${project.host}:${project.port}/acp/ws?agentId=${identity.agentId}#${fragment}`;
+
+  // 4. Loopback / LAN fallback.
+  const host = resolvePublicHost(project.host);
+  return `ws://${host}:${project.port}/acp/ws?agentId=${identity.agentId}#${fragment}`;
 }
 
 function isProjectRunning(projectId: string): boolean {
@@ -118,6 +153,7 @@ function pickBootstrapProject(cfg: HubConfig, preferredId?: string): ProjectConf
 
 /** List every managed agent with connection metadata for the Shepaw app. */
 export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): HubAgentCatalogEntry[] {
+  const gatewayBase = gatewayChannelWsBase(cfg);
   return cfg.projects.map((project) => {
     const paths = projectPaths(project.id);
     ensureProjectDir(project.id);
@@ -129,7 +165,7 @@ export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): H
       agentId: identity.agentId,
       fingerprint: identity.fingerprint,
       publicKey: Buffer.from(identity.staticPublicKey).toString('base64'),
-      wsUrl: buildWsPairUrl(project, identity),
+      wsUrl: buildWsPairUrl(project, identity, { gatewayBase }),
       host: project.host,
       port: project.port,
       running: isProjectRunning(project.id),
@@ -169,7 +205,8 @@ export function createHubPairing(opts: CreateHubPairingOptions = {}): HubPairing
   }
 
   const bootstrapIdentity = loadOrCreateIdentity({ path: projectPaths(bootstrap.id).identityPath });
-  const pairUrl = buildWsPairUrl(bootstrap, bootstrapIdentity, opts.baseUrl);
+  const gatewayBase = gatewayChannelWsBase(cfg);
+  const pairUrl = buildWsPairUrl(bootstrap, bootstrapIdentity, { baseUrl: opts.baseUrl, gatewayBase });
   const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
 
   return {

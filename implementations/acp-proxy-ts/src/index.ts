@@ -14,3 +14,12 @@ export {
   type ResolveEngineSpecOptions,
 } from './engines.js';
 export { formatShellCommand, parseShellCommand } from './command-line.js';
+export {
+  PermissionPolicy,
+  loadPolicyFromEnv,
+  DEFAULT_POLICY,
+  type ApprovalPolicyConfig,
+  type PolicyMode,
+  type PolicyDecision,
+  type PolicyResult,
+} from './permission/policy.js';

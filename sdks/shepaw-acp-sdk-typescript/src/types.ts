@@ -75,6 +75,17 @@ export interface ConversationMessage {
 export interface UIActionOption {
   label: string;
   value: string;
+  /**
+   * Optional explicit action id. The Shepaw app reads `id ?? value ?? label`,
+   * so setting this is equivalent to `value` but more explicit; the reply
+   * round-trips it back as `selected_action_id`.
+   */
+  id?: string;
+  /**
+   * Button styling hint for the app: `primary` (default emphasis), `danger`
+   * (destructive / deny), or `secondary`. Unknown/omitted → `secondary`.
+   */
+  style?: 'primary' | 'secondary' | 'danger';
 }
 
 export interface UIChoiceOption {

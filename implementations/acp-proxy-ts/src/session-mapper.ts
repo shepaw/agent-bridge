@@ -6,6 +6,7 @@ import type * as acp from '@agentclientprotocol/sdk';
 import type { TaskContext } from 'shepaw-acp-sdk';
 
 import { log } from './debug.js';
+import { extractCommand, extractPaths } from './permission/format.js';
 
 export async function mapSessionUpdate(
   update: acp.SessionUpdate,
@@ -40,7 +41,19 @@ export async function mapSessionUpdate(
         collapsibleTitle: title,
         autoCollapse: true,
       });
-      await ctx.sendText(`[${update.status}] ${title}\n`);
+      // Surface enough of the tool call (command, affected files) that a
+      // reviewer can follow along — the thin `[status] title` alone hides
+      // exactly what the agent is about to do.
+      const lines = [`[${update.status}] ${title}`];
+      const command = extractCommand(update);
+      if (command.length > 0 && command !== title) {
+        lines.push('```', command.slice(0, 2000), '```');
+      }
+      const paths = extractPaths(update);
+      if (paths.length > 0) {
+        lines.push(`Files: ${paths.slice(0, 12).join(', ')}${paths.length > 12 ? ' …' : ''}`);
+      }
+      await ctx.sendText(`${lines.join('\n')}\n`);
       break;
     }
 

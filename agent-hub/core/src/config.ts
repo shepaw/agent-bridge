@@ -72,13 +72,17 @@ export type {
 /**
  * Tunnel configuration for a Shepaw Channel Service channel.
  *
- * One channel per agent — a single channel cannot be shared across multiple
- * agents simultaneously. The channel's `endpoint` is NOT stored here; it is
- * set by the Channel Service when the channel is created. The hub only needs
- * the credentials required to authenticate as the channel owner.
+ * As of the gateway-level refactor a single channel is shared across every
+ * managed agent on the host: the device runs one long-lived tunnel router
+ * (see `tunnel-router.ts`) that terminates the channel tunnel and forwards
+ * still-Noise-encrypted WebSocket streams to the right agent's loopback port
+ * based on the `/p/<projectId>` (or `/a/<agentId>`) prefix in the URL. Set
+ * this on `HubConfig.gateway.tunnel` — the per-project `ProjectConfig.tunnel`
+ * is retained for backward compatibility only (see its doc comment).
  *
- * These values are injected into the gateway child process as env vars
- * (`PAW_ACP_TUNNEL_*`) so they never appear in `ps aux` argv output.
+ * The channel's `endpoint` alias is NOT stored here; it is resolved at
+ * runtime by the tunnel router against the Channel Service. The hub only
+ * needs the credentials required to authenticate as the channel owner.
  */
 export interface TunnelConfig {
   /** Shepaw Channel Service base URL, e.g. "https://channel.example.com" */
@@ -87,6 +91,61 @@ export interface TunnelConfig {
   readonly channelId: string;
   /** HMAC-SHA256 signing secret for this channel */
   readonly secret: string;
+}
+
+/** Default loopback host the tunnel router binds its dispatch server to. */
+export const DEFAULT_ROUTER_HOST = '127.0.0.1';
+/** Default local port the tunnel router listens on for dispatch. */
+export const DEFAULT_ROUTER_PORT = 18789;
+
+/**
+ * Gateway-level (device-wide) configuration.
+ *
+ * This is the recommended place to configure the Channel Service tunnel: one
+ * channel fronts every managed agent. The tunnel router process
+ * (`shepaw-hub gateway start`) reads this, opens a single reverse tunnel, and
+ * dispatches incoming `/p/<projectId>/acp/ws` connections to the matching
+ * agent's loopback port. Agents themselves bind loopback-only and no longer
+ * need per-project tunnels.
+ */
+export interface GatewayConfig {
+  /** Shared Channel Service tunnel. Omitted when running LAN-only. */
+  readonly tunnel?: TunnelConfig;
+  /** Loopback host the dispatch server binds to. Default `127.0.0.1`. */
+  readonly routerHost: string;
+  /** Local port the dispatch server (and the tunnel's local target) uses. */
+  readonly routerPort: number;
+  /**
+   * Device-wide default tool-call approval policy. Injected into every managed
+   * agent's gateway process as `PAW_ACP_APPROVAL_*` env vars unless a project
+   * defines its own {@link ProjectConfig.approval} override.
+   */
+  readonly approval?: ApprovalPolicyConfig;
+}
+
+/** How the gateway decides whether a tool call needs remote review. */
+export type ApprovalMode = 'ask' | 'auto' | 'custom';
+
+/**
+ * Tool-call approval policy (request #4). Lets the operator pre-decide which
+ * ACP permissions are auto-approved ("skipped"), auto-denied, or always sent
+ * to the Shepaw app for remote review.
+ *
+ * `mode`:
+ *   - `ask`    — always ask (safest; ignores allow rules).
+ *   - `auto`   — auto-allow everything except `denyPatterns` / `askKinds`.
+ *   - `custom` — apply allow/ask/deny rules; default to ask.
+ *
+ * `*Kinds` are ACP tool kinds (`read`, `edit`, `delete`, `move`, `search`,
+ * `execute`, `think`, `fetch`, `switch_mode`, `other`). `*Patterns` are
+ * case-insensitive regexes matched against the tool title + extracted command.
+ */
+export interface ApprovalPolicyConfig {
+  readonly mode: ApprovalMode;
+  readonly allowKinds: ReadonlyArray<string>;
+  readonly askKinds: ReadonlyArray<string>;
+  readonly allowPatterns: ReadonlyArray<string>;
+  readonly denyPatterns: ReadonlyArray<string>;
 }
 
 export interface ProjectConfig {
@@ -122,11 +181,21 @@ export interface ProjectConfig {
   /** ISO 8601 timestamp for audit / `status --verbose`. */
   readonly createdAt: string;
   /**
-   * Optional tunnel config. When set, the hub injects `PAW_ACP_TUNNEL_*`
-   * env vars into the gateway process and auto-derives `baseUrl` from
-   * `${serverUrl}/proxy/${channelId}` if `baseUrl` is not explicitly set.
+   * @deprecated Prefer the gateway-level shared channel (`HubConfig.gateway.tunnel`).
+   *
+   * Legacy per-project tunnel config. When set, the hub still injects
+   * `PAW_ACP_TUNNEL_*` env vars into this project's gateway process so it opens
+   * its own dedicated channel (the pre-refactor behavior). New setups should
+   * leave this empty and configure one shared channel on the gateway instead;
+   * the tunnel router fronts all agents over that single channel.
    */
   readonly tunnel?: TunnelConfig;
+  /**
+   * Optional per-project tool-call approval override. When set, it fully
+   * replaces the gateway-level default ({@link GatewayConfig.approval}) for
+   * this project's agent. Leave unset to inherit the device-wide default.
+   */
+  readonly approval?: ApprovalPolicyConfig;
   /**
    * Per-project engine credentials (API keys, auth tokens, base URLs).
    * Values are stored AES-256-GCM encrypted via `crypto.ts`; they are
@@ -158,6 +227,8 @@ export interface HubConfig {
   readonly projects: ReadonlyArray<ProjectConfig>;
   /** User-registered local ACP CLIs. */
   readonly customEngines: ReadonlyArray<CustomEngineDefinition>;
+  /** Gateway-level (device-wide) config: shared channel tunnel + router port. */
+  readonly gateway?: GatewayConfig;
   /** Last Tunnel Server URL used — pre-filled when creating a new project. */
   readonly lastTunnelServerUrl?: string;
   /** Last Tunnel Secret hint (masked + encrypted) — pre-filled when creating a new project. */
@@ -192,8 +263,62 @@ export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
  * if the file's permission bits have been loosened (to catch accidental
  * `chmod -R 755 ~/.config/shepaw-hub`).
  */
-export function saveHubConfig(path: string, config: Pick<HubConfig, 'projects' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints'>): void {
+export function saveHubConfig(path: string, config: Pick<HubConfig, 'projects' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway'>): void {
   persist(path, config.projects, hubPersistMeta(config));
+}
+
+/**
+ * Set or update the gateway-level (device-wide) config. Pass `tunnel: null`
+ * to remove the shared channel; pass a `TunnelConfig` to set it. `routerHost`
+ * / `routerPort` default to the built-in loopback values when first created.
+ */
+export function setHubGateway(
+  config: HubConfig,
+  patch: {
+    tunnel?: TunnelConfig | null;
+    routerHost?: string;
+    routerPort?: number;
+    approval?: ApprovalPolicyConfig | null;
+  },
+): HubConfig {
+  const existing = config.gateway;
+  let tunnel: TunnelConfig | undefined;
+  if (patch.tunnel === null) {
+    tunnel = undefined;
+  } else if (patch.tunnel !== undefined) {
+    tunnel = patch.tunnel;
+  } else {
+    tunnel = existing?.tunnel;
+  }
+  let approval: ApprovalPolicyConfig | undefined;
+  if (patch.approval === null) {
+    approval = undefined;
+  } else if (patch.approval !== undefined) {
+    approval = patch.approval;
+  } else {
+    approval = existing?.approval;
+  }
+  const gateway: GatewayConfig = {
+    ...(tunnel !== undefined && { tunnel }),
+    routerHost: patch.routerHost ?? existing?.routerHost ?? DEFAULT_ROUTER_HOST,
+    routerPort: patch.routerPort ?? existing?.routerPort ?? DEFAULT_ROUTER_PORT,
+    ...(approval !== undefined && { approval }),
+  };
+  const next: HubConfig = { ...config, gateway };
+  persist(next.path, next.projects, hubPersistMeta(next));
+  return next;
+}
+
+/**
+ * Resolve the effective approval policy for a project: its own override if
+ * present, otherwise the gateway-level default. Returns undefined when neither
+ * is configured (the agent then defaults to always-ask).
+ */
+export function resolveApprovalPolicy(
+  config: HubConfig,
+  project: Pick<ProjectConfig, 'approval'>,
+): ApprovalPolicyConfig | undefined {
+  return project.approval ?? config.gateway?.approval;
 }
 
 /**
@@ -419,16 +544,18 @@ interface OnDiskSchema {
   lastTunnelServerUrl?: string;
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
+  gateway?: GatewayConfig;
 }
 
 function hubPersistMeta(
-  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines'>,
+  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway'>,
 ): PersistOptions {
   return {
     lastTunnelServerUrl: config.lastTunnelServerUrl,
     lastTunnelSecretHint: config.lastTunnelSecretHint,
     credentialHints: config.credentialHints,
     customEngines: config.customEngines,
+    gateway: config.gateway,
   };
 }
 
@@ -488,6 +615,7 @@ function loadExisting(path: string): HubConfig {
         : [],
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : '',
       tunnel: parseTunnelConfig(p.tunnel),
+      approval: parseApprovalPolicy(p.approval),
       // Backwards compat: old projects without envVars default to empty.
       envVars: parseEnvVarsConfig(p.envVars),
     };
@@ -502,6 +630,49 @@ function loadExisting(path: string): HubConfig {
     lastTunnelServerUrl: typeof obj.lastTunnelServerUrl === 'string' ? obj.lastTunnelServerUrl : undefined,
     lastTunnelSecretHint: parseCredentialHint(obj.lastTunnelSecretHint),
     credentialHints: parseCredentialHints(obj.credentialHints),
+    gateway: parseGatewayConfig(obj.gateway),
+  };
+}
+
+function parseGatewayConfig(v: unknown): GatewayConfig | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  const tunnel = parseTunnelConfig(obj.tunnel);
+  const routerHost = typeof obj.routerHost === 'string' && obj.routerHost.length > 0
+    ? obj.routerHost
+    : DEFAULT_ROUTER_HOST;
+  const routerPort = typeof obj.routerPort === 'number' && Number.isInteger(obj.routerPort) && obj.routerPort > 0
+    ? obj.routerPort
+    : DEFAULT_ROUTER_PORT;
+  const approval = parseApprovalPolicy(obj.approval);
+  return {
+    ...(tunnel !== undefined && { tunnel }),
+    routerHost,
+    routerPort,
+    ...(approval !== undefined && { approval }),
+  };
+}
+
+const APPROVAL_KINDS = new Set([
+  'read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other',
+]);
+
+function parseApprovalPolicy(v: unknown): ApprovalPolicyConfig | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const mode: ApprovalMode = o.mode === 'auto' || o.mode === 'custom' ? o.mode : 'ask';
+  const kinds = (x: unknown): string[] =>
+    Array.isArray(x)
+      ? x.filter((s): s is string => typeof s === 'string' && APPROVAL_KINDS.has(s))
+      : [];
+  const strs = (x: unknown): string[] =>
+    Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string' && s.length > 0) : [];
+  return {
+    mode,
+    allowKinds: kinds(o.allowKinds),
+    askKinds: kinds(o.askKinds),
+    allowPatterns: strs(o.allowPatterns),
+    denyPatterns: strs(o.denyPatterns),
   };
 }
 
@@ -510,6 +681,7 @@ interface PersistOptions {
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
   customEngines?: ReadonlyArray<CustomEngineDefinition>;
+  gateway?: GatewayConfig;
 }
 
 function persist(path: string, projects: ReadonlyArray<ProjectConfig>, opts?: PersistOptions): void {
@@ -520,6 +692,7 @@ function persist(path: string, projects: ReadonlyArray<ProjectConfig>, opts?: Pe
     ...(opts?.lastTunnelServerUrl !== undefined && { lastTunnelServerUrl: opts.lastTunnelServerUrl }),
     ...(opts?.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: opts.lastTunnelSecretHint }),
     ...(opts?.credentialHints !== undefined && { credentialHints: opts.credentialHints }),
+    ...(opts?.gateway !== undefined && { gateway: opts.gateway }),
   };
 
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });

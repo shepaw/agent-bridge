@@ -1,8 +1,11 @@
 import type {
+  ApprovalPolicy,
   CreateCustomEngineInput,
   CreateProjectInput,
   EnrollToken,
   EngineInfo,
+  GatewayInfo,
+  GatewayRouterStatus,
   HubAgentCatalogEntry,
   HubMeta,
   HubPairedDevice,
@@ -130,5 +133,32 @@ export const api = {
 
     revoke: (code: string): Promise<void> =>
       request(`/pair/enroll/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+  },
+
+  gateway: {
+    get: (): Promise<GatewayInfo> => request('/gateway'),
+
+    setChannel: (input: {
+      serverUrl: string;
+      channelId: string;
+      secret: string;
+      routerPort?: number;
+    }): Promise<{ ok: boolean }> =>
+      request('/gateway/channel', { method: 'PUT', body: JSON.stringify(input) }),
+
+    clearChannel: (): Promise<{ ok: boolean }> =>
+      request('/gateway/channel', { method: 'DELETE' }),
+
+    setApproval: (input: ApprovalPolicy): Promise<{ ok: boolean; approval: ApprovalPolicy }> =>
+      request('/gateway/approval', { method: 'PUT', body: JSON.stringify(input) }),
+
+    clearApproval: (): Promise<{ ok: boolean }> =>
+      request('/gateway/approval', { method: 'DELETE' }),
+
+    start: (): Promise<{ pid: number; alreadyRunning: boolean; status: GatewayRouterStatus }> =>
+      request('/gateway/start', { method: 'POST' }),
+
+    stop: (): Promise<{ result: string; status: GatewayRouterStatus }> =>
+      request('/gateway/stop', { method: 'POST' }),
   },
 };

@@ -73,6 +73,21 @@ export function hubEnrollmentsPath(root: string = hubRoot()): string {
   return join(root, 'enrollments.json');
 }
 
+/** State file for the device-level tunnel router process. */
+export function gatewayStatePath(root: string = hubRoot()): string {
+  return join(root, 'gateway-state.json');
+}
+
+/** Directory holding the tunnel router's rotating log. */
+export function gatewayLogsDir(root: string = hubRoot()): string {
+  return join(root, 'gateway-logs');
+}
+
+/** Log file for the device-level tunnel router process. */
+export function gatewayLogFile(root: string = hubRoot()): string {
+  return join(gatewayLogsDir(root), 'gateway.log');
+}
+
 /**
  * Derive every file path for a given project. Does NOT create the directory —
  * callers that persist via `config.ts` / spawn logic mkdir on write.

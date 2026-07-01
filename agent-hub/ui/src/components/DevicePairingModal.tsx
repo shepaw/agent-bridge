@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
-import type { HubPairingResult, HubPairedDevice } from '../api/types.js';
+import type { GatewayInfo, HubPairingResult, HubPairedDevice } from '../api/types.js';
 
 interface DevicePairingModalProps {
   onClose: () => void;
@@ -10,7 +10,9 @@ interface DevicePairingModalProps {
 export function DevicePairingModal({ onClose }: DevicePairingModalProps) {
   const [pairing, setPairing] = useState<HubPairingResult | null>(null);
   const [devices, setDevices] = useState<HubPairedDevice[]>([]);
+  const [gateway, setGateway] = useState<GatewayInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [startingRouter, setStartingRouter] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -25,8 +27,30 @@ export function DevicePairingModal({ onClose }: DevicePairingModalProps) {
     }
   };
 
+  const loadGateway = async () => {
+    try {
+      setGateway(await api.gateway.get());
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const startRouter = async () => {
+    setStartingRouter(true);
+    setErr(null);
+    try {
+      await api.gateway.start();
+      await loadGateway();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStartingRouter(false);
+    }
+  };
+
   useEffect(() => {
     void loadDevices();
+    void loadGateway();
   }, []);
 
   useEffect(() => {
@@ -86,6 +110,17 @@ export function DevicePairingModal({ onClose }: DevicePairingModalProps) {
           </div>
           <button style={closeBtn} onClick={onClose}>×</button>
         </div>
+
+        {gateway?.channel && !gateway.status.running && (
+          <div style={warnBanner}>
+            <span style={{ flex: 1 }}>
+              ⚠ 已配置共享 channel，但隧道路由器未运行——外网扫码/连接将失败。
+            </span>
+            <button style={primaryBtn} disabled={startingRouter} onClick={() => void startRouter()}>
+              {startingRouter ? '启动中…' : '启动路由器'}
+            </button>
+          </div>
+        )}
 
         {!pairing ? (
           <div style={{ marginBottom: 16 }}>
@@ -196,6 +231,11 @@ const input: React.CSSProperties = {
 const primaryBtn: React.CSSProperties = {
   background: '#89b4fa', color: '#1e1e2e', border: 'none', borderRadius: 6,
   padding: '8px 16px', cursor: 'pointer', fontWeight: 600,
+};
+const warnBanner: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
+  background: '#3a2f1a', border: '1px solid #f9e2af', borderRadius: 6,
+  padding: '10px 12px', color: '#f9e2af', fontSize: 13,
 };
 const qrBlock: React.CSSProperties = { textAlign: 'center', marginBottom: 16 };
 const section: React.CSSProperties = { marginTop: 16, borderTop: '1px solid #313244', paddingTop: 14 };

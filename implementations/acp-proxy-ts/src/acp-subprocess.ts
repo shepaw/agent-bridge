@@ -28,6 +28,13 @@ import {
   supportsSessionResume,
 } from './session-lifecycle.js';
 import { TerminalHost } from './terminal-host.js';
+import {
+  buildActions,
+  formatPermissionPrompt,
+  pickOption,
+  resolveSelectedOption,
+} from './permission/format.js';
+import { PermissionPolicy } from './permission/policy.js';
 
 export interface TurnContext {
   readonly taskCtx: TaskContext;
@@ -43,12 +50,18 @@ export interface AcpSubprocessOptions {
   readonly spec: AcpEngineSpec;
   readonly cwd: string;
   readonly env?: Record<string, string | undefined>;
+  /** Approval policy consulted before asking the app. Defaults to always-ask. */
+  readonly policy?: PermissionPolicy;
+  /** Display name used in permission prompts, e.g. "Claude". */
+  readonly agentDisplayName?: string;
 }
 
 export class AcpSubprocess {
   private readonly spec: AcpEngineSpec;
   private readonly cwd: string;
   private readonly extraEnv: Record<string, string | undefined>;
+  private readonly policy: PermissionPolicy;
+  private readonly agentDisplayName: string;
 
   private child: ChildProcess | undefined;
   private connection: acp.ClientConnection | undefined;
@@ -76,6 +89,8 @@ export class AcpSubprocess {
     this.spec = opts.spec;
     this.cwd = opts.cwd;
     this.extraEnv = opts.env ?? {};
+    this.policy = opts.policy ?? new PermissionPolicy();
+    this.agentDisplayName = opts.agentDisplayName ?? opts.spec.defaultAgentName ?? 'The agent';
   }
 
   get capabilities(): acp.InitializeResponse | undefined {
@@ -457,22 +472,46 @@ export class AcpSubprocess {
       return { outcome: { outcome: 'cancelled' } };
     }
 
-    const title = params.toolCall.title ?? params.toolCall.toolCallId ?? 'Permission requested';
-    const actions =
-      params.options.length > 0
-        ? params.options.map((opt) => ({
-            label: opt.name,
-            value: opt.optionId,
-          }))
-        : [
-            { label: 'Allow', value: 'allow' },
-            { label: 'Deny', value: 'deny' },
-          ];
+    const toolCall = params.toolCall;
 
+    // 1. Policy pre-check — auto-approve skipped permissions / auto-deny
+    //    blocked ones without a remote round trip. `ask` falls through.
+    const verdict = this.policy.decide(toolCall);
+    if (verdict.decision !== 'ask') {
+      const optionId = pickOption(params.options, verdict.decision);
+      log(
+        'permission %s by policy (%s) for %s [%s]',
+        verdict.decision,
+        verdict.reason,
+        toolCall.title ?? toolCall.toolCallId,
+        toolCall.kind ?? 'other',
+      );
+      if (verdict.decision === 'allow' && optionId !== undefined) {
+        return { outcome: { outcome: 'selected', optionId } };
+      }
+      if (verdict.decision === 'deny' && optionId !== undefined) {
+        return { outcome: { outcome: 'selected', optionId } };
+      }
+      // No matching option to express the decision → cancelled (deny-safe).
+      return { outcome: { outcome: 'cancelled' } };
+    }
+
+    // 2. Remote review — send a rich confirmation the app can render and wait.
+    const prompt = formatPermissionPrompt(this.agentDisplayName, toolCall);
     const confirmationId = await turn.taskCtx.sendActionConfirmation({
-      prompt: title,
-      actions,
+      prompt,
+      actions: buildActions(params.options),
+      extra: {
+        tool_kind: toolCall.kind ?? 'other',
+        tool_call_id: toolCall.toolCallId,
+      },
     });
+    log(
+      'permission request sent (%s) for %s [%s]',
+      confirmationId,
+      toolCall.title ?? toolCall.toolCallId,
+      toolCall.kind ?? 'other',
+    );
 
     try {
       const response = await turn.taskCtx.waitForResponse(confirmationId, {
@@ -483,35 +522,10 @@ export class AcpSubprocess {
         return { outcome: { outcome: 'cancelled' } };
       }
 
-      const raw =
-        (typeof response.action === 'string' && response.action) ||
-        (typeof response.value === 'string' && response.value) ||
-        (typeof response.selected === 'string' && response.selected) ||
-        '';
-
-      const matched = params.options.find(
-        (opt) => opt.optionId === raw || opt.name.toLowerCase() === raw.toLowerCase(),
-      );
-      if (matched !== undefined) {
-        return { outcome: { outcome: 'selected', optionId: matched.optionId } };
+      const optionId = resolveSelectedOption(params.options, response);
+      if (optionId !== undefined) {
+        return { outcome: { outcome: 'selected', optionId } };
       }
-
-      if (/^(allow|yes|ok|approve)/i.test(raw)) {
-        const allowOpt =
-          params.options.find((o) => /allow|yes|approve/i.test(o.name)) ?? params.options[0];
-        if (allowOpt !== undefined) {
-          return { outcome: { outcome: 'selected', optionId: allowOpt.optionId } };
-        }
-      }
-
-      if (/^(deny|no|reject|cancel)/i.test(raw)) {
-        const denyOpt = params.options.find((o) => /deny|no|reject/i.test(o.name));
-        if (denyOpt !== undefined) {
-          return { outcome: { outcome: 'selected', optionId: denyOpt.optionId } };
-        }
-        return { outcome: { outcome: 'cancelled' } };
-      }
-
       return { outcome: { outcome: 'cancelled' } };
     } catch {
       return { outcome: { outcome: 'cancelled' } };

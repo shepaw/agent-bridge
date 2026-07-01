@@ -56,6 +56,8 @@ import {
   ProjectNotFoundError,
   removeCustomEngineFromHub,
   isKnownEngine,
+  type ApprovalMode,
+  type ApprovalPolicyConfig,
   type ProjectConfig,
   type TunnelConfig,
   CustomEngineExistsError,
@@ -71,13 +73,21 @@ import {
   stopProject,
 } from '@shepaw/agent-hub-core';
 import { nextFreePort } from '@shepaw/agent-hub-core';
-import { projectPaths, hubRoot, hubConfigPath } from '@shepaw/agent-hub-core';
+import { projectPaths, hubRoot, hubConfigPath, gatewayLogFile } from '@shepaw/agent-hub-core';
 import { tailLog } from '@shepaw/agent-hub-core';
 import { probeProjectRuntime, createHubPairing } from '@shepaw/agent-hub-core';
 import { updateProject } from '@shepaw/agent-hub-core';
+import {
+  DEFAULT_ROUTER_PORT,
+  setHubGateway,
+  startGatewayRouter,
+  stopGatewayRouter,
+  readGatewayState,
+  isGatewayRunning,
+} from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
-const multiWord = new Set(['project', 'peers', 'logs', 'enroll']);
+const multiWord = new Set(['project', 'peers', 'logs', 'enroll', 'gateway']);
 if (
   process.argv.length >= 4 &&
   typeof process.argv[2] === 'string' &&
@@ -415,6 +425,32 @@ cli
     }
   });
 
+cli
+  .command('project-set-approval <id>', 'Set a per-project tool-call approval override')
+  .option('--mode <mode>', 'ask | auto | custom')
+  .option('--allow-kinds <csv>', 'Tool kinds to auto-approve, e.g. read,search,fetch')
+  .option('--ask-kinds <csv>', 'Tool kinds to ALWAYS review, e.g. execute,delete')
+  .option('--allow-pattern <regex>', 'Regex to auto-approve (repeatable)')
+  .option('--deny-pattern <regex>', 'Regex to auto-deny (repeatable)')
+  .option('--inherit', 'Remove the override so the project inherits the device default')
+  .action((id: string, opts: ApprovalCliOpts & { inherit?: boolean }) => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      if (opts.inherit) {
+        updateProject(cfg, id, { approval: undefined });
+        console.log(`Project "${id}" now inherits the device-wide approval policy.`);
+        return;
+      }
+      const approval = buildApprovalFromOpts(opts);
+      updateProject(cfg, id, { approval });
+      printApproval(`Approval policy for "${id}"`, approval);
+      console.log('');
+      console.log(`Restart to apply:  shepaw-hub stop ${id} && shepaw-hub start ${id}`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
 // ── lifecycle ──────────────────────────────────────────────────────
 
 cli
@@ -549,11 +585,16 @@ function runPair(
   const pkEncoded = encodeURIComponent(pkB64);
   const fragmentParams = `fp=${identity.fingerprint}&pk=${pkEncoded}`;
 
-  const base = opts.baseUrl ?? project.baseUrl;
-  let pairUrl: string | undefined;
-  if (base) {
-    const clean = base.replace(/\/$/, '');
-    pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+  // Priority: explicit --base-url > shared gateway channel > legacy project
+  // baseUrl > loopback. The shared channel routes by /p/<projectId>.
+  const gatewayBase = gatewayChannelWsBase(cfg);
+  let pairUrl: string;
+  if (opts.baseUrl) {
+    pairUrl = `${opts.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+  } else if (gatewayBase) {
+    pairUrl = `${gatewayBase}/p/${encodeURIComponent(project.id)}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+  } else if (project.baseUrl) {
+    pairUrl = `${project.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   } else {
     pairUrl = `ws://${project.host}:${project.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   }
@@ -571,10 +612,12 @@ function runPair(
   console.log(`  Agent ID:     ${identity.agentId}`);
   console.log(`  Fingerprint:  ${identity.fingerprint}`);
   console.log(`  Pair URL:     ${pairUrl}`);
-  if (!base) {
-    console.log(`  ⚠ No base URL configured — the URL above is loopback only.`);
-    console.log(`     Set one with: shepaw-hub project update ${id} --base-url <url>`);
+  if (!opts.baseUrl && !gatewayBase && !project.baseUrl) {
+    console.log(`  ⚠ No shared channel or base URL configured — the URL above is loopback only.`);
+    console.log(`     Configure the shared channel: shepaw-hub gateway set-channel ...`);
+    console.log(`     Or a per-project base URL: shepaw-hub project update ${id} --base-url <url>`);
   }
+  if (gatewayBase) warnRouterIfNeeded();
 
   if (opts.qr !== false) {
     console.log('');
@@ -610,6 +653,7 @@ function runHubPair(
   console.log('  After pairing in the Shepaw app, add other agents using their WS URLs');
   console.log('  (no pairing code needed — device is already authorized).');
   console.log('');
+  warnRouterIfNeeded();
 
   if (opts.qr !== false) {
     console.log('  Scan with Shepaw app:');
@@ -827,6 +871,166 @@ cli
     }
   });
 
+// ── gateway (shared channel + tunnel router) ───────────────────────
+
+cli
+  .command('gateway-set-channel', 'Configure the shared Channel Service tunnel for the whole device')
+  .option('--server <url>', 'Shepaw Channel Service base URL')
+  .option('--channel-id <id>', 'Channel ID')
+  .option('--secret <secret>', 'HMAC-SHA256 signing secret for the channel')
+  .option('--router-port <n>', `Local dispatch port (default: ${DEFAULT_ROUTER_PORT})`)
+  .action((opts: { server?: string; channelId?: string; secret?: string; routerPort?: number | string }) => {
+    try {
+      if (!opts.server || !opts.channelId || !opts.secret) {
+        console.error('Error: --server, --channel-id, and --secret are all required.');
+        process.exit(1);
+      }
+      const cfg = loadOrCreateHubConfig();
+      setHubGateway(cfg, {
+        tunnel: { serverUrl: opts.server, channelId: opts.channelId, secret: opts.secret },
+        routerPort: opts.routerPort !== undefined ? Number(opts.routerPort) : undefined,
+      });
+      console.log('Configured shared gateway channel.');
+      console.log(`  server:      ${opts.server}`);
+      console.log(`  channel ID:  ${opts.channelId}`);
+      console.log(`  secret:      ${'*'.repeat(8)} (set)`);
+      console.log('');
+      console.log('Start the tunnel router:  shepaw-hub gateway start');
+      if (isGatewayRunning()) {
+        console.log('(router already running — restart to apply: shepaw-hub gateway stop && shepaw-hub gateway start)');
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-clear-channel', 'Remove the shared channel tunnel (LAN-only)')
+  .action(() => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      setHubGateway(cfg, { tunnel: null });
+      console.log('Cleared shared gateway channel. Restart the router if running.');
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-set-approval', 'Set the device-wide tool-call approval policy (all agents)')
+  .option('--mode <mode>', 'ask (always review) | auto (approve all but deny/ask rules) | custom')
+  .option('--allow-kinds <csv>', 'Tool kinds to auto-approve, e.g. read,search,fetch')
+  .option('--ask-kinds <csv>', 'Tool kinds to ALWAYS review (overrides allow), e.g. execute,delete')
+  .option('--allow-pattern <regex>', 'Regex (on title+command) to auto-approve (repeatable)')
+  .option('--deny-pattern <regex>', 'Regex to auto-deny (repeatable; highest precedence)')
+  .option('--clear', 'Remove the device-wide approval policy (falls back to always-ask)')
+  .action((opts: ApprovalCliOpts & { clear?: boolean }) => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      if (opts.clear) {
+        setHubGateway(cfg, { approval: null });
+        console.log('Cleared device-wide approval policy (agents default to always-ask).');
+        return;
+      }
+      const approval = buildApprovalFromOpts(opts);
+      setHubGateway(cfg, { approval });
+      printApproval('Device-wide approval policy', approval);
+      console.log('');
+      console.log('Restart affected agents to apply: shepaw-hub project stop/start <id>');
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-show', 'Show the gateway channel + router configuration')
+  .action(() => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      const gw = cfg.gateway;
+      const state = readGatewayState();
+      const running = state !== undefined && state.pid > 0 && isAlive(state.pid);
+      console.log('Gateway:');
+      console.log(`  router port: ${gw?.routerPort ?? DEFAULT_ROUTER_PORT}`);
+      console.log(`  router host: ${gw?.routerHost ?? '127.0.0.1'}`);
+      if (gw?.tunnel) {
+        console.log('');
+        console.log('Shared channel:');
+        console.log(`  server:      ${gw.tunnel.serverUrl}`);
+        console.log(`  channel ID:  ${gw.tunnel.channelId}`);
+        console.log(`  secret:      ${'*'.repeat(8)} (set)`);
+      } else {
+        console.log('  channel:     (none — LAN-only)');
+      }
+      console.log('');
+      if (gw?.approval) {
+        printApproval('Approval policy (device default)', gw.approval);
+      } else {
+        console.log('Approval policy (device default): (none — agents always ask)');
+      }
+      console.log('');
+      console.log(`Router:  ${running ? `running (pid ${state!.pid})` : 'stopped'}`);
+      console.log(`  log:   ${gatewayLogFile()}`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-start', 'Start the device tunnel router (detached)')
+  .action(async () => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      const result = await startGatewayRouter(cfg);
+      if (result.alreadyRunning) {
+        console.log(`Tunnel router already running (pid ${result.pid}, port ${result.routerPort}).`);
+      } else {
+        console.log(`Started tunnel router — pid ${result.pid}, dispatch port ${result.routerPort}.`);
+        console.log(`  log: ${gatewayLogFile()}`);
+        if (cfg.gateway?.tunnel === undefined) {
+          console.log('  ⚠ No shared channel configured — router is LAN-only.');
+          console.log('     Configure one: shepaw-hub gateway set-channel --server <url> --channel-id <id> --secret <secret>');
+        }
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-stop', 'Stop the device tunnel router')
+  .action(async () => {
+    try {
+      const result = await stopGatewayRouter();
+      if (result === 'graceful') console.log('Stopped tunnel router gracefully.');
+      else if (result === 'hard') console.log('Killed tunnel router (SIGTERM ignored; sent SIGKILL).');
+      else console.log('Tunnel router was not running.');
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-status', 'Show tunnel router running state')
+  .action(() => {
+    try {
+      const state = readGatewayState();
+      if (state === undefined) {
+        console.log('Tunnel router: never started.');
+        return;
+      }
+      const running = state.pid > 0 && isAlive(state.pid);
+      console.log(`Tunnel router: ${running ? 'running' : 'stopped'}`);
+      if (running) console.log(`  pid:         ${state.pid}`);
+      console.log(`  router port: ${state.routerPort}`);
+      console.log(`  started at:  ${state.startedAt}`);
+      if (state.stoppedAt !== undefined) console.log(`  stopped at:  ${state.stoppedAt}`);
+      if (state.lastResult !== undefined) console.log(`  last result: ${state.lastResult}`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
 // ── web dashboard ──────────────────────────────────────────────────
 
 cli
@@ -865,10 +1069,11 @@ cli
 
 cli.help((sections) => {
   const restoreMap: Array<[RegExp, string]> = [
-    [/project-(add|list|show|remove|update)/g, 'project $1'],
+    [/project-(add|list|show|remove|update|set-approval)/g, 'project $1'],
     [/peers-(list|add|remove)/g, 'peers $1'],
     [/logs-(rotate)/g, 'logs $1'],
     [/enroll-(list|revoke)/g, 'enroll $1'],
+    [/gateway-(set-channel|clear-channel|set-approval|show|start|stop|status)/g, 'gateway $1'],
   ];
   for (const s of sections) {
     if (typeof s.body === 'string') {
@@ -882,6 +1087,88 @@ cli.version('0.2.0');
 cli.parse();
 
 // ── helpers ────────────────────────────────────────────────────────
+
+interface ApprovalCliOpts {
+  mode?: string;
+  allowKinds?: string;
+  askKinds?: string;
+  allowPattern?: string | string[];
+  denyPattern?: string | string[];
+}
+
+const APPROVAL_KIND_SET = new Set([
+  'read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other',
+]);
+
+function toArray(v: string | string[] | undefined): string[] {
+  if (v === undefined) return [];
+  return (Array.isArray(v) ? v : [v]).map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+function parseKindCsv(v: string | undefined, flag: string): string[] {
+  const kinds = (v ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
+  for (const k of kinds) {
+    if (!APPROVAL_KIND_SET.has(k)) {
+      throw new Error(
+        `Invalid tool kind "${k}" for ${flag}. Valid: ${[...APPROVAL_KIND_SET].join(', ')}.`,
+      );
+    }
+  }
+  return kinds;
+}
+
+/** Build an ApprovalPolicyConfig from CLI options, validating mode + kinds. */
+function buildApprovalFromOpts(opts: ApprovalCliOpts): ApprovalPolicyConfig {
+  const rawMode = (opts.mode ?? 'custom').trim().toLowerCase();
+  if (rawMode !== 'ask' && rawMode !== 'auto' && rawMode !== 'custom') {
+    throw new Error(`Invalid --mode "${opts.mode}". Use one of: ask, auto, custom.`);
+  }
+  return {
+    mode: rawMode as ApprovalMode,
+    allowKinds: parseKindCsv(opts.allowKinds, '--allow-kinds'),
+    askKinds: parseKindCsv(opts.askKinds, '--ask-kinds'),
+    allowPatterns: toArray(opts.allowPattern),
+    denyPatterns: toArray(opts.denyPattern),
+  };
+}
+
+function printApproval(title: string, p: ApprovalPolicyConfig): void {
+  console.log(`${title}:`);
+  console.log(`  mode:           ${p.mode}`);
+  console.log(`  allow kinds:    ${p.allowKinds.length > 0 ? p.allowKinds.join(', ') : '(none)'}`);
+  console.log(`  always-ask:     ${p.askKinds.length > 0 ? p.askKinds.join(', ') : '(none)'}`);
+  console.log(`  allow patterns: ${p.allowPatterns.length > 0 ? p.allowPatterns.join(' | ') : '(none)'}`);
+  console.log(`  deny patterns:  ${p.denyPatterns.length > 0 ? p.denyPatterns.join(' | ') : '(none)'}`);
+}
+
+/**
+ * When a shared channel is configured, remote pairing only works if the
+ * tunnel router is running. Warn (with the fix) so a freshly-minted QR isn't
+ * silently unreachable.
+ */
+function warnRouterIfNeeded(): void {
+  const cfg = loadOrCreateHubConfig();
+  if (cfg.gateway?.tunnel === undefined) return;
+  if (isGatewayRunning()) return;
+  console.log('  ⚠ Shared channel is configured but the tunnel router is NOT running.');
+  console.log('     Remote pairing/connections will fail until you start it:');
+  console.log('       shepaw-hub gateway start');
+  console.log('');
+}
+
+/** `wss://<server>/proxy/<channelId>` base for the shared gateway channel. */
+function gatewayChannelWsBase(cfg: ReturnType<typeof loadOrCreateHubConfig>): string | undefined {
+  const t = cfg.gateway?.tunnel;
+  if (t === undefined) return undefined;
+  const wsBase = t.serverUrl
+    .replace(/\/+$/, '')
+    .replace(/^https:\/\//, 'wss://')
+    .replace(/^http:\/\//, 'ws://');
+  return `${wsBase}/proxy/${t.channelId}`;
+}
 
 function parseEngine(raw: string, cfg: ReturnType<typeof loadOrCreateHubConfig>): string {
   if (!isKnownEngine(raw, cfg.customEngines)) {

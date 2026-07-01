@@ -45,8 +45,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
-import type { ProjectConfig } from './config.js';
-import { loadOrCreateHubConfig } from './config.js';
+import type { ApprovalPolicyConfig, ProjectConfig } from './config.js';
+import { loadOrCreateHubConfig, resolveApprovalPolicy } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
 import { projectPaths, hubRoot } from './paths.js';
@@ -68,6 +68,27 @@ export interface ProjectState {
 }
 
 export type StopResult = 'graceful' | 'hard' | 'not-running';
+
+/**
+ * Serialize an approval policy into the `PAW_ACP_APPROVAL_*` env vars the ACP
+ * proxy reads (see acp-proxy-ts `permission/policy.ts`). Returns an empty map
+ * when no policy is configured so the proxy falls back to always-ask.
+ */
+function approvalPolicyEnv(
+  policy: ApprovalPolicyConfig | undefined,
+): Record<string, string> {
+  if (policy === undefined) return {};
+  const env: Record<string, string> = { PAW_ACP_APPROVAL_MODE: policy.mode };
+  if (policy.allowKinds.length > 0) env.PAW_ACP_APPROVAL_ALLOW_KINDS = policy.allowKinds.join(',');
+  if (policy.askKinds.length > 0) env.PAW_ACP_APPROVAL_ASK_KINDS = policy.askKinds.join(',');
+  if (policy.allowPatterns.length > 0) {
+    env.PAW_ACP_APPROVAL_ALLOW_PATTERNS = policy.allowPatterns.join('\n');
+  }
+  if (policy.denyPatterns.length > 0) {
+    env.PAW_ACP_APPROVAL_DENY_PATTERNS = policy.denyPatterns.join('\n');
+  }
+  return env;
+}
 
 // ── public API ─────────────────────────────────────────────────────
 
@@ -154,10 +175,13 @@ export async function startProject(project: ProjectConfig): Promise<{
             SHEPAW_HUB_FANOUT_ENROLLMENT_PATHS: fanout.enrollmentPaths,
           };
         })(),
-        // Tunnel credentials — injected as env vars so they never appear in
-        // `ps aux` argv. The gateway reads these to open the channel-service
-        // tunnel. Omitted entirely when not configured (undefined entries are
-        // stripped by Node when building the child env).
+        // LEGACY per-project tunnel. The recommended model runs one shared
+        // channel at the gateway level (see `HubConfig.gateway.tunnel` and the
+        // tunnel router); in that setup projects bind loopback-only and this
+        // block never fires because `project.tunnel` is unset. Retained so
+        // pre-refactor projects that still carry their own channel keep
+        // working. Credentials go through env vars (not argv) so they never
+        // appear in `ps aux`.
         ...(project.tunnel !== undefined
           ? {
               PAW_ACP_TUNNEL_SERVER_URL: project.tunnel.serverUrl,
@@ -165,6 +189,10 @@ export async function startProject(project: ProjectConfig): Promise<{
               PAW_ACP_TUNNEL_SECRET: project.tunnel.secret,
             }
           : {}),
+        // Tool-call approval policy (request #4): resolve the effective policy
+        // (project override → gateway default) and hand it to the ACP proxy as
+        // PAW_ACP_APPROVAL_* env so it can auto-skip/deny without a round trip.
+        ...approvalPolicyEnv(resolveApprovalPolicy(hubCfg, project)),
       },
     });
 

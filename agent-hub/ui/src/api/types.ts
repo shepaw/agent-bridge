@@ -146,6 +146,36 @@ export interface HubPairedDevice {
   addedAt: string | null;
 }
 
+/** Runtime status of the device tunnel router. */
+export interface GatewayRouterStatus {
+  running: boolean;
+  pid: number | null;
+  routerPort: number;
+  startedAt: string | null;
+  lastResult: string | null;
+}
+
+/** Device-wide tool-call approval policy. */
+export type ApprovalMode = 'ask' | 'auto' | 'custom';
+export interface ApprovalPolicy {
+  mode: ApprovalMode;
+  allowKinds: string[];
+  askKinds: string[];
+  allowPatterns: string[];
+  denyPatterns: string[];
+}
+
+/** Gateway (shared channel + router) config from GET /api/gateway. */
+export interface GatewayInfo {
+  routerHost: string;
+  routerPort: number;
+  /** Shared Channel Service tunnel; `secretSet` indicates a secret is stored. */
+  channel: { serverUrl: string; channelId: string; secretSet: boolean } | null;
+  /** Device-wide default approval policy, or null when agents always ask. */
+  approval: ApprovalPolicy | null;
+  status: GatewayRouterStatus;
+}
+
 export interface CreateProjectInput {
   id: string;
   engine?: string;

@@ -31,6 +31,7 @@ import {
   resolveEngineSpec,
   type AcpEngineSpec,
 } from './engines.js';
+import { PermissionPolicy, loadPolicyFromEnv } from './permission/policy.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
@@ -53,6 +54,8 @@ export interface AcpProxyAgentOptions {
   subprocess?: AcpSubprocess;
   /** Override hub fan-out hook (tests). */
   onPeerEnrolled?: (event: import('shepaw-acp-sdk').PeerEnrolledEvent) => void;
+  /** Tool-call approval policy. Defaults to one built from PAW_ACP_APPROVAL_* env. */
+  policy?: PermissionPolicy;
 }
 
 export class AcpProxyAgent extends ACPAgentServer {
@@ -82,6 +85,8 @@ export class AcpProxyAgent extends ACPAgentServer {
         spec,
         cwd: this.cwd,
         env: opts.agentEnv,
+        policy: opts.policy ?? new PermissionPolicy(loadPolicyFromEnv()),
+        agentDisplayName: opts.name ?? spec.defaultAgentName,
       });
     this.sessionStore = new SessionStore({
       gatewayDirName: GATEWAY_DIR_NAME,

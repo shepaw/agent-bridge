@@ -126,6 +126,6 @@ describe('scanCommandsDir', () => {
     await writeFile(join(dir, 'real.md'), '---\ndescription: d\n---\n', 'utf-8');
     const result = await scanCommandsDir(dir, 'project');
     expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('real');
+    expect(result[0]?.name).toBe('real');
   });
 });
