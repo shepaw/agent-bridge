@@ -18,7 +18,7 @@ export interface TunnelConfig {
 }
 
 /**
- * Hub-level metadata returned by GET /api/projects/meta.
+ * Hub-level metadata returned by GET /api/instances/meta.
  * credentialHints contains masked (display-only) values for pre-filling forms.
  */
 export interface HubMeta {
@@ -29,7 +29,7 @@ export interface HubMeta {
   credentialHints: Partial<Record<AgentEngine, Record<string, string>>>;
 }
 
-export interface ProjectStatus {
+export interface InstanceStatus {
   running: boolean;
   pid: number | null;
   startedAt: string | null;
@@ -47,7 +47,7 @@ export interface ProjectStatus {
   probeError: string | null;
 }
 
-export interface Project {
+export interface Instance {
   id: string;
   label: string;
   engine: string;
@@ -61,7 +61,9 @@ export interface Project {
   tunnel?: TunnelConfig;
   /** Only key names are exposed — values are never returned by the API. */
   envVarKeys: string[];
-  status: ProjectStatus;
+  /** Per-instance tool-call approval override; null/undefined = inherit. */
+  approval?: ApprovalPolicy | null;
+  status: InstanceStatus;
 }
 
 export interface Peer {
@@ -92,12 +94,36 @@ export interface EngineInfo {
   displayName: string;
   acpCommand: string;
   builtin: boolean;
+  /** True when an operator has disabled this engine. */
+  disabled?: boolean;
+  /** Per-engine approval override; null = inherit (engine/global). */
+  approval?: ApprovalPolicy | null;
+  /** Engine-default env var key names (values never exposed). */
+  envVarKeys?: string[];
 }
 
 export interface CreateCustomEngineInput {
   id: string;
   displayName: string;
   acpCommand: string;
+}
+
+export interface UpdateCustomEngineInput {
+  displayName?: string;
+  acpCommand?: string;
+}
+
+/** Patch for PUT /api/engines/:id/override. `null` clears a field. */
+export interface EngineOverridePatch {
+  disabled?: boolean | null;
+  displayName?: string | null;
+  approval?: ApprovalPolicy;
+  clearApproval?: boolean;
+}
+
+export interface MaskedEnvVar {
+  key: string;
+  value: string;
 }
 
 export interface SessionResume {
@@ -114,7 +140,7 @@ export interface StoredSession {
 
 /** Hub-level agent catalog entry (GET /api/pair/agents). */
 export interface HubAgentCatalogEntry {
-  projectId: string;
+  instanceId: string;
   label: string;
   engine: string;
   agentId: string;
@@ -133,7 +159,7 @@ export interface HubPairingResult {
   label: string;
   expiresAt: string;
   createdAt: string;
-  bootstrapProjectId: string;
+  bootstrapInstanceId: string;
   pairUrl: string;
   qrPayload: string;
   agents: HubAgentCatalogEntry[];
@@ -142,7 +168,7 @@ export interface HubPairingResult {
 export interface HubPairedDevice {
   fingerprint: string;
   label: string;
-  projectIds: string[];
+  instanceIds: string[];
   addedAt: string | null;
 }
 
@@ -176,7 +202,7 @@ export interface GatewayInfo {
   status: GatewayRouterStatus;
 }
 
-export interface CreateProjectInput {
+export interface CreateInstanceInput {
   id: string;
   engine?: string;
   cwd: string;
@@ -189,7 +215,7 @@ export interface CreateProjectInput {
   envVars?: Record<string, string>;
 }
 
-export interface UpdateProjectInput {
+export interface UpdateInstanceInput {
   label?: string;
   host?: string;
   baseUrl?: string;
@@ -199,4 +225,6 @@ export interface UpdateProjectInput {
   clearTunnel?: boolean;
   envVars?: Record<string, string>;
   clearEnvVars?: boolean;
+  approval?: ApprovalPolicy;
+  clearApproval?: boolean;
 }

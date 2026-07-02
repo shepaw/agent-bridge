@@ -1,19 +1,22 @@
 import type {
   ApprovalPolicy,
   CreateCustomEngineInput,
-  CreateProjectInput,
+  CreateInstanceInput,
   EnrollToken,
   EngineInfo,
+  EngineOverridePatch,
   GatewayInfo,
   GatewayRouterStatus,
   HubAgentCatalogEntry,
   HubMeta,
   HubPairedDevice,
   HubPairingResult,
+  MaskedEnvVar,
   Peer,
-  Project,
+  Instance,
   StoredSession,
-  UpdateProjectInput,
+  UpdateCustomEngineInput,
+  UpdateInstanceInput,
 } from './types.js';
 
 const BASE = '/api';
@@ -28,79 +31,85 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-// ── Projects ──────────────────────────────────────────────────────
+// ── Instances ──────────────────────────────────────────────────────
 
 export const api = {
-  projects: {
-    list: (): Promise<Project[]> => request('/projects'),
+  instances: {
+    list: (): Promise<Instance[]> => request('/instances'),
 
-    get: (id: string): Promise<Project> => request(`/projects/${id}`),
+    get: (id: string): Promise<Instance> => request(`/instances/${id}`),
 
     /** Get hub-level metadata: lastTunnelServerUrl and credential hints. */
-    meta: (): Promise<HubMeta> => request('/projects/meta'),
+    meta: (): Promise<HubMeta> => request('/instances/meta'),
 
-    create: (input: CreateProjectInput): Promise<Project> =>
-      request('/projects', { method: 'POST', body: JSON.stringify(input) }),
+    create: (input: CreateInstanceInput): Promise<Instance> =>
+      request('/instances', { method: 'POST', body: JSON.stringify(input) }),
 
-    update: (id: string, patch: UpdateProjectInput): Promise<Project> =>
-      request(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    update: (id: string, patch: UpdateInstanceInput): Promise<Instance> =>
+      request(`/instances/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
     remove: (id: string): Promise<void> =>
-      request(`/projects/${id}`, { method: 'DELETE' }),
+      request(`/instances/${id}`, { method: 'DELETE' }),
 
     start: (id: string): Promise<{ pid: number; alreadyRunning: boolean }> =>
-      request(`/projects/${id}/start`, { method: 'POST' }),
+      request(`/instances/${id}/start`, { method: 'POST' }),
 
     stop: (id: string): Promise<{ result: 'graceful' | 'hard' | 'not-running' }> =>
-      request(`/projects/${id}/stop`, { method: 'POST' }),
+      request(`/instances/${id}/stop`, { method: 'POST' }),
+
+    setApproval: (id: string, policy: ApprovalPolicy): Promise<Instance> =>
+      request(`/instances/${id}/approval`, { method: 'PUT', body: JSON.stringify(policy) }),
+
+    clearApproval: (id: string): Promise<Instance> =>
+      request(`/instances/${id}/approval`, { method: 'DELETE' }),
   },
 
   peers: {
-    list: (projectId: string): Promise<Peer[]> => request(`/projects/${projectId}/peers`),
+    list: (instanceId: string): Promise<Peer[]> => request(`/instances/${instanceId}/peers`),
 
-    add: (projectId: string, pubkey: string, label?: string): Promise<Peer> =>
-      request(`/projects/${projectId}/peers`, {
+    add: (instanceId: string, pubkey: string, label?: string): Promise<Peer> =>
+      request(`/instances/${instanceId}/peers`, {
         method: 'POST',
         body: JSON.stringify({ pubkey, label }),
       }),
 
-    remove: (projectId: string, fingerprint: string): Promise<void> =>
-      request(`/projects/${projectId}/peers/${fingerprint}`, { method: 'DELETE' }),
+    remove: (instanceId: string, fingerprint: string): Promise<void> =>
+      request(`/instances/${instanceId}/peers/${fingerprint}`, { method: 'DELETE' }),
   },
 
   envvars: {
-    list: (projectId: string): Promise<{ key: string; value: string }[]> =>
-      request(`/projects/${projectId}/envvars`),
+    list: (instanceId: string): Promise<{ key: string; value: string }[]> =>
+      request(`/instances/${instanceId}/envvars`),
 
-    set: (projectId: string, key: string, value: string): Promise<{ ok: boolean; key: string }> =>
-      request(`/projects/${projectId}/envvars/${encodeURIComponent(key)}`, {
+    set: (instanceId: string, key: string, value: string): Promise<{ ok: boolean; key: string }> =>
+      request(`/instances/${instanceId}/envvars/${encodeURIComponent(key)}`, {
         method: 'PUT',
         body: JSON.stringify({ value }),
       }),
 
-    remove: (projectId: string, key: string): Promise<void> =>
-      request(`/projects/${projectId}/envvars/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+    remove: (instanceId: string, key: string): Promise<void> =>
+      request(`/instances/${instanceId}/envvars/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   },
 
   enroll: {
-    list: (projectId: string): Promise<EnrollToken[]> => request(`/projects/${projectId}/enroll`),
+    list: (instanceId: string): Promise<EnrollToken[]> => request(`/instances/${instanceId}/enroll`),
 
-    mint: (projectId: string, opts?: { label?: string; ttlMinutes?: number; baseUrl?: string }): Promise<EnrollToken> =>
-      request(`/projects/${projectId}/enroll`, {
+    mint: (instanceId: string, opts?: { label?: string; ttlMinutes?: number; baseUrl?: string }): Promise<EnrollToken> =>
+      request(`/instances/${instanceId}/enroll`, {
         method: 'POST',
         body: JSON.stringify(opts ?? {}),
       }),
 
-    revoke: (projectId: string, code: string): Promise<void> =>
-      request(`/projects/${projectId}/enroll/${code}`, { method: 'DELETE' }),
+    revoke: (instanceId: string, code: string): Promise<void> =>
+      request(`/instances/${instanceId}/enroll/${code}`, { method: 'DELETE' }),
   },
 
   sessions: {
-    list: (projectId: string): Promise<{ sessions: StoredSession[] }> =>
-      request(`/projects/${projectId}/sessions`),
+    list: (instanceId: string): Promise<{ sessions: StoredSession[] }> =>
+      request(`/instances/${instanceId}/sessions`),
 
-    remove: (projectId: string, shepawSessionId: string): Promise<void> =>
-      request(`/projects/${projectId}/sessions/${encodeURIComponent(shepawSessionId)}`, {
+    remove: (instanceId: string, shepawSessionId: string): Promise<void> =>
+      request(`/instances/${instanceId}/sessions/${encodeURIComponent(shepawSessionId)}`, {
         method: 'DELETE',
       }),
   },
@@ -111,8 +120,31 @@ export const api = {
     create: (input: CreateCustomEngineInput): Promise<{ engine: EngineInfo }> =>
       request('/engines', { method: 'POST', body: JSON.stringify(input) }),
 
+    update: (id: string, patch: UpdateCustomEngineInput): Promise<{ engine: EngineInfo }> =>
+      request(`/engines/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) }),
+
     remove: (id: string): Promise<void> =>
       request(`/engines/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+    setOverride: (id: string, patch: EngineOverridePatch): Promise<{ ok: boolean }> =>
+      request(`/engines/${encodeURIComponent(id)}/override`, { method: 'PUT', body: JSON.stringify(patch) }),
+
+    clearApproval: (id: string): Promise<{ ok: boolean }> =>
+      request(`/engines/${encodeURIComponent(id)}/approval`, { method: 'DELETE' }),
+
+    envvars: {
+      list: (id: string): Promise<MaskedEnvVar[]> =>
+        request(`/engines/${encodeURIComponent(id)}/envvars`),
+
+      set: (id: string, key: string, value: string): Promise<{ ok: boolean; key: string }> =>
+        request(`/engines/${encodeURIComponent(id)}/envvars/${encodeURIComponent(key)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ value }),
+        }),
+
+      remove: (id: string, key: string): Promise<{ ok: boolean }> =>
+        request(`/engines/${encodeURIComponent(id)}/envvars/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+    },
   },
 
   pair: {
@@ -126,7 +158,7 @@ export const api = {
     mint: (opts?: {
       label?: string;
       ttlMinutes?: number;
-      bootstrapProjectId?: string;
+      bootstrapInstanceId?: string;
       baseUrl?: string;
     }): Promise<HubPairingResult> =>
       request('/pair/enroll', { method: 'POST', body: JSON.stringify(opts ?? {}) }),

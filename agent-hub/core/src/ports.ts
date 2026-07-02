@@ -1,17 +1,17 @@
 /**
- * Port allocation for `shepaw-hub project add`.
+ * Port allocation for `shepaw-hub instance add`.
  *
  * Requirements:
  *   - Default starting point: 8090 (matches the gateways' default).
- *   - Skip ports already claimed by other registered projects (hub-internal).
+ *   - Skip ports already claimed by other registered instances (hub-internal).
  *   - Skip ports that are actually bound on the local machine right now
  *     (OS-level collision). This catches cases where the user has ANOTHER
  *     service on 8091 that hub doesn't know about.
  *   - Return a deterministic value for tests via `probe` injection.
  *
  * We deliberately do NOT keep the port reserved between allocate and
- * project-add persist — the race window is milliseconds and the failure
- * mode is "two projects get the same port, start fails with EADDRINUSE".
+ * instance-add persist — the race window is milliseconds and the failure
+ * mode is "two instances get the same port, start fails with EADDRINUSE".
  * Acceptable on a single-user CLI.
  */
 
@@ -22,7 +22,7 @@ export interface FindPortOptions {
   start?: number;
   /** Last port to try (inclusive). Default 9090 — 1000-port search space is plenty for 99.99% of hosts. */
   end?: number;
-  /** Ports already claimed by other hub projects. The caller passes config.projects.map(p=>p.port). */
+  /** Ports already claimed by other hub instances. The caller passes config.instances.map(p=>p.port). */
   reserved?: ReadonlyArray<number>;
   /**
    * Override the bind-check. Tests inject a fake prober that says "port N is
@@ -59,7 +59,7 @@ export async function nextFreePort(opts: FindPortOptions = {}): Promise<number> 
   }
   throw new NoFreePortError(
     `No free port in range [${start}..${end}]. ` +
-      `Registered projects: ${reserved.size}. ` +
+      `Registered instances: ${reserved.size}. ` +
       `Consider specifying --port explicitly or widening --port-range.`,
   );
 }

@@ -5,24 +5,24 @@
  *
  *   init                           Initialize ~/.config/shepaw-hub/ (idempotent)
  *
- *   project add <id>               Register a new project
- *   project list                   List registered projects
- *   project show <id>              Detailed info for one project
- *   project remove <id>            Unregister; stops first if running
- *   project update <id>            Patch label / baseUrl / extraArgs / host / cwd
+ *   instance add <id>               Register a new instance
+ *   instance list                   List registered instances
+ *   instance show <id>              Detailed info for one instance
+ *   instance remove <id>            Unregister; stops first if running
+ *   instance update <id>            Patch label / baseUrl / extraArgs / host / cwd
  *
  *   start <id>                     Spawn the gateway process (detached)
  *   stop <id>                      Stop the gateway (SIGTERM on Unix, TerminateProcess on Windows)
- *   status [<id>]                  Show running state (all projects if no id)
+ *   status [<id>]                  Show running state (all instances if no id)
  *   logs <id>                      Tail the gateway's stdout/stderr
  *   logs rotate <id>               Force log rotation
  *
  *   pair <id>                      Mint an enroll code, print QR + short code.
  *   enroll <id>                    Same as pair; preserved for consistency with gateway CLIs.
- *   enroll-list <id>               List this project's outstanding codes
+ *   enroll-list <id>               List this instance's outstanding codes
  *   enroll-revoke <id> <code>      Cancel an unused code
  *
- *   peers list <id>                List authorized peers for a project
+ *   peers list <id>                List authorized peers for a instance
  *   peers add <id> <pubkey>        Authorize a device
  *   peers remove <id> <fp>         Revoke a device
  *
@@ -46,37 +46,37 @@ import {
 } from 'shepaw-acp-sdk';
 
 import {
-  addProject,
+  addInstance,
   addCustomEngineToHub,
-  findProject,
-  getProject,
+  findInstance,
+  getInstance,
   loadOrCreateHubConfig,
   listEngineInfos,
-  ProjectExistsError,
-  ProjectNotFoundError,
+  InstanceExistsError,
+  InstanceNotFoundError,
   removeCustomEngineFromHub,
   isKnownEngine,
   type ApprovalMode,
   type ApprovalPolicyConfig,
-  type ProjectConfig,
+  type InstanceConfig,
   type TunnelConfig,
   CustomEngineExistsError,
   CustomEngineInUseError,
   CustomEngineNotFoundError,
 } from '@shepaw/agent-hub-core';
 import {
-  ensureProjectDir,
+  ensureInstanceDir,
   isAlive,
   readState,
-  rotateProjectLogs,
-  startProject,
-  stopProject,
+  rotateInstanceLogs,
+  startInstance,
+  stopInstance,
 } from '@shepaw/agent-hub-core';
 import { nextFreePort } from '@shepaw/agent-hub-core';
-import { projectPaths, hubRoot, hubConfigPath, gatewayLogFile } from '@shepaw/agent-hub-core';
+import { instancePaths, hubRoot, hubConfigPath, gatewayLogFile } from '@shepaw/agent-hub-core';
 import { tailLog } from '@shepaw/agent-hub-core';
-import { probeProjectRuntime, createHubPairing } from '@shepaw/agent-hub-core';
-import { updateProject } from '@shepaw/agent-hub-core';
+import { probeInstanceRuntime, createHubPairing } from '@shepaw/agent-hub-core';
+import { updateInstance } from '@shepaw/agent-hub-core';
 import {
   DEFAULT_ROUTER_PORT,
   setHubGateway,
@@ -87,7 +87,9 @@ import {
 } from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
-const multiWord = new Set(['project', 'peers', 'logs', 'enroll', 'gateway']);
+// 'project' is kept as a backward-compat alias for 'instance' (the concept
+// was renamed); old `shepaw-hub project add ...` invocations still work.
+const multiWord = new Set(['instance', 'project', 'peers', 'logs', 'enroll', 'gateway']);
 if (
   process.argv.length >= 4 &&
   typeof process.argv[2] === 'string' &&
@@ -95,7 +97,8 @@ if (
   multiWord.has(process.argv[2]) &&
   !process.argv[3].startsWith('-')
 ) {
-  const outer = process.argv[2];
+  let outer = process.argv[2];
+  if (outer === 'project') outer = 'instance';
   const inner = process.argv[3];
   process.argv.splice(2, 2, `${outer}-${inner}`);
 }
@@ -110,18 +113,18 @@ cli
     const cfg = loadOrCreateHubConfig();
     console.log(`Hub config:   ${cfg.path}`);
     console.log(`Hub root:     ${hubRoot()}`);
-    console.log(`Projects:     ${cfg.projects.length}`);
-    if (cfg.projects.length === 0) {
+    console.log(`Instances:     ${cfg.instances.length}`);
+    if (cfg.instances.length === 0) {
       console.log('');
-      console.log('Next: register a project');
-      console.log('  shepaw-hub project add my-project --engine codebuddy --cwd /path/to/code');
+      console.log('Next: register a instance');
+      console.log('  shepaw-hub instance add my-instance --engine codebuddy --cwd /path/to/code');
     }
   });
 
-// ── project management ─────────────────────────────────────────────
+// ── instance management ─────────────────────────────────────────────
 
 cli
-  .command('project-add <id>', 'Register a new agent project')
+  .command('instance-add <id>', 'Register a new agent instance')
   .option('--engine <engine>', 'Gateway engine id (built-in or custom; see shepaw-hub engine list)', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
   .option('--label <text>', 'Display name shown in `status`')
@@ -129,10 +132,10 @@ cli
   .option('--host <host>', 'Bind host (default: 127.0.0.1; use 0.0.0.0 for LAN)', { default: '127.0.0.1' })
   .option('--base-url <url>', 'Base WS URL for pairing QRs (overrides tunnel-derived URL)')
   .option('--tunnel-server <url>', 'Shepaw Channel Service base URL')
-  .option('--tunnel-channel-id <id>', 'Channel ID for this project')
+  .option('--tunnel-channel-id <id>', 'Channel ID for this instance')
   .option('--tunnel-secret <secret>', 'HMAC-SHA256 signing secret for this channel')
   .option('--extra-arg <arg>', 'Extra argument passed through to gateway serve (repeatable)', { default: [] })
-  .option('--env <KEY=VALUE>', 'Set a project env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
+  .option('--env <KEY=VALUE>', 'Set a instance env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
   .action(async (id: string, opts: {
     engine: string;
     cwd: string;
@@ -149,7 +152,7 @@ cli
     try {
       const cfg = loadOrCreateHubConfig();
       const engine = parseEngine(opts.engine, cfg);
-      const reservedPorts = cfg.projects.map((p) => p.port);
+      const reservedPorts = cfg.instances.map((p) => p.port);
       const port = opts.port !== undefined
         ? Number(opts.port)
         : await nextFreePort({ reserved: reservedPorts });
@@ -188,7 +191,7 @@ cli
       // Auto-derive baseUrl from tunnel if not explicitly set
       const baseUrl = opts.baseUrl ?? (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
 
-      const project: Parameters<typeof addProject>[1] = {
+      const instance: Parameters<typeof addInstance>[1] = {
         id,
         label: opts.label ?? id,
         engine,
@@ -202,17 +205,17 @@ cli
         plainEnvVars: Object.keys(plainEnvVars).length > 0 ? plainEnvVars : undefined,
       };
 
-      const next = addProject(cfg, project);
-      ensureProjectDir(id);
+      const next = addInstance(cfg, instance);
+      ensureInstanceDir(id);
 
-      console.log(`Registered project "${id}".`);
-      console.log(`  label:     ${project.label}`);
-      console.log(`  engine:    ${project.engine}`);
-      console.log(`  cwd:       ${project.cwd}`);
-      console.log(`  bind:      ${project.host}:${project.port}`);
-      if (project.baseUrl) console.log(`  base URL:  ${project.baseUrl}`);
-      if (project.tunnel) {
-        console.log(`  tunnel:    ${project.tunnel.serverUrl} / channel ${project.tunnel.channelId}`);
+      console.log(`Registered instance "${id}".`);
+      console.log(`  label:     ${instance.label}`);
+      console.log(`  engine:    ${instance.engine}`);
+      console.log(`  cwd:       ${instance.cwd}`);
+      console.log(`  bind:      ${instance.host}:${instance.port}`);
+      if (instance.baseUrl) console.log(`  base URL:  ${instance.baseUrl}`);
+      if (instance.tunnel) {
+        console.log(`  tunnel:    ${instance.tunnel.serverUrl} / channel ${instance.tunnel.channelId}`);
       }
       if (Object.keys(plainEnvVars).length > 0) {
         console.log(`  env vars:  ${Object.keys(plainEnvVars).join(', ')} (encrypted)`);
@@ -226,16 +229,16 @@ cli
   });
 
 cli
-  .command('project-list', 'List registered projects')
+  .command('instance-list', 'List registered instances')
   .action(() => {
     const cfg = loadOrCreateHubConfig();
-    if (cfg.projects.length === 0) {
-      console.log('No projects registered.');
-      console.log('  shepaw-hub project add <id> --engine codebuddy --cwd /path/to/code');
+    if (cfg.instances.length === 0) {
+      console.log('No instances registered.');
+      console.log('  shepaw-hub instance add <id> --engine codebuddy --cwd /path/to/code');
       return;
     }
-    const rows = cfg.projects.map((p) => {
-      const state = readState(projectPaths(p.id).statePath);
+    const rows = cfg.instances.map((p) => {
+      const state = readState(instancePaths(p.id).statePath);
       const running = state !== undefined && state.pid > 0 && isAlive(state.pid);
       return {
         id: p.id,
@@ -262,14 +265,14 @@ cli
   });
 
 cli
-  .command('project-show <id>', 'Show detailed info for one project')
+  .command('instance-show <id>', 'Show detailed info for one instance')
   .action((id: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      const p = getProject(cfg, id);
-      const paths = projectPaths(id);
+      const p = getInstance(cfg, id);
+      const paths = instancePaths(id);
       const state = readState(paths.statePath);
-      console.log(`Project: ${p.id}`);
+      console.log(`Instance: ${p.id}`);
       console.log(`  label:       ${p.label}`);
       console.log(`  engine:      ${p.engine}`);
       console.log(`  cwd:         ${p.cwd}`);
@@ -308,24 +311,24 @@ cli
   });
 
 cli
-  .command('project-remove <id>', 'Unregister a project (stops it first if running)')
+  .command('instance-remove <id>', 'Unregister a instance (stops it first if running)')
   .option('--keep-files', 'Keep identity/peers/logs on disk (default: leave them be)')
   .action(async (id: string, _opts: { keepFiles?: boolean }) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      const p = getProject(cfg, id);
-      const paths = projectPaths(id);
+      const p = getInstance(cfg, id);
+      const paths = instancePaths(id);
 
       const state = readState(paths.statePath);
       if (state !== undefined && state.pid > 0 && isAlive(state.pid)) {
-        console.log(`Stopping running project "${id}" (pid ${state.pid})...`);
-        const result = await stopProject(p);
+        console.log(`Stopping running instance "${id}" (pid ${state.pid})...`);
+        const result = await stopInstance(p);
         console.log(`  ${result}`);
       }
 
-      const { removeProject } = await import('@shepaw/agent-hub-core');
-      removeProject(cfg, id);
-      console.log(`Unregistered project "${id}".`);
+      const { removeInstance } = await import('@shepaw/agent-hub-core');
+      removeInstance(cfg, id);
+      console.log(`Unregistered instance "${id}".`);
       console.log('  Files left on disk (delete manually if desired):');
       console.log(`    ${paths.root}`);
     } catch (err) {
@@ -334,7 +337,7 @@ cli
   });
 
 cli
-  .command('project-update <id>', 'Patch a project\'s non-critical fields')
+  .command('instance-update <id>', 'Patch a instance\'s non-critical fields')
   .option('--label <text>', 'New display name')
   .option('--host <host>', 'New bind host')
   .option('--base-url <url>', 'New base URL for pairing QRs')
@@ -343,9 +346,9 @@ cli
   .option('--tunnel-server <url>', 'New Shepaw Channel Service base URL (update all three tunnel fields together)')
   .option('--tunnel-channel-id <id>', 'New channel ID')
   .option('--tunnel-secret <secret>', 'New channel HMAC-SHA256 signing secret')
-  .option('--clear-tunnel', 'Remove tunnel configuration from this project')
+  .option('--clear-tunnel', 'Remove tunnel configuration from this instance')
   .option('--env <KEY=VALUE>', 'Set/update an env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
-  .option('--clear-env', 'Remove all stored env vars from this project')
+  .option('--clear-env', 'Remove all stored env vars from this instance')
   .action((id: string, opts: {
     label?: string;
     host?: string;
@@ -361,7 +364,7 @@ cli
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
+      getInstance(cfg, id);
       const patch: {
         label?: string;
         host?: string;
@@ -417,8 +420,8 @@ cli
         }
         patch.mergeEnvVars = mergeEnvVars;
       }
-      updateProject(cfg, id, patch);
-      console.log(`Updated project "${id}".`);
+      updateInstance(cfg, id, patch);
+      console.log(`Updated instance "${id}".`);
       console.log('Restart for changes to take effect:  shepaw-hub stop ' + id + ' && shepaw-hub start ' + id);
     } catch (err) {
       exitWithError(err);
@@ -426,23 +429,23 @@ cli
   });
 
 cli
-  .command('project-set-approval <id>', 'Set a per-project tool-call approval override')
+  .command('instance-set-approval <id>', 'Set a per-instance tool-call approval override')
   .option('--mode <mode>', 'ask | auto | custom')
   .option('--allow-kinds <csv>', 'Tool kinds to auto-approve, e.g. read,search,fetch')
   .option('--ask-kinds <csv>', 'Tool kinds to ALWAYS review, e.g. execute,delete')
   .option('--allow-pattern <regex>', 'Regex to auto-approve (repeatable)')
   .option('--deny-pattern <regex>', 'Regex to auto-deny (repeatable)')
-  .option('--inherit', 'Remove the override so the project inherits the device default')
+  .option('--inherit', 'Remove the override so the instance inherits the device default')
   .action((id: string, opts: ApprovalCliOpts & { inherit?: boolean }) => {
     try {
       const cfg = loadOrCreateHubConfig();
       if (opts.inherit) {
-        updateProject(cfg, id, { approval: undefined });
-        console.log(`Project "${id}" now inherits the device-wide approval policy.`);
+        updateInstance(cfg, id, { approval: undefined });
+        console.log(`Instance "${id}" now inherits the device-wide approval policy.`);
         return;
       }
       const approval = buildApprovalFromOpts(opts);
-      updateProject(cfg, id, { approval });
+      updateInstance(cfg, id, { approval });
       printApproval(`Approval policy for "${id}"`, approval);
       console.log('');
       console.log(`Restart to apply:  shepaw-hub stop ${id} && shepaw-hub start ${id}`);
@@ -454,18 +457,18 @@ cli
 // ── lifecycle ──────────────────────────────────────────────────────
 
 cli
-  .command('start <id>', 'Start a project\'s gateway (detached)')
+  .command('start <id>', 'Start a instance\'s gateway (detached)')
   .action(async (id: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      const p = getProject(cfg, id);
-      ensureProjectDir(id);
-      const result = await startProject(p);
+      const p = getInstance(cfg, id);
+      ensureInstanceDir(id);
+      const result = await startInstance(p);
       if (result.alreadyRunning) {
-        console.log(`Project "${id}" was already running (pid ${result.pid}).`);
+        console.log(`Instance "${id}" was already running (pid ${result.pid}).`);
       } else {
         console.log(`Started "${id}" — pid ${result.pid}, bind ${p.host}:${p.port}.`);
-        const paths = projectPaths(id);
+        const paths = instancePaths(id);
         console.log(`  log: ${paths.logFile}`);
         console.log(`  pair: shepaw-hub pair ${id}`);
       }
@@ -475,12 +478,12 @@ cli
   });
 
 cli
-  .command('stop <id>', 'Stop a project\'s gateway')
+  .command('stop <id>', 'Stop a instance\'s gateway')
   .action(async (id: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      const p = getProject(cfg, id);
-      const result = await stopProject(p);
+      const p = getInstance(cfg, id);
+      const result = await stopInstance(p);
       if (result === 'graceful') {
         console.log(`Stopped "${id}" gracefully.`);
       } else if (result === 'hard') {
@@ -493,7 +496,7 @@ cli
           console.log(`Killed "${id}" (SIGTERM ignored; sent SIGKILL).`);
         }
       } else {
-        console.log(`Project "${id}" was not running.`);
+        console.log(`Instance "${id}" was not running.`);
       }
     } catch (err) {
       exitWithError(err);
@@ -501,16 +504,16 @@ cli
   });
 
 cli
-  .command('status [id]', 'Show running state of one or all projects')
+  .command('status [id]', 'Show running state of one or all instances')
   .action(async (id: string | undefined) => {
     const cfg = loadOrCreateHubConfig();
-    const projects = id !== undefined ? [getProject(cfg, id)] : [...cfg.projects];
-    if (projects.length === 0) {
-      console.log('No projects registered.');
+    const instances = id !== undefined ? [getInstance(cfg, id)] : [...cfg.instances];
+    if (instances.length === 0) {
+      console.log('No instances registered.');
       return;
     }
-    for (const p of projects) {
-      const st = await probeProjectRuntime(p);
+    for (const p of instances) {
+      const st = await probeInstanceRuntime(p);
       const busyTag = st.busyLevel !== null ? `  busy=${st.busyLevel}` : '';
       const pidTag = st.pid !== null ? `  pid=${st.pid}` : '';
       console.log(`${p.id}: ${st.availability}${busyTag}${pidTag}  bind=${p.host}:${p.port}  engine=${p.engine}`);
@@ -523,7 +526,7 @@ cli
         console.log(`  probe: ${st.probeError}`);
       }
       if (st.lastResult === 'crashed' && !st.running) {
-        console.log(`  last run ended unexpectedly — check ${projectPaths(p.id).logFile}`);
+        console.log(`  last run ended unexpectedly — check ${instancePaths(p.id).logFile}`);
       }
     }
   });
@@ -535,7 +538,7 @@ cli
   .action(async (id: string, opts: { tail?: number | string; follow?: boolean }) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
+      getInstance(cfg, id);
       const ac = new AbortController();
       process.on('SIGINT', () => ac.abort());
       await tailLog(id, {
@@ -549,12 +552,12 @@ cli
   });
 
 cli
-  .command('logs-rotate <id>', 'Force log rotation for one project')
+  .command('logs-rotate <id>', 'Force log rotation for one instance')
   .action(async (id: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
-      await rotateProjectLogs(id);
+      getInstance(cfg, id);
+      await rotateInstanceLogs(id);
       console.log(`Rotated logs for "${id}".`);
     } catch (err) {
       exitWithError(err);
@@ -568,9 +571,9 @@ function runPair(
   opts: { label?: string; ttlMinutes?: number | string; qr?: boolean; baseUrl?: string },
 ): void {
   const cfg = loadOrCreateHubConfig();
-  const project = getProject(cfg, id);
-  const paths = projectPaths(id);
-  ensureProjectDir(id);
+  const instance = getInstance(cfg, id);
+  const paths = instancePaths(id);
+  ensureInstanceDir(id);
 
   const identity = loadOrCreateIdentity({ path: paths.identityPath });
   const ttlMs = Math.max(1, Math.floor(Number(opts.ttlMinutes ?? 10))) * 60 * 1000;
@@ -585,18 +588,18 @@ function runPair(
   const pkEncoded = encodeURIComponent(pkB64);
   const fragmentParams = `fp=${identity.fingerprint}&pk=${pkEncoded}`;
 
-  // Priority: explicit --base-url > shared gateway channel > legacy project
-  // baseUrl > loopback. The shared channel routes by /p/<projectId>.
+  // Priority: explicit --base-url > shared gateway channel > legacy instance
+  // baseUrl > loopback. The shared channel routes by /p/<instanceId>.
   const gatewayBase = gatewayChannelWsBase(cfg);
   let pairUrl: string;
   if (opts.baseUrl) {
     pairUrl = `${opts.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   } else if (gatewayBase) {
-    pairUrl = `${gatewayBase}/p/${encodeURIComponent(project.id)}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
-  } else if (project.baseUrl) {
-    pairUrl = `${project.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+    pairUrl = `${gatewayBase}/p/${encodeURIComponent(instance.id)}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+  } else if (instance.baseUrl) {
+    pairUrl = `${instance.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   } else {
-    pairUrl = `ws://${project.host}:${project.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+    pairUrl = `ws://${instance.host}:${instance.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   }
 
   const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
@@ -606,16 +609,16 @@ function runPair(
   console.log(`│  Pairing code:  ${display.padEnd(28, ' ')} │`);
   console.log('╰──────────────────────────────────────────────╯');
   console.log('');
-  console.log(`  Project:      ${project.id} (${project.label})`);
+  console.log(`  Instance:      ${instance.id} (${instance.label})`);
   console.log(`  Valid until:  ${expires}`);
   console.log(`  Single use:   the code is invalidated after first handshake.`);
   console.log(`  Agent ID:     ${identity.agentId}`);
   console.log(`  Fingerprint:  ${identity.fingerprint}`);
   console.log(`  Pair URL:     ${pairUrl}`);
-  if (!opts.baseUrl && !gatewayBase && !project.baseUrl) {
+  if (!opts.baseUrl && !gatewayBase && !instance.baseUrl) {
     console.log(`  ⚠ No shared channel or base URL configured — the URL above is loopback only.`);
     console.log(`     Configure the shared channel: shepaw-hub gateway set-channel ...`);
-    console.log(`     Or a per-project base URL: shepaw-hub project update ${id} --base-url <url>`);
+    console.log(`     Or a per-instance base URL: shepaw-hub instance update ${id} --base-url <url>`);
   }
   if (gatewayBase) warnRouterIfNeeded();
 
@@ -645,7 +648,7 @@ function runHubPair(
   console.log(`│  Hub pairing code:  ${result.display.padEnd(23, ' ')} │`);
   console.log('╰──────────────────────────────────────────────╯');
   console.log('');
-  console.log(`  Bootstrap agent: ${result.bootstrapProjectId}`);
+  console.log(`  Bootstrap agent: ${result.bootstrapInstanceId}`);
   console.log(`  Valid until:     ${new Date(result.expiresAt).toLocaleString()}`);
   console.log(`  Agents:          ${result.agents.length} (all authorized after one scan)`);
   console.log(`  Pair URL:        ${result.pairUrl}`);
@@ -666,7 +669,7 @@ function runHubPair(
 }
 
 cli
-  .command('pair [id]', 'Mint pairing QR (all agents if no id, else one project)')
+  .command('pair [id]', 'Mint pairing QR (all agents if no id, else one instance)')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
   .option('--base-url <url>', 'Override public WS base URL for the QR')
@@ -682,10 +685,10 @@ cli
   });
 
 cli
-  .command('pair-project <id>', 'Mint a pairing code + QR for one project only')
+  .command('pair-instance <id>', 'Mint a pairing code + QR for one instance only')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
-  .option('--base-url <url>', 'Override the project\'s configured base URL for this pairing')
+  .option('--base-url <url>', 'Override the instance\'s configured base URL for this pairing')
   .option('--no-qr', 'Suppress the terminal QR code')
   .action((id: string, opts: { label?: string; ttlMinutes?: number | string; baseUrl?: string; qr?: boolean }) => {
     try { runPair(id, opts); }
@@ -696,7 +699,7 @@ cli
   .command('enroll <id>', 'Alias for `pair <id>`')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
-  .option('--base-url <url>', 'Override the project\'s configured base URL for this pairing')
+  .option('--base-url <url>', 'Override the instance\'s configured base URL for this pairing')
   .option('--no-qr', 'Suppress the terminal QR code')
   .action((id: string, opts: { label?: string; ttlMinutes?: number | string; baseUrl?: string; qr?: boolean }) => {
     try { runPair(id, opts); }
@@ -704,12 +707,12 @@ cli
   });
 
 cli
-  .command('enroll-list <id>', 'Show outstanding pairing codes for a project')
+  .command('enroll-list <id>', 'Show outstanding pairing codes for a instance')
   .action((id: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
-      const paths = projectPaths(id);
+      getInstance(cfg, id);
+      const paths = instancePaths(id);
       const store = loadOrCreateEnrollments({ path: paths.enrollmentsPath });
       if (store.tokens.length === 0) {
         console.log(`No outstanding pairing codes for "${id}".`);
@@ -735,15 +738,15 @@ cli
   });
 
 cli
-  .command('enroll-revoke <id> <code>', 'Cancel an unused pairing code for a project')
+  .command('enroll-revoke <id> <code>', 'Cancel an unused pairing code for a instance')
   .action((id: string, code: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
-      const paths = projectPaths(id);
+      getInstance(cfg, id);
+      const paths = instancePaths(id);
       const ok = revokeEnrollmentToken(paths.enrollmentsPath, code);
       if (ok) {
-        console.log(`Revoked pairing code ${code} from project "${id}".`);
+        console.log(`Revoked pairing code ${code} from instance "${id}".`);
       } else {
         console.log(`No outstanding pairing code matching "${code}" for "${id}".`);
         process.exit(1);
@@ -756,12 +759,12 @@ cli
 // ── peers ──────────────────────────────────────────────────────────
 
 cli
-  .command('peers-list <id>', 'List authorized peer public keys for a project')
+  .command('peers-list <id>', 'List authorized peer public keys for a instance')
   .action((id: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
-      const paths = projectPaths(id);
+      getInstance(cfg, id);
+      const paths = instancePaths(id);
       const peers = loadOrCreatePeers({ path: paths.peersPath });
       if (peers.peers.length === 0) {
         console.log(`No authorized peers for "${id}". File: ${paths.peersPath}`);
@@ -783,28 +786,28 @@ cli
   });
 
 cli
-  .command('peers-add <id> <pubkey>', 'Authorize a device on a specific project')
+  .command('peers-add <id> <pubkey>', 'Authorize a device on a specific instance')
   .option('--label <text>', 'Device label')
   .action((id: string, pubkey: string, opts: { label?: string }) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
-      const paths = projectPaths(id);
+      getInstance(cfg, id);
+      const paths = instancePaths(id);
       const entry = sdkAddPeer(paths.peersPath, pubkey, opts.label);
       console.log(`Authorized ${entry.fingerprint} (${entry.label || '(unlabeled)'}) for "${id}".`);
-      console.log(`If the project is running, it will pick up the change within 100ms.`);
+      console.log(`If the instance is running, it will pick up the change within 100ms.`);
     } catch (err) {
       exitWithError(err);
     }
   });
 
 cli
-  .command('peers-remove <id> <fingerprint>', 'Revoke a device on a specific project')
+  .command('peers-remove <id> <fingerprint>', 'Revoke a device on a specific instance')
   .action((id: string, fp: string) => {
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, id);
-      const paths = projectPaths(id);
+      getInstance(cfg, id);
+      const paths = instancePaths(id);
       const removed = sdkRemovePeer(paths.peersPath, fp);
       if (removed) {
         console.log(`Revoked peer ${fp} from "${id}". Any live session closes within ~200ms.`);
@@ -936,7 +939,7 @@ cli
       setHubGateway(cfg, { approval });
       printApproval('Device-wide approval policy', approval);
       console.log('');
-      console.log('Restart affected agents to apply: shepaw-hub project stop/start <id>');
+      console.log('Restart affected agents to apply: shepaw-hub instance stop/start <id>');
     } catch (err) {
       exitWithError(err);
     }
@@ -1034,7 +1037,7 @@ cli
 // ── web dashboard ──────────────────────────────────────────────────
 
 cli
-  .command('web', 'Start the web dashboard (API + UI) for managing projects')
+  .command('web', 'Start the web dashboard (API + UI) for managing instances')
   .option('--port <n>', 'Dashboard HTTP port (default: 4000)', { default: 4000 })
   .option('--host <host>', 'Dashboard bind host (default: 127.0.0.1)', { default: '127.0.0.1' })
   .option('--no-open', 'Do not automatically open the browser')
@@ -1069,7 +1072,7 @@ cli
 
 cli.help((sections) => {
   const restoreMap: Array<[RegExp, string]> = [
-    [/project-(add|list|show|remove|update|set-approval)/g, 'project $1'],
+    [/instance-(add|list|show|remove|update|set-approval)/g, 'instance $1'],
     [/peers-(list|add|remove)/g, 'peers $1'],
     [/logs-(rotate)/g, 'logs $1'],
     [/enroll-(list|revoke)/g, 'enroll $1'],
@@ -1181,8 +1184,8 @@ function parseEngine(raw: string, cfg: ReturnType<typeof loadOrCreateHubConfig>)
 
 function exitWithError(err: unknown): never {
   if (
-    err instanceof ProjectNotFoundError
-    || err instanceof ProjectExistsError
+    err instanceof InstanceNotFoundError
+    || err instanceof InstanceExistsError
     || err instanceof CustomEngineExistsError
     || err instanceof CustomEngineNotFoundError
     || err instanceof CustomEngineInUseError
@@ -1199,7 +1202,7 @@ function exitWithError(err: unknown): never {
   process.exit(1);
 }
 
-void findProject;
+void findInstance;
 void nodeSpawn;
 void existsSync;
 void hubConfigPath;

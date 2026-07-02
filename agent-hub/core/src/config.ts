@@ -1,19 +1,19 @@
 /**
  * Hub config (hub.json).
  *
- * Holds the list of registered projects. Atomic writes (.tmp + rename) so
- * concurrent `project add` / `project remove` invocations don't race to
+ * Holds the list of registered instances. Atomic writes (.tmp + rename) so
+ * concurrent `instance add` / `instance remove` invocations don't race to
  * produce a truncated file. 0600 on Unix (consistent with identity.json and
- * authorized_peers.json) because a list of project labels + cwds is private
+ * authorized_peers.json) because a list of instance labels + cwds is private
  * infrastructure metadata.
  *
- * The per-project identity.json / authorized_peers.json / enrollments.json
- * are NOT in this file — they live in `projects/<id>/` and are managed by
+ * The per-instance identity.json / authorized_peers.json / enrollments.json
+ * are NOT in this file — they live in `instances/<id>/` and are managed by
  * the SDK functions directly. Hub config only knows the "business-card"
  * data: id, label, engine, cwd, port.
  *
  * Why not just one giant JSON? Two reasons:
- *   1. Per-project SDK files are managed by shepaw-acp-sdk, which has its
+ *   1. Per-instance SDK files are managed by shepaw-acp-sdk, which has its
  *      own atomic-write + permissions + schema logic. Re-implementing it
  *      at the hub level would fork responsibility.
  *   2. The gateway child process needs to read its own identity/peers files
@@ -31,17 +31,20 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { hubConfigPath, validateProjectId, normalizeCwd, hubRoot } from './paths.js';
-import { encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
+import { hubConfigPath, validateInstanceId, normalizeCwd, hubRoot } from './paths.js';
+import { encryptEnvVars, encryptValue, decryptValue, decryptEnvVars } from './crypto.js';
 import {
   addCustomEngine,
   BUILTIN_ENGINE_IDS,
+  findCustomEngine,
   isKnownEngine,
   parseCustomEngines,
   removeCustomEngine,
+  updateCustomEngine,
   type CustomEngineDefinition,
   type BuiltinAgentEngine,
   CustomEngineInUseError,
+  CustomEngineNotFoundError,
 } from './engines.js';
 
 export {
@@ -55,6 +58,7 @@ export {
   listEngineInfos,
   parseShellCommand,
   removeCustomEngine,
+  updateCustomEngine,
   validateCustomEngineId,
   CustomEngineExistsError,
   CustomEngineInUseError,
@@ -65,6 +69,7 @@ export type {
   BuiltinAgentEngine,
   CustomEngineDefinition,
   EngineInfo,
+  EngineOverrideInstanceion,
 } from './engines.js';
 
 // ── types ──────────────────────────────────────────────────────────
@@ -76,8 +81,8 @@ export type {
  * managed agent on the host: the device runs one long-lived tunnel router
  * (see `tunnel-router.ts`) that terminates the channel tunnel and forwards
  * still-Noise-encrypted WebSocket streams to the right agent's loopback port
- * based on the `/p/<projectId>` (or `/a/<agentId>`) prefix in the URL. Set
- * this on `HubConfig.gateway.tunnel` — the per-project `ProjectConfig.tunnel`
+ * based on the `/p/<instanceId>` (or `/a/<agentId>`) prefix in the URL. Set
+ * this on `HubConfig.gateway.tunnel` — the per-instance `InstanceConfig.tunnel`
  * is retained for backward compatibility only (see its doc comment).
  *
  * The channel's `endpoint` alias is NOT stored here; it is resolved at
@@ -104,9 +109,9 @@ export const DEFAULT_ROUTER_PORT = 18789;
  * This is the recommended place to configure the Channel Service tunnel: one
  * channel fronts every managed agent. The tunnel router process
  * (`shepaw-hub gateway start`) reads this, opens a single reverse tunnel, and
- * dispatches incoming `/p/<projectId>/acp/ws` connections to the matching
+ * dispatches incoming `/p/<instanceId>/acp/ws` connections to the matching
  * agent's loopback port. Agents themselves bind loopback-only and no longer
- * need per-project tunnels.
+ * need per-instance tunnels.
  */
 export interface GatewayConfig {
   /** Shared Channel Service tunnel. Omitted when running LAN-only. */
@@ -117,8 +122,8 @@ export interface GatewayConfig {
   readonly routerPort: number;
   /**
    * Device-wide default tool-call approval policy. Injected into every managed
-   * agent's gateway process as `PAW_ACP_APPROVAL_*` env vars unless a project
-   * defines its own {@link ProjectConfig.approval} override.
+   * agent's gateway process as `PAW_ACP_APPROVAL_*` env vars unless a instance
+   * defines its own {@link InstanceConfig.approval} override.
    */
   readonly approval?: ApprovalPolicyConfig;
 }
@@ -148,8 +153,8 @@ export interface ApprovalPolicyConfig {
   readonly denyPatterns: ReadonlyArray<string>;
 }
 
-export interface ProjectConfig {
-  /** User-chosen identifier. Validated against `paths.validateProjectId`. */
+export interface InstanceConfig {
+  /** User-chosen identifier. Validated against `paths.validateInstanceId`. */
   readonly id: string;
   /** Display name shown in `shepaw-hub status`. Free-form string. */
   readonly label: string;
@@ -167,7 +172,7 @@ export interface ProjectConfig {
   readonly host: string;
   /**
    * Optional: base URL to print in enrollment QRs. Typically a Shepaw
-   * Channel Service URL when the project is exposed via tunnel; empty on
+   * Channel Service URL when the instance is exposed via tunnel; empty on
    * LAN-only setups (in which case `shepaw-hub pair` still works but prints
    * a URL based on host:port).
    */
@@ -183,21 +188,21 @@ export interface ProjectConfig {
   /**
    * @deprecated Prefer the gateway-level shared channel (`HubConfig.gateway.tunnel`).
    *
-   * Legacy per-project tunnel config. When set, the hub still injects
-   * `PAW_ACP_TUNNEL_*` env vars into this project's gateway process so it opens
+   * Legacy per-instance tunnel config. When set, the hub still injects
+   * `PAW_ACP_TUNNEL_*` env vars into this instance's gateway process so it opens
    * its own dedicated channel (the pre-refactor behavior). New setups should
    * leave this empty and configure one shared channel on the gateway instead;
    * the tunnel router fronts all agents over that single channel.
    */
   readonly tunnel?: TunnelConfig;
   /**
-   * Optional per-project tool-call approval override. When set, it fully
+   * Optional per-instance tool-call approval override. When set, it fully
    * replaces the gateway-level default ({@link GatewayConfig.approval}) for
-   * this project's agent. Leave unset to inherit the device-wide default.
+   * this instance's agent. Leave unset to inherit the device-wide default.
    */
   readonly approval?: ApprovalPolicyConfig;
   /**
-   * Per-project engine credentials (API keys, auth tokens, base URLs).
+   * Per-instance engine credentials (API keys, auth tokens, base URLs).
    * Values are stored AES-256-GCM encrypted via `crypto.ts`; they are
    * decrypted only at process-spawn time and injected as env vars into the
    * gateway child process. Never returned in plaintext over the API.
@@ -217,23 +222,51 @@ export interface CredentialHint {
 
 /**
  * Hub-level credential cache: per engine, per env-var key.
- * Stored at the hub (global) level so adding a new project with the same
+ * Stored at the hub (global) level so adding a new instance with the same
  * engine can pre-fill credentials without the user having to re-enter them.
  */
 export type HubCredentialCache = Partial<Record<BuiltinAgentEngine, Record<string, CredentialHint>>>;
 
+/**
+ * Per-engine override stored at the hub level. Applies to BOTH built-in and
+ * custom engines (keyed by engine id). All fields optional — an engine with
+ * no entry simply inherits device-wide defaults.
+ *
+ * Resolution precedence for tool-call approval (most specific wins):
+ *   instance.approval → engineOverrides[engine].approval → gateway.approval
+ *
+ * `envVars` are injected at spawn time as engine-default env, merged UNDER
+ * the instance's own envVars so a instance can override a single key. Values
+ * are AES-256-GCM encrypted like {@link InstanceConfig.envVars}.
+ */
+export interface EngineOverrides {
+  /** When true the engine is hidden from the new-instance dropdown and cannot start. */
+  readonly disabled?: boolean;
+  /** Display-name override (cosmetic; applies to built-in and custom engines). */
+  readonly displayName?: string;
+  /** Engine-default credentials, encrypted at rest. */
+  readonly envVars?: Record<string, string>;
+  /** Per-engine default tool-call approval policy. */
+  readonly approval?: ApprovalPolicyConfig;
+}
+
+/** Map keyed by engine id (built-in or custom). */
+export type EngineOverridesMap = Record<string, EngineOverrides>;
+
 export interface HubConfig {
   readonly path: string;
-  readonly projects: ReadonlyArray<ProjectConfig>;
+  readonly instances: ReadonlyArray<InstanceConfig>;
   /** User-registered local ACP CLIs. */
   readonly customEngines: ReadonlyArray<CustomEngineDefinition>;
   /** Gateway-level (device-wide) config: shared channel tunnel + router port. */
   readonly gateway?: GatewayConfig;
-  /** Last Tunnel Server URL used — pre-filled when creating a new project. */
+  /** Per-engine overrides (disabled / displayName / envVars / approval). */
+  readonly engineOverrides?: EngineOverridesMap;
+  /** Last Tunnel Server URL used — pre-filled when creating a new instance. */
   readonly lastTunnelServerUrl?: string;
-  /** Last Tunnel Secret hint (masked + encrypted) — pre-filled when creating a new project. */
+  /** Last Tunnel Secret hint (masked + encrypted) — pre-filled when creating a new instance. */
   readonly lastTunnelSecretHint?: CredentialHint;
-  /** Per-engine credential hints for pre-filling on project creation. */
+  /** Per-engine credential hints for pre-filling on instance creation. */
   readonly credentialHints?: HubCredentialCache;
 }
 
@@ -253,18 +286,18 @@ export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
   const path = opts.path ?? hubConfigPath();
   if (!existsSync(path)) {
     persist(path, [], { customEngines: [] });
-    return { path, projects: [], customEngines: [] };
+    return { path, instances: [], customEngines: [] };
   }
   return loadExisting(path);
 }
 
 /**
- * Overwrite the hub config with a new list of projects. Atomic rename; fails
+ * Overwrite the hub config with a new list of instances. Atomic rename; fails
  * if the file's permission bits have been loosened (to catch accidental
  * `chmod -R 755 ~/.config/shepaw-hub`).
  */
-export function saveHubConfig(path: string, config: Pick<HubConfig, 'projects' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway'>): void {
-  persist(path, config.projects, hubPersistMeta(config));
+export function saveHubConfig(path: string, config: Pick<HubConfig, 'instances' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway' | 'engineOverrides'>): void {
+  persist(path, config.instances, hubPersistMeta(config));
 }
 
 /**
@@ -305,26 +338,31 @@ export function setHubGateway(
     ...(approval !== undefined && { approval }),
   };
   const next: HubConfig = { ...config, gateway };
-  persist(next.path, next.projects, hubPersistMeta(next));
+  persist(next.path, next.instances, hubPersistMeta(next));
   return next;
 }
 
 /**
- * Resolve the effective approval policy for a project: its own override if
- * present, otherwise the gateway-level default. Returns undefined when neither
- * is configured (the agent then defaults to always-ask).
+ * Resolve the effective approval policy for a instance, most-specific-wins:
+ * the instance's own override → the engine's override → the gateway-level
+ * default. Returns undefined when none of the three is configured (the agent
+ * then defaults to always-ask).
  */
 export function resolveApprovalPolicy(
   config: HubConfig,
-  project: Pick<ProjectConfig, 'approval'>,
+  instance: Pick<InstanceConfig, 'approval' | 'engine'>,
 ): ApprovalPolicyConfig | undefined {
-  return project.approval ?? config.gateway?.approval;
+  return (
+    instance.approval ??
+    config.engineOverrides?.[instance.engine]?.approval ??
+    config.gateway?.approval
+  );
 }
 
 /**
  * Update hub-level metadata (lastTunnelServerUrl, credentialHints) without
- * touching the projects list. Used when a project is created with tunnel/creds
- * so subsequent project creations can pre-fill these values.
+ * touching the instances list. Used when a instance is created with tunnel/creds
+ * so subsequent instance creations can pre-fill these values.
  */
 export function updateHubMeta(
   config: HubConfig,
@@ -336,7 +374,7 @@ export function updateHubMeta(
     ...(meta.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: meta.lastTunnelSecretHint }),
     ...(meta.credentialHints !== undefined && { credentialHints: meta.credentialHints }),
   };
-  persist(next.path, next.projects, hubPersistMeta(next));
+  persist(next.path, next.instances, hubPersistMeta(next));
   return next;
 }
 
@@ -346,56 +384,214 @@ export function addCustomEngineToHub(
 ): HubConfig {
   const customEngines = addCustomEngine(config.customEngines, input);
   const next: HubConfig = { ...config, customEngines };
-  persist(next.path, next.projects, hubPersistMeta(next));
+  persist(next.path, next.instances, hubPersistMeta(next));
   return next;
 }
 
 export function removeCustomEngineFromHub(config: HubConfig, id: string): HubConfig {
-  const inUse = config.projects.filter((p) => p.engine === id).map((p) => p.id);
+  const inUse = config.instances.filter((p) => p.engine === id).map((p) => p.id);
   if (inUse.length > 0) {
     throw new CustomEngineInUseError(id, inUse);
   }
   const customEngines = removeCustomEngine(config.customEngines, id);
-  const next: HubConfig = { ...config, customEngines };
-  persist(next.path, next.projects, hubPersistMeta(next));
+  // Drop any override entry for the removed engine too.
+  const engineOverrides = stripEngineOverride(config.engineOverrides, id);
+  const next: HubConfig = { ...config, customEngines, ...(engineOverrides !== undefined && { engineOverrides }) };
+  persist(next.path, next.instances, hubPersistMeta(next));
   return next;
 }
 
 /**
- * Add a project, validating the id and checking for duplicate ids.
- * Multiple projects may share the same cwd. Returns the final HubConfig.
- * Throws ProjectExistsError if the id already exists.
+ * Edit a custom engine's display name and/or ACP command. Custom-only —
+ * built-in engines have a fixed command (the bundled proxy CLI).
  */
-export function addProject(
+export function updateCustomEngineInHub(
   config: HubConfig,
-  project: Omit<ProjectConfig, 'envVars'> & { plainEnvVars?: Record<string, string> },
+  id: string,
+  patch: { displayName?: string; acpCommand?: string },
 ): HubConfig {
-  validateProjectId(project.id);
+  if (findCustomEngine(config.customEngines, id) === undefined) {
+    throw new CustomEngineNotFoundError(id);
+  }
+  const customEngines = updateCustomEngine(config.customEngines, id, patch);
+  const next: HubConfig = { ...config, customEngines };
+  persist(next.path, next.instances, hubPersistMeta(next));
+  return next;
+}
+
+/**
+ * Whether an engine id is known (built-in or registered custom) and thus
+ * eligible to receive overrides.
+ */
+export function isKnownEngineForOverrides(
+  config: HubConfig,
+  id: string,
+): boolean {
+  return isKnownEngine(id, config.customEngines);
+}
+
+/** True when the engine is known and marked disabled via overrides. */
+export function isEngineDisabled(config: HubConfig, id: string): boolean {
+  return isKnownEngineForOverrides(config, id)
+    && config.engineOverrides?.[id]?.disabled === true;
+}
+
+/**
+ * Set or patch a per-engine override. `null` for `disabled` / `displayName` /
+ * `approval` clears that field. Env vars are merged encrypted (instance-style):
+ * `mergeEnvVars` (plain), `clearEnvVars`, `deleteEnvVarKey`. Throws if the
+ * engine id is not known.
+ */
+export function setEngineOverride(
+  config: HubConfig,
+  id: string,
+  patch: {
+    disabled?: boolean | null;
+    displayName?: string | null;
+    approval?: ApprovalPolicyConfig | null;
+    mergeEnvVars?: Record<string, string>;
+    clearEnvVars?: boolean;
+    deleteEnvVarKey?: string;
+  },
+): HubConfig {
+  if (!isKnownEngineForOverrides(config, id)) {
+    throw new CustomEngineNotFoundError(id);
+  }
   const root = hubRoot();
-  const { plainEnvVars, ...rest } = project;
-  const normalized: ProjectConfig = {
+  const prev = config.engineOverrides?.[id] ?? {};
+  const nextOverrides = { ...prev };
+
+  if (patch.disabled === null) {
+    delete nextOverrides.disabled;
+  } else if (patch.disabled !== undefined) {
+    nextOverrides.disabled = patch.disabled;
+  }
+
+  if (patch.displayName === null) {
+    delete nextOverrides.displayName;
+  } else if (patch.displayName !== undefined) {
+    const trimmed = patch.displayName.trim();
+    if (trimmed.length === 0) {
+      throw new Error('Display name must not be empty.');
+    }
+    nextOverrides.displayName = trimmed;
+  }
+
+  if (patch.approval === null) {
+    delete nextOverrides.approval;
+  } else if (patch.approval !== undefined) {
+    nextOverrides.approval = patch.approval;
+  }
+
+  // Env var merge — same scheme as instance envVars.
+  let envVars = patch.clearEnvVars ? {} : { ...(prev.envVars ?? {}) };
+  if (patch.deleteEnvVarKey !== undefined) {
+    const { [patch.deleteEnvVarKey]: _d, ...rest } = envVars;
+    envVars = rest;
+  }
+  if (patch.mergeEnvVars && Object.keys(patch.mergeEnvVars).length > 0) {
+    const encrypted = encryptEnvVars(patch.mergeEnvVars, root);
+    envVars = { ...envVars, ...encrypted };
+  }
+  if (Object.keys(envVars).length > 0) {
+    nextOverrides.envVars = envVars;
+  } else {
+    delete nextOverrides.envVars;
+  }
+
+  const engineOverrides = { ...(config.engineOverrides ?? {}), [id]: nextOverrides };
+  const next: HubConfig = { ...config, engineOverrides };
+  persist(next.path, next.instances, hubPersistMeta(next));
+  return next;
+}
+
+/** Convenience: clear just the approval field of an engine's override. */
+export function clearEngineApproval(config: HubConfig, id: string): HubConfig {
+  return setEngineOverride(config, id, { approval: null });
+}
+
+/** Set one engine-default env var (encrypted). */
+export function setEngineEnvVar(
+  config: HubConfig,
+  id: string,
+  key: string,
+  value: string,
+): HubConfig {
+  return setEngineOverride(config, id, { mergeEnvVars: { [key]: value } });
+}
+
+/** Delete one engine-default env var key. */
+export function deleteEngineEnvVar(
+  config: HubConfig,
+  id: string,
+  key: string,
+): HubConfig {
+  return setEngineOverride(config, id, { deleteEnvVarKey: key });
+}
+
+/** Return engine-default env var keys (values stay encrypted at rest). */
+export function engineEnvVarKeys(config: HubConfig, id: string): string[] {
+  return Object.keys(config.engineOverrides?.[id]?.envVars ?? {});
+}
+
+/**
+ * Decrypt and return engine-default env vars for spawn-time injection.
+ * Returns an empty record when the engine has no override env.
+ */
+export function resolveEngineEnvVars(
+  config: HubConfig,
+  id: string,
+): Record<string, string> {
+  const env = config.engineOverrides?.[id]?.envVars;
+  if (env === undefined || Object.keys(env).length === 0) return {};
+  return decryptEnvVars(env, hubRoot());
+}
+
+/** Remove an engine's override entry entirely, returning the new map (or undefined if empty). */
+function stripEngineOverride(
+  map: EngineOverridesMap | undefined,
+  id: string,
+): EngineOverridesMap | undefined {
+  if (map === undefined || !(id in map)) return map;
+  const { [id]: _removed, ...rest } = map;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+/**
+ * Add a instance, validating the id and checking for duplicate ids.
+ * Multiple instances may share the same cwd. Returns the final HubConfig.
+ * Throws InstanceExistsError if the id already exists.
+ */
+export function addInstance(
+  config: HubConfig,
+  instance: Omit<InstanceConfig, 'envVars'> & { plainEnvVars?: Record<string, string> },
+): HubConfig {
+  validateInstanceId(instance.id);
+  const root = hubRoot();
+  const { plainEnvVars, ...rest } = instance;
+  const normalized: InstanceConfig = {
     ...rest,
-    cwd: normalizeCwd(project.cwd),
+    cwd: normalizeCwd(instance.cwd),
     envVars: plainEnvVars && Object.keys(plainEnvVars).length > 0
       ? encryptEnvVars(plainEnvVars, root)
       : {},
   };
 
-  if (config.projects.some((p) => p.id === normalized.id)) {
-    throw new ProjectExistsError(
-      `A project with id "${normalized.id}" already exists. ` +
-        `Pick a different id, or remove the existing one first (shepaw-hub project remove ${normalized.id}).`,
+  if (config.instances.some((p) => p.id === normalized.id)) {
+    throw new InstanceExistsError(
+      `A instance with id "${normalized.id}" already exists. ` +
+        `Pick a different id, or remove the existing one first (shepaw-hub instance remove ${normalized.id}).`,
     );
   }
   if (!Number.isInteger(normalized.port) || normalized.port <= 0 || normalized.port > 65535) {
     throw new Error(
-      `Project port must be an integer in 1..65535 (got ${String(normalized.port)}).`,
+      `Instance port must be an integer in 1..65535 (got ${String(normalized.port)}).`,
     );
   }
-  const dupPort = config.projects.find((p) => p.port === normalized.port);
+  const dupPort = config.instances.find((p) => p.port === normalized.port);
   if (dupPort !== undefined) {
-    throw new ProjectExistsError(
-      `Port ${normalized.port} is already used by project "${dupPort.id}". ` +
+    throw new InstanceExistsError(
+      `Port ${normalized.port} is already used by instance "${dupPort.id}". ` +
         `Omit --port to let the hub pick the next free one, or choose a different port.`,
     );
   }
@@ -405,71 +601,76 @@ export function addProject(
         `Use a built-in engine or register a custom one (shepaw-hub engine add).`,
     );
   }
+  if (isEngineDisabled(config, normalized.engine)) {
+    throw new Error(
+      `Engine "${normalized.engine}" is disabled. Enable it in the dashboard settings before adding a instance that uses it.`,
+    );
+  }
 
-  const next = [...config.projects, normalized];
+  const next = [...config.instances, normalized];
   persist(config.path, next, hubPersistMeta(config));
-  return { ...config, projects: next };
+  return { ...config, instances: next };
 }
 
 /**
- * Remove a project by id. Throws ProjectNotFoundError if no such project —
+ * Remove a instance by id. Throws InstanceNotFoundError if no such instance —
  * the CLI layer translates this into a user-friendly message.
  */
-export function removeProject(config: HubConfig, id: string): HubConfig {
-  const filtered = config.projects.filter((p) => p.id !== id);
-  if (filtered.length === config.projects.length) {
-    throw new ProjectNotFoundError(
-      `No project with id "${id}". Run 'shepaw-hub project list' to see registered projects.`,
+export function removeInstance(config: HubConfig, id: string): HubConfig {
+  const filtered = config.instances.filter((p) => p.id !== id);
+  if (filtered.length === config.instances.length) {
+    throw new InstanceNotFoundError(
+      `No instance with id "${id}". Run 'shepaw-hub instance list' to see registered instances.`,
     );
   }
   persist(config.path, filtered, hubPersistMeta(config));
-  return { ...config, projects: filtered };
+  return { ...config, instances: filtered };
 }
 
 /**
- * Look up a project by id. Returns undefined if not found; callers that
- * treat "not found" as an error should use `getProject` which throws.
+ * Look up a instance by id. Returns undefined if not found; callers that
+ * treat "not found" as an error should use `getInstance` which throws.
  */
-export function findProject(
+export function findInstance(
   config: HubConfig,
   id: string,
-): ProjectConfig | undefined {
-  return config.projects.find((p) => p.id === id);
+): InstanceConfig | undefined {
+  return config.instances.find((p) => p.id === id);
 }
 
-export function getProject(config: HubConfig, id: string): ProjectConfig {
-  const p = findProject(config, id);
+export function getInstance(config: HubConfig, id: string): InstanceConfig {
+  const p = findInstance(config, id);
   if (p === undefined) {
-    throw new ProjectNotFoundError(
-      `No project with id "${id}". Run 'shepaw-hub project list' to see registered projects.`,
+    throw new InstanceNotFoundError(
+      `No instance with id "${id}". Run 'shepaw-hub instance list' to see registered instances.`,
     );
   }
   return p;
 }
 
 /**
- * Partial update — the CLI's `project update` uses this to change label /
- * baseUrl / extraArgs / host without having to restate the whole project.
+ * Partial update — the CLI's `instance update` uses this to change label /
+ * baseUrl / extraArgs / host without having to restate the whole instance.
  * Refuses to change id or port through this path; those go through remove +
  * add to force the operator to think about the port collision implications.
  *
  * `mergeEnvVars`: plain key→value pairs to encrypt and merge into envVars.
  * `clearEnvVars`: if true, clears all existing envVars before applying mergeEnvVars.
  */
-export function updateProject(
+export function updateInstance(
   config: HubConfig,
   id: string,
-  patch: Partial<Omit<ProjectConfig, 'id' | 'port' | 'createdAt' | 'envVars'>> & {
+  patch: Partial<Omit<InstanceConfig, 'id' | 'port' | 'createdAt' | 'envVars'>> & {
     mergeEnvVars?: Record<string, string>;
     clearEnvVars?: boolean;
     deleteEnvVarKey?: string;
   },
 ): HubConfig {
-  const idx = config.projects.findIndex((p) => p.id === id);
+  const idx = config.instances.findIndex((p) => p.id === id);
   if (idx < 0) {
-    throw new ProjectNotFoundError(`No project with id "${id}".`);
+    throw new InstanceNotFoundError(`No instance with id "${id}".`);
   }
-  const existing = config.projects[idx]!;
+  const existing = config.instances[idx]!;
   const root = hubRoot();
 
   // Build updated envVars
@@ -487,51 +688,56 @@ export function updateProject(
   if (rest.engine !== undefined && !isKnownEngine(rest.engine, config.customEngines)) {
     throw new Error(`Unknown engine "${rest.engine}".`);
   }
-  const next: ProjectConfig = {
+  if (rest.engine !== undefined && isEngineDisabled(config, rest.engine)) {
+    throw new Error(
+      `Engine "${rest.engine}" is disabled. Enable it before switching a instance to it.`,
+    );
+  }
+  const next: InstanceConfig = {
     ...existing,
     ...rest,
     // Normalize cwd if changed so relative paths resolve consistently.
     cwd: rest.cwd !== undefined ? normalizeCwd(rest.cwd) : existing.cwd,
     envVars,
   };
-  const nextList = [...config.projects.slice(0, idx), next, ...config.projects.slice(idx + 1)];
+  const nextList = [...config.instances.slice(0, idx), next, ...config.instances.slice(idx + 1)];
   persist(config.path, nextList, hubPersistMeta(config));
-  return { ...config, projects: nextList };
+  return { ...config, instances: nextList };
 }
 
 /**
- * Set a single env var key on an existing project. The value is encrypted
- * before storage. Convenience wrapper around updateProject.
+ * Set a single env var key on an existing instance. The value is encrypted
+ * before storage. Convenience wrapper around updateInstance.
  */
-export function setProjectEnvVar(
+export function setInstanceEnvVar(
   config: HubConfig,
   id: string,
   key: string,
   value: string,
 ): HubConfig {
-  return updateProject(config, id, { mergeEnvVars: { [key]: value } });
+  return updateInstance(config, id, { mergeEnvVars: { [key]: value } });
 }
 
 /**
- * Delete a single env var key from an existing project.
+ * Delete a single env var key from an existing instance.
  */
-export function deleteProjectEnvVar(
+export function deleteInstanceEnvVar(
   config: HubConfig,
   id: string,
   key: string,
 ): HubConfig {
-  return updateProject(config, id, { deleteEnvVarKey: key });
+  return updateInstance(config, id, { deleteEnvVarKey: key });
 }
 
 // ── errors ─────────────────────────────────────────────────────────
 
-export class ProjectExistsError extends Error {
-  override readonly name = 'ProjectExistsError';
+export class InstanceExistsError extends Error {
+  override readonly name = 'InstanceExistsError';
   constructor(message: string) { super(message); }
 }
 
-export class ProjectNotFoundError extends Error {
-  override readonly name = 'ProjectNotFoundError';
+export class InstanceNotFoundError extends Error {
+  override readonly name = 'InstanceNotFoundError';
   constructor(message: string) { super(message); }
 }
 
@@ -539,16 +745,17 @@ export class ProjectNotFoundError extends Error {
 
 interface OnDiskSchema {
   version: 1;
-  projects: Array<ProjectConfig>;
+  instances: Array<InstanceConfig>;
   customEngines?: Array<CustomEngineDefinition>;
   lastTunnelServerUrl?: string;
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
   gateway?: GatewayConfig;
+  engineOverrides?: EngineOverridesMap;
 }
 
 function hubPersistMeta(
-  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway'>,
+  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway' | 'engineOverrides'>,
 ): PersistOptions {
   return {
     lastTunnelServerUrl: config.lastTunnelServerUrl,
@@ -556,6 +763,7 @@ function hubPersistMeta(
     credentialHints: config.credentialHints,
     customEngines: config.customEngines,
     gateway: config.gateway,
+    engineOverrides: config.engineOverrides,
   };
 }
 
@@ -589,25 +797,34 @@ function loadExisting(path: string): HubConfig {
       `Hub config at ${path}: unsupported 'version' ${String(obj.version)} (expected 1).`,
     );
   }
-  if (!Array.isArray(obj.projects)) {
-    throw new Error(`Hub config at ${path}: 'projects' must be an array.`);
+  // Backward compat: hub.json pre-rename stored the array under `projects`.
+  // Accept either; the new `instances` key wins. The next persist rewrites it
+  // under `instances`, so this legacy read is a one-time migration.
+  const instancesRaw = Array.isArray(obj.instances)
+    ? obj.instances
+    : Array.isArray(obj.projects)
+      ? obj.projects
+      : undefined;
+  if (instancesRaw === undefined) {
+    throw new Error(`Hub config at ${path}: 'instances' must be an array.`);
   }
 
   const customEngines = parseCustomEngines(obj.customEngines);
+  const engineOverrides = parseEngineOverrides(obj.engineOverrides);
 
-  const projects: ProjectConfig[] = [];
-  for (let i = 0; i < obj.projects.length; i++) {
-    const raw = obj.projects[i];
+  const instances: InstanceConfig[] = [];
+  for (let i = 0; i < instancesRaw.length; i++) {
+    const raw = instancesRaw[i];
     if (raw === null || typeof raw !== 'object') {
       throw new Error(`Hub config at ${path}: entry #${i} must be a JSON object.`);
     }
     const p = raw as Record<string, unknown>;
-    const entry: ProjectConfig = {
-      id: requireString(p.id, `projects[${i}].id`, path),
+    const entry: InstanceConfig = {
+      id: requireString(p.id, `instances[${i}].id`, path),
       label: typeof p.label === 'string' ? p.label : '',
-      engine: requireProjectEngine(p.engine, customEngines, `projects[${i}].engine`, path),
-      cwd: requireString(p.cwd, `projects[${i}].cwd`, path),
-      port: requireNumber(p.port, `projects[${i}].port`, path),
+      engine: requireInstanceEngine(p.engine, customEngines, `instances[${i}].engine`, path),
+      cwd: requireString(p.cwd, `instances[${i}].cwd`, path),
+      port: requireNumber(p.port, `instances[${i}].port`, path),
       host: typeof p.host === 'string' ? p.host : '127.0.0.1',
       baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',
       extraArgs: Array.isArray(p.extraArgs)
@@ -616,21 +833,22 @@ function loadExisting(path: string): HubConfig {
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : '',
       tunnel: parseTunnelConfig(p.tunnel),
       approval: parseApprovalPolicy(p.approval),
-      // Backwards compat: old projects without envVars default to empty.
+      // Backwards compat: old instances without envVars default to empty.
       envVars: parseEnvVarsConfig(p.envVars),
     };
-    validateProjectId(entry.id);
-    projects.push(entry);
+    validateInstanceId(entry.id);
+    instances.push(entry);
   }
 
   return {
     path,
-    projects,
+    instances,
     customEngines,
     lastTunnelServerUrl: typeof obj.lastTunnelServerUrl === 'string' ? obj.lastTunnelServerUrl : undefined,
     lastTunnelSecretHint: parseCredentialHint(obj.lastTunnelSecretHint),
     credentialHints: parseCredentialHints(obj.credentialHints),
     gateway: parseGatewayConfig(obj.gateway),
+    ...(engineOverrides !== undefined && { engineOverrides }),
   };
 }
 
@@ -676,23 +894,53 @@ function parseApprovalPolicy(v: unknown): ApprovalPolicyConfig | undefined {
   };
 }
 
+/**
+ * Parse the engineOverrides map from disk. Drops any entry whose id is not a
+ * non-empty string; per-entry fields are validated defensively (unknown engine
+ * ids are kept so a stale override survives a transient custom-engine removal).
+ */
+function parseEngineOverrides(v: unknown): EngineOverridesMap | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  const out: EngineOverridesMap = {};
+  for (const [id, raw] of Object.entries(obj)) {
+    if (typeof id !== 'string' || id.length === 0) continue;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const o = raw as Record<string, unknown>;
+    const entry: EngineOverrides = {
+      ...(o.disabled === true && { disabled: true }),
+      ...(typeof o.displayName === 'string' && o.displayName.length > 0 && { displayName: o.displayName }),
+      ...((o.envVars === undefined || o.envVars === null)
+        ? {}
+        : typeof o.envVars === 'object' && !Array.isArray(o.envVars)
+          ? { envVars: parseEnvVarsConfig(o.envVars) }
+          : {}),
+      ...(parseApprovalPolicy(o.approval) !== undefined && { approval: parseApprovalPolicy(o.approval) }),
+    };
+    if (Object.keys(entry).length > 0) out[id] = entry;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 interface PersistOptions {
   lastTunnelServerUrl?: string;
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
   customEngines?: ReadonlyArray<CustomEngineDefinition>;
   gateway?: GatewayConfig;
+  engineOverrides?: EngineOverridesMap;
 }
 
-function persist(path: string, projects: ReadonlyArray<ProjectConfig>, opts?: PersistOptions): void {
+function persist(path: string, instances: ReadonlyArray<InstanceConfig>, opts?: PersistOptions): void {
   const schema: OnDiskSchema = {
     version: 1,
-    projects: [...projects],
+    instances: [...instances],
     ...(opts?.customEngines !== undefined && { customEngines: [...opts.customEngines] }),
     ...(opts?.lastTunnelServerUrl !== undefined && { lastTunnelServerUrl: opts.lastTunnelServerUrl }),
     ...(opts?.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: opts.lastTunnelSecretHint }),
     ...(opts?.credentialHints !== undefined && { credentialHints: opts.credentialHints }),
     ...(opts?.gateway !== undefined && { gateway: opts.gateway }),
+    ...(opts?.engineOverrides !== undefined && { engineOverrides: opts.engineOverrides }),
   };
 
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -717,7 +965,7 @@ function requireNumber(v: unknown, field: string, file: string): number {
   return v;
 }
 
-function requireProjectEngine(
+function requireInstanceEngine(
   v: unknown,
   customEngines: ReadonlyArray<CustomEngineDefinition>,
   field: string,

@@ -2,7 +2,7 @@
  * Phase 1/2 regression coverage for the gateway-level shared channel:
  *   - `setHubGateway` round-trips tunnel + router settings through hub.json.
  *   - Pairing / catalog WS URLs are minted against the shared channel base
- *     using the `/proxy/<channelId>/p/<projectId>/acp/ws` routing form the
+ *     using the `/proxy/<channelId>/p/<instanceId>/acp/ws` routing form the
  *     tunnel router dispatches on.
  */
 
@@ -13,12 +13,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  addProject,
+  addInstance,
   loadOrCreateHubConfig,
   resolveApprovalPolicy,
   saveHubConfig,
   setHubGateway,
-  updateProject,
+  updateInstance,
   type ApprovalPolicyConfig,
 } from '../src/config.js';
 import { createHubPairing, listHubAgentCatalog } from '../src/pairing.js';
@@ -46,9 +46,9 @@ const TUNNEL = {
 
 let nextPort = 18800;
 
-function seedProject(id: string): void {
+function seedInstance(id: string): void {
   let cfg = loadOrCreateHubConfig();
-  cfg = addProject(cfg, {
+  cfg = addInstance(cfg, {
     id,
     label: `Agent ${id}`,
     engine: 'claude-code',
@@ -87,9 +87,9 @@ describe('setHubGateway', () => {
 });
 
 describe('pairing URLs with a shared gateway channel', () => {
-  it('catalog WS URLs route through /proxy/<channelId>/p/<projectId>/acp/ws', () => {
-    seedProject('alpha');
-    seedProject('beta');
+  it('catalog WS URLs route through /proxy/<channelId>/p/<instanceId>/acp/ws', () => {
+    seedInstance('alpha');
+    seedInstance('beta');
     const cfg = setHubGateway(loadOrCreateHubConfig(), { tunnel: TUNNEL });
     saveHubConfig(cfg.path, cfg);
 
@@ -97,7 +97,7 @@ describe('pairing URLs with a shared gateway channel', () => {
     expect(catalog).toHaveLength(2);
     for (const entry of catalog) {
       expect(entry.wsUrl).toContain(
-        `wss://channel.example.com/proxy/ch_abc123/p/${entry.projectId}/acp/ws`,
+        `wss://channel.example.com/proxy/ch_abc123/p/${entry.instanceId}/acp/ws`,
       );
       expect(entry.wsUrl).toContain(`agentId=${entry.agentId}`);
       expect(entry.wsUrl).toContain(`#fp=${entry.fingerprint}`);
@@ -105,22 +105,22 @@ describe('pairing URLs with a shared gateway channel', () => {
   });
 
   it('bootstrap pair URL uses the shared channel and every agent is listed', () => {
-    seedProject('alpha');
-    seedProject('beta');
+    seedInstance('alpha');
+    seedInstance('beta');
     const cfg = setHubGateway(loadOrCreateHubConfig(), { tunnel: TUNNEL });
     saveHubConfig(cfg.path, cfg);
 
     const result = createHubPairing({ label: 'test device' });
     expect(result.pairUrl).toContain('wss://channel.example.com/proxy/ch_abc123/p/');
     expect(result.pairUrl).toContain('/acp/ws');
-    expect(result.agents.map((a) => a.projectId).sort()).toEqual(['alpha', 'beta']);
+    expect(result.agents.map((a) => a.instanceId).sort()).toEqual(['alpha', 'beta']);
     // shepaw://pair deeplink carries the WS url + one-time code.
     expect(result.qrPayload).toContain('shepaw://pair');
     expect(result.qrPayload).toContain(encodeURIComponent(result.pairUrl));
   });
 
   it('falls back to loopback when no shared channel is configured', () => {
-    seedProject('solo');
+    seedInstance('solo');
     const catalog = listHubAgentCatalog(loadOrCreateHubConfig());
     expect(catalog[0]!.wsUrl).toMatch(/^ws:\/\//);
     expect(catalog[0]!.wsUrl).not.toContain('/proxy/');
@@ -150,25 +150,25 @@ describe('approval policy config', () => {
     expect(loadOrCreateHubConfig().gateway?.approval).toBeUndefined();
   });
 
-  it('resolves project override over gateway default', () => {
-    seedProject('alpha');
+  it('resolves instance override over gateway default', () => {
+    seedInstance('alpha');
     let cfg = setHubGateway(loadOrCreateHubConfig(), { approval: POLICY });
     const override: ApprovalPolicyConfig = { ...POLICY, mode: 'auto' };
-    cfg = updateProject(cfg, 'alpha', { approval: override });
+    cfg = updateInstance(cfg, 'alpha', { approval: override });
     saveHubConfig(cfg.path, cfg);
 
     const reloaded = loadOrCreateHubConfig();
-    const project = reloaded.projects.find((p) => p.id === 'alpha')!;
-    expect(resolveApprovalPolicy(reloaded, project)).toEqual(override);
+    const instance = reloaded.instances.find((p) => p.id === 'alpha')!;
+    expect(resolveApprovalPolicy(reloaded, instance)).toEqual(override);
   });
 
-  it('falls back to the gateway default when a project has no override', () => {
-    seedProject('beta');
+  it('falls back to the gateway default when a instance has no override', () => {
+    seedInstance('beta');
     const cfg = setHubGateway(loadOrCreateHubConfig(), { approval: POLICY });
     saveHubConfig(cfg.path, cfg);
 
     const reloaded = loadOrCreateHubConfig();
-    const project = reloaded.projects.find((p) => p.id === 'beta')!;
-    expect(resolveApprovalPolicy(reloaded, project)).toEqual(POLICY);
+    const instance = reloaded.instances.find((p) => p.id === 'beta')!;
+    expect(resolveApprovalPolicy(reloaded, instance)).toEqual(POLICY);
   });
 });

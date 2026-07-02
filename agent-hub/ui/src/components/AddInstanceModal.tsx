@@ -7,12 +7,12 @@ const FALLBACK_ENGINES = [
   'opencode', 'openclaw', 'cursor', 'hermes',
 ];
 
-interface AddProjectModalProps {
+interface AddInstanceModalProps {
   onClose: () => void;
   onCreated: () => void;
 }
 
-export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
+export function AddInstanceModal({ onClose, onCreated }: AddInstanceModalProps) {
   const [id, setId] = useState('');
   const [label, setLabel] = useState('');
   const [engine, setEngine] = useState<string>('codebuddy');
@@ -37,7 +37,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
   }, []);
 
   useEffect(() => {
-    api.projects.meta().then((meta) => {
+    api.instances.meta().then((meta) => {
       setHubMeta(meta);
       if (meta.lastTunnelServerUrl) {
         setTunnelServer(meta.lastTunnelServerUrl);
@@ -63,7 +63,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
 
       const resolvedBaseUrl = baseUrl || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
 
-      await api.projects.create({
+      await api.instances.create({
         id,
         label: label || id,
         engine,
@@ -85,7 +85,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
     <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Add Project</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Add Instance</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
@@ -96,10 +96,10 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
           </p>
 
           <label style={lbl}>ID <span style={req}>*</span></label>
-          <input style={inp} value={id} onChange={(e) => setId(e.target.value)} placeholder="my-project" required />
+          <input style={inp} value={id} onChange={(e) => setId(e.target.value)} placeholder="my-instance" required />
 
           <label style={lbl}>Label</label>
-          <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Project" />
+          <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Instance" />
 
           <label style={lbl}>Engine <span style={req}>*</span></label>
           <select style={inp} value={engine} onChange={(e) => setEngine(e.target.value)}>
@@ -115,7 +115,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
           </select>
 
           <label style={lbl}>Working Directory <span style={req}>*</span></label>
-          <input style={inp} value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/project" required />
+          <input style={inp} value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/instance" required />
 
           <label style={lbl}>Bind Host</label>
           <select style={inp} value={host} onChange={(e) => setHost(e.target.value)}>
@@ -131,15 +131,15 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
             style={tunnelToggle}
             onClick={() => setShowTunnel((v) => !v)}
           >
-            {showTunnel ? '▼' : '▶'} Tunnel Configuration (Shepaw Channel Service)
+            {showTunnel ? '▼' : '▶'} 高级:单独的外网 channel (per-instance tunnel)
           </button>
 
           {showTunnel && (
             <div style={tunnelBox}>
               <p style={tunnelNote}>
-                Configure a Shepaw Channel Service tunnel so the agent is reachable remotely.
-                All three fields are required together. The Base URL above will be auto-derived
-                from Server URL + Channel ID if left blank.
+                可选。通常在「设置 → 全局」配置共享 channel 即可让所有 agent 外网可达，无需在此填写。
+                仅当该 agent 需要独立的 channel（例如用不同的 channel 服务、或未启用全局路由器）时才在此配置。
+                三项须同时填写；Base URL 留空时会自动由 Server URL + Channel ID 推导。
               </p>
               <label style={lbl}>
                 Server URL
@@ -196,7 +196,7 @@ export function AddProjectModal({ onClose, onCreated }: AddProjectModalProps) {
 
           <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
             <button type="submit" style={submitBtn} disabled={loading}>
-              {loading ? 'Creating...' : 'Create Project'}
+              {loading ? 'Creating...' : 'Create Instance'}
             </button>
             <button type="button" style={cancelBtn} onClick={onClose}>Cancel</button>
           </div>

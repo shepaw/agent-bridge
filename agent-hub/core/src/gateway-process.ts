@@ -1,7 +1,7 @@
 /**
  * Supervision for the device-level tunnel router process.
  *
- * Mirrors the project spawn model in `spawn.ts`: the router runs detached,
+ * Mirrors the instance spawn model in `spawn.ts`: the router runs detached,
  * survives the hub CLI exiting, and records its pid in `gateway-state.json`.
  * There is exactly one router per host — it owns the single shared channel
  * tunnel and dispatches to every agent's loopback port.

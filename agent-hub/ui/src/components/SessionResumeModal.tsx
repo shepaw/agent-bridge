@@ -3,11 +3,11 @@ import { api } from '../api/client.js';
 import type { StoredSession } from '../api/types.js';
 
 interface SessionResumeProps {
-  projectId: string;
+  instanceId: string;
   onClose: () => void;
 }
 
-export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
+export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) {
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -19,7 +19,7 @@ export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
     setLoading(true);
     setErr(null);
     try {
-      const { sessions: list } = await api.sessions.list(projectId);
+      const { sessions: list } = await api.sessions.list(instanceId);
       setSessions(list);
       if (list.length === 1) setSelectedId(list[0]!.shepawSessionId);
     } catch (e) {
@@ -27,7 +27,7 @@ export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [instanceId]);
 
   useEffect(() => {
     void loadSessions();
@@ -50,7 +50,7 @@ export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
     setDeleting(shepawSessionId);
     setErr(null);
     try {
-      await api.sessions.remove(projectId, shepawSessionId);
+      await api.sessions.remove(instanceId, shepawSessionId);
       setSessions((prev) => prev.filter((s) => s.shepawSessionId !== shepawSessionId));
       if (selectedId === shepawSessionId) setSelectedId(null);
     } catch (e) {
@@ -64,7 +64,7 @@ export function SessionResumeModal({ projectId, onClose }: SessionResumeProps) {
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Resume Session — {projectId}</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Resume Session — {instanceId}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 

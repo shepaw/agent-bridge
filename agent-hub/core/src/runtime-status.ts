@@ -7,14 +7,14 @@
 
 import type { AgentBusyLevel, AgentRuntimeStatus } from 'shepaw-acp-sdk';
 
-import type { ProjectConfig } from './config.js';
+import type { InstanceConfig } from './config.js';
 import { isAlive, readState } from './spawn.js';
-import { projectPaths } from './paths.js';
+import { instancePaths } from './paths.js';
 
 /** How reachable / healthy the gateway is from Hub's perspective. */
 export type AgentAvailability = 'offline' | 'starting' | 'online' | 'degraded';
 
-export interface ProjectProcessStatus {
+export interface InstanceProcessStatus {
   running: boolean;
   pid: number | null;
   startedAt: string | null;
@@ -22,7 +22,7 @@ export interface ProjectProcessStatus {
   lastResult: 'graceful' | 'hard' | 'crashed' | null;
 }
 
-export interface ProjectRuntimeStatus extends ProjectProcessStatus {
+export interface InstanceRuntimeStatus extends InstanceProcessStatus {
   availability: AgentAvailability;
   busyLevel: AgentBusyLevel | null;
   activeTasks: number | null;
@@ -39,12 +39,12 @@ const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
 /** Upstream ACP init grace window before we call a live gateway "degraded". */
 const STARTING_GRACE_MS = 30_000;
 
-export interface ProbeProjectRuntimeOptions {
+export interface ProbeInstanceRuntimeOptions {
   timeoutMs?: number;
 }
 
-function readProcessStatus(projectId: string): ProjectProcessStatus {
-  const paths = projectPaths(projectId);
+function readProcessStatus(instanceId: string): InstanceProcessStatus {
+  const paths = instancePaths(instanceId);
   const state = readState(paths.statePath);
   const running = state !== undefined && state.pid > 0 && isAlive(state.pid);
   return {
@@ -87,7 +87,7 @@ function parseRuntimePayload(raw: unknown): AgentRuntimeStatus | undefined {
 }
 
 function deriveAvailability(
-  process: ProjectProcessStatus,
+  process: InstanceProcessStatus,
   runtime: AgentRuntimeStatus | undefined,
   probeError: string | null,
 ): AgentAvailability {
@@ -102,12 +102,12 @@ function deriveAvailability(
 }
 
 async function fetchGatewayStatus(
-  project: ProjectConfig,
+  instance: InstanceConfig,
   timeoutMs: number,
 ): Promise<{ runtime?: AgentRuntimeStatus; probeError: string | null }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const base = `http://${project.host}:${project.port}`;
+  const base = `http://${instance.host}:${instance.port}`;
 
   try {
     let res = await fetch(`${base}/status`, { signal: controller.signal });
@@ -139,11 +139,11 @@ async function fetchGatewayStatus(
 }
 
 /** Merge PID state with a live HTTP probe against the gateway. */
-export async function probeProjectRuntime(
-  project: ProjectConfig,
-  opts: ProbeProjectRuntimeOptions = {},
-): Promise<ProjectRuntimeStatus> {
-  const process = readProcessStatus(project.id);
+export async function probeInstanceRuntime(
+  instance: InstanceConfig,
+  opts: ProbeInstanceRuntimeOptions = {},
+): Promise<InstanceRuntimeStatus> {
+  const process = readProcessStatus(instance.id);
   const probedAt = new Date().toISOString();
 
   if (!process.running) {
@@ -163,7 +163,7 @@ export async function probeProjectRuntime(
   }
 
   const { runtime, probeError } = await fetchGatewayStatus(
-    project,
+    instance,
     opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
   );
 
@@ -183,6 +183,6 @@ export async function probeProjectRuntime(
 }
 
 /** PID-only status (no HTTP probe) — useful for fast CLI paths. */
-export function readProjectProcessStatus(projectId: string): ProjectProcessStatus {
-  return readProcessStatus(projectId);
+export function readInstanceProcessStatus(instanceId: string): InstanceProcessStatus {
+  return readProcessStatus(instanceId);
 }

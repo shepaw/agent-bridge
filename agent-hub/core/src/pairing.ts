@@ -1,12 +1,12 @@
 /**
  * Hub-level device pairing — one QR scan authorizes a Shepaw app on every
- * managed agent (project) on this host.
+ * managed agent (instance) on this host.
  *
  * Flow (matches shepaw://pair in the Shepaw app):
  *   1. Operator mints a hub enrollment token (Dashboard or `shepaw-hub pair`).
  *   2. QR encodes bootstrap agent WS URL + one-time code.
  *   3. App scans, completes Noise handshake on the bootstrap gateway.
- *   4. Gateway fan-out hook adds the device pubkey to every project's peers file
+ *   4. Gateway fan-out hook adds the device pubkey to every instance's peers file
  *      and clears the shared token from all enrollment stores.
  *   5. App can add other agents from the catalog using their WS URLs (no code).
  */
@@ -24,14 +24,14 @@ import {
   type EnrollmentToken,
 } from 'shepaw-acp-sdk';
 
-import type { HubConfig, ProjectConfig } from './config.js';
+import type { HubConfig, InstanceConfig } from './config.js';
 import { loadOrCreateHubConfig } from './config.js';
-import { hubEnrollmentsPath, projectPaths } from './paths.js';
-import { ensureProjectDir, isAlive, readState } from './spawn.js';
+import { hubEnrollmentsPath, instancePaths } from './paths.js';
+import { ensureInstanceDir, isAlive, readState } from './spawn.js';
 import { resolvePublicHost } from './network.js';
 
 export interface HubAgentCatalogEntry {
-  projectId: string;
+  instanceId: string;
   label: string;
   engine: string;
   agentId: string;
@@ -51,8 +51,8 @@ export interface HubPairingResult {
   label: string;
   expiresAt: string;
   createdAt: string;
-  /** Bootstrap project used in the QR (first online, else first registered). */
-  bootstrapProjectId: string;
+  /** Bootstrap instance used in the QR (first online, else first registered). */
+  bootstrapInstanceId: string;
   pairUrl: string;
   qrPayload: string;
   agents: HubAgentCatalogEntry[];
@@ -61,16 +61,16 @@ export interface HubPairingResult {
 export interface HubPairedDevice {
   fingerprint: string;
   label: string;
-  /** Project ids where this device is authorized. */
-  projectIds: string[];
+  /** Instance ids where this device is authorized. */
+  instanceIds: string[];
   addedAt: string | null;
 }
 
 export interface CreateHubPairingOptions {
   label?: string;
   ttlMs?: number;
-  /** Override bootstrap project for the QR WS URL. */
-  bootstrapProjectId?: string;
+  /** Override bootstrap instance for the QR WS URL. */
+  bootstrapInstanceId?: string;
   /** Override public WS base for bootstrap (tunnel URL). */
   baseUrl?: string;
 }
@@ -99,7 +99,7 @@ function gatewayChannelWsBase(cfg: HubConfig): string | undefined {
 }
 
 function buildWsPairUrl(
-  project: ProjectConfig,
+  instance: InstanceConfig,
   identity: { agentId: string; fingerprint: string; staticPublicKey: Uint8Array },
   opts: { baseUrl?: string; gatewayBase?: string } = {},
 ): string {
@@ -115,60 +115,60 @@ function buildWsPairUrl(
   }
 
   // 2. Shared gateway channel: one channel fronts every agent, routed by the
-  //    `/p/<projectId>` prefix the tunnel router dispatches on.
+  //    `/p/<instanceId>` prefix the tunnel router dispatches on.
   if (opts.gatewayBase !== undefined && opts.gatewayBase.length > 0) {
-    return `${opts.gatewayBase}/p/${encodeURIComponent(project.id)}/acp/ws?agentId=${identity.agentId}#${fragment}`;
+    return `${opts.gatewayBase}/p/${encodeURIComponent(instance.id)}/acp/ws?agentId=${identity.agentId}#${fragment}`;
   }
 
-  // 3. Legacy per-project base URL (deprecated per-agent tunnel).
-  const resolvedBase = project.baseUrl.replace(/\/$/, '');
+  // 3. Legacy per-instance base URL (deprecated per-agent tunnel).
+  const resolvedBase = instance.baseUrl.replace(/\/$/, '');
   if (resolvedBase.length > 0) {
     return `${resolvedBase}/acp/ws?agentId=${identity.agentId}#${fragment}`;
   }
 
   // 4. Loopback / LAN fallback.
-  const host = resolvePublicHost(project.host);
-  return `ws://${host}:${project.port}/acp/ws?agentId=${identity.agentId}#${fragment}`;
+  const host = resolvePublicHost(instance.host);
+  return `ws://${host}:${instance.port}/acp/ws?agentId=${identity.agentId}#${fragment}`;
 }
 
-function isProjectRunning(projectId: string): boolean {
-  const state = readState(projectPaths(projectId).statePath);
+function isInstanceRunning(instanceId: string): boolean {
+  const state = readState(instancePaths(instanceId).statePath);
   return state !== undefined && state.pid > 0 && isAlive(state.pid);
 }
 
-function pickBootstrapProject(cfg: HubConfig, preferredId?: string): ProjectConfig {
-  if (cfg.projects.length === 0) {
-    throw new Error('No projects registered. Add a project before pairing a device.');
+function pickBootstrapInstance(cfg: HubConfig, preferredId?: string): InstanceConfig {
+  if (cfg.instances.length === 0) {
+    throw new Error('No instances registered. Add a instance before pairing a device.');
   }
   if (preferredId !== undefined) {
-    const found = cfg.projects.find((p) => p.id === preferredId);
+    const found = cfg.instances.find((p) => p.id === preferredId);
     if (found === undefined) {
-      throw new Error(`Unknown bootstrap project "${preferredId}".`);
+      throw new Error(`Unknown bootstrap instance "${preferredId}".`);
     }
     return found;
   }
-  const online = cfg.projects.find((p) => isProjectRunning(p.id));
-  return online ?? cfg.projects[0]!;
+  const online = cfg.instances.find((p) => isInstanceRunning(p.id));
+  return online ?? cfg.instances[0]!;
 }
 
 /** List every managed agent with connection metadata for the Shepaw app. */
 export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): HubAgentCatalogEntry[] {
   const gatewayBase = gatewayChannelWsBase(cfg);
-  return cfg.projects.map((project) => {
-    const paths = projectPaths(project.id);
-    ensureProjectDir(project.id);
+  return cfg.instances.map((instance) => {
+    const paths = instancePaths(instance.id);
+    ensureInstanceDir(instance.id);
     const identity = loadOrCreateIdentity({ path: paths.identityPath });
     return {
-      projectId: project.id,
-      label: project.label,
-      engine: project.engine,
+      instanceId: instance.id,
+      label: instance.label,
+      engine: instance.engine,
       agentId: identity.agentId,
       fingerprint: identity.fingerprint,
       publicKey: Buffer.from(identity.staticPublicKey).toString('base64'),
-      wsUrl: buildWsPairUrl(project, identity, { gatewayBase }),
-      host: project.host,
-      port: project.port,
-      running: isProjectRunning(project.id),
+      wsUrl: buildWsPairUrl(instance, identity, { gatewayBase }),
+      host: instance.host,
+      port: instance.port,
+      running: isInstanceRunning(instance.id),
     };
   });
 }
@@ -178,33 +178,33 @@ export function hubFanoutEnvPaths(cfg: HubConfig = loadOrCreateHubConfig()): {
   peerPaths: string;
   enrollmentPaths: string;
 } {
-  const peerPaths = cfg.projects.map((p) => projectPaths(p.id).peersPath);
-  const enrollmentPaths = [hubEnrollmentsPath(), ...cfg.projects.map((p) => projectPaths(p.id).enrollmentsPath)];
+  const peerPaths = cfg.instances.map((p) => instancePaths(p.id).peersPath);
+  const enrollmentPaths = [hubEnrollmentsPath(), ...cfg.instances.map((p) => instancePaths(p.id).enrollmentsPath)];
   return {
     peerPaths: peerPaths.join('\n'),
     enrollmentPaths: enrollmentPaths.join('\n'),
   };
 }
 
-/** Mint a hub-wide enrollment token replicated to every project. */
+/** Mint a hub-wide enrollment token replicated to every instance. */
 export function createHubPairing(opts: CreateHubPairingOptions = {}): HubPairingResult {
   const cfg = loadOrCreateHubConfig();
-  const bootstrap = pickBootstrapProject(cfg, opts.bootstrapProjectId);
+  const bootstrap = pickBootstrapInstance(cfg, opts.bootstrapInstanceId);
   const ttlMs = opts.ttlMs ?? 10 * 60 * 1000;
   const label = opts.label ?? 'Shepaw device';
 
-  for (const project of cfg.projects) {
-    ensureProjectDir(project.id);
+  for (const instance of cfg.instances) {
+    ensureInstanceDir(instance.id);
   }
 
   const hubPath = hubEnrollmentsPath();
   const token = createEnrollmentToken(hubPath, { label, ttlMs });
 
-  for (const project of cfg.projects) {
-    syncEnrollmentToken(projectPaths(project.id).enrollmentsPath, token);
+  for (const instance of cfg.instances) {
+    syncEnrollmentToken(instancePaths(instance.id).enrollmentsPath, token);
   }
 
-  const bootstrapIdentity = loadOrCreateIdentity({ path: projectPaths(bootstrap.id).identityPath });
+  const bootstrapIdentity = loadOrCreateIdentity({ path: instancePaths(bootstrap.id).identityPath });
   const gatewayBase = gatewayChannelWsBase(cfg);
   const pairUrl = buildWsPairUrl(bootstrap, bootstrapIdentity, { baseUrl: opts.baseUrl, gatewayBase });
   const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
@@ -215,40 +215,40 @@ export function createHubPairing(opts: CreateHubPairingOptions = {}): HubPairing
     label: token.label,
     expiresAt: token.expiresAt,
     createdAt: token.createdAt,
-    bootstrapProjectId: bootstrap.id,
+    bootstrapInstanceId: bootstrap.id,
     pairUrl,
     qrPayload,
     agents: listHubAgentCatalog(cfg),
   };
 }
 
-/** After bootstrap handshake, authorize the device on every project. */
+/** After bootstrap handshake, authorize the device on every instance. */
 export function fanOutHubPeer(opts: FanOutPeerOptions, cfg: HubConfig = loadOrCreateHubConfig()): void {
   const { publicKeyB64, label, enrollmentCode } = opts;
 
-  for (const project of cfg.projects) {
-    const paths = projectPaths(project.id);
+  for (const instance of cfg.instances) {
+    const paths = instancePaths(instance.id);
     try {
       addPeer(paths.peersPath, publicKeyB64, label);
     } catch (err) {
       throw new Error(
-        `Failed to authorize peer on project "${project.id}": ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to authorize peer on instance "${instance.id}": ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
 
   removeEnrollmentTokenByCode(hubEnrollmentsPath(), enrollmentCode);
-  for (const project of cfg.projects) {
-    removeEnrollmentTokenByCode(projectPaths(project.id).enrollmentsPath, enrollmentCode);
+  for (const instance of cfg.instances) {
+    removeEnrollmentTokenByCode(instancePaths(instance.id).enrollmentsPath, enrollmentCode);
   }
 }
 
-/** Aggregate paired devices across all projects (by fingerprint). */
+/** Aggregate paired devices across all instances (by fingerprint). */
 export function listHubPairedDevices(cfg: HubConfig = loadOrCreateHubConfig()): HubPairedDevice[] {
   const byFp = new Map<string, HubPairedDevice>();
 
-  for (const project of cfg.projects) {
-    const paths = projectPaths(project.id);
+  for (const instance of cfg.instances) {
+    const paths = instancePaths(instance.id);
     if (!paths.peersPath) continue;
     let peers;
     try {
@@ -262,11 +262,11 @@ export function listHubPairedDevices(cfg: HubConfig = loadOrCreateHubConfig()): 
         byFp.set(peer.fingerprint, {
           fingerprint: peer.fingerprint,
           label: peer.label,
-          projectIds: [project.id],
+          instanceIds: [instance.id],
           addedAt: peer.addedAt ?? null,
         });
       } else {
-        existing.projectIds.push(project.id);
+        existing.instanceIds.push(instance.id);
         if (existing.addedAt === null && peer.addedAt !== undefined) {
           existing.addedAt = peer.addedAt;
         }
@@ -280,8 +280,8 @@ export function listHubPairedDevices(cfg: HubConfig = loadOrCreateHubConfig()): 
 /** Revoke a paired device from every managed agent. */
 export function removeHubPairedDevice(fingerprint: string, cfg: HubConfig = loadOrCreateHubConfig()): boolean {
   let removedAny = false;
-  for (const project of cfg.projects) {
-    const paths = projectPaths(project.id);
+  for (const instance of cfg.instances) {
+    const paths = instancePaths(instance.id);
     if (removePeerByFingerprint(paths.peersPath, fingerprint)) {
       removedAny = true;
     }
@@ -295,11 +295,11 @@ export function listHubEnrollments(): Array<EnrollmentToken & { display: string 
   return store.tokens.map((t) => ({ ...t, display: formatCodeForDisplay(t.code) }));
 }
 
-/** Revoke a hub enrollment token from hub + all projects. */
+/** Revoke a hub enrollment token from hub + all instances. */
 export function revokeHubEnrollment(code: string, cfg: HubConfig = loadOrCreateHubConfig()): boolean {
   let removed = removeEnrollmentTokenByCode(hubEnrollmentsPath(), code);
-  for (const project of cfg.projects) {
-    if (removeEnrollmentTokenByCode(projectPaths(project.id).enrollmentsPath, code)) {
+  for (const instance of cfg.instances) {
+    if (removeEnrollmentTokenByCode(instancePaths(instance.id).enrollmentsPath, code)) {
       removed = true;
     }
   }

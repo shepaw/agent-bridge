@@ -1,23 +1,23 @@
-import type { ProjectStatus } from '../api/types.js';
+import type { InstanceStatus } from '../api/types.js';
 
-const AVAILABILITY_LABELS: Record<ProjectStatus['availability'], string> = {
+const AVAILABILITY_LABELS: Record<InstanceStatus['availability'], string> = {
   offline: '离线',
   starting: '启动中',
   online: '在线',
   degraded: '异常',
 };
 
-const BUSY_LABELS: Record<NonNullable<ProjectStatus['busyLevel']>, string> = {
+const BUSY_LABELS: Record<NonNullable<InstanceStatus['busyLevel']>, string> = {
   idle: '空闲',
   busy: '繁忙',
   overloaded: '高负载',
 };
 
-export function availabilityLabel(status: ProjectStatus): string {
+export function availabilityLabel(status: InstanceStatus): string {
   return AVAILABILITY_LABELS[status.availability];
 }
 
-export function availabilityColor(status: ProjectStatus): string {
+export function availabilityColor(status: InstanceStatus): string {
   switch (status.availability) {
     case 'online':
       return '#a6e3a1';
@@ -30,12 +30,12 @@ export function availabilityColor(status: ProjectStatus): string {
   }
 }
 
-export function busyLabel(status: ProjectStatus): string | null {
+export function busyLabel(status: InstanceStatus): string | null {
   if (status.busyLevel === null) return null;
   return BUSY_LABELS[status.busyLevel];
 }
 
-export function busyColor(status: ProjectStatus): string {
+export function busyColor(status: InstanceStatus): string {
   switch (status.busyLevel) {
     case 'overloaded':
       return '#f38ba8';
@@ -48,7 +48,7 @@ export function busyColor(status: ProjectStatus): string {
   }
 }
 
-export function formatRuntimeSummary(status: ProjectStatus): string {
+export function formatRuntimeSummary(status: InstanceStatus): string {
   const parts = [availabilityLabel(status)];
   const busy = busyLabel(status);
   if (busy !== null) parts.push(busy);

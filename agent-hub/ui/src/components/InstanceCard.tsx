@@ -1,15 +1,15 @@
-import type { Project } from '../api/types.js';
+import type { Instance } from '../api/types.js';
 import { api } from '../api/client.js';
 import { availabilityColor, busyColor, busyLabel, formatRuntimeSummary } from '../utils/runtimeStatus.js';
 import { useState } from 'react';
 
-interface ProjectCardProps {
-  project: Project;
+interface InstanceCardProps {
+  instance: Instance;
   onSelect: (id: string) => void;
   onReload: () => void;
 }
 
-export function ProjectCard({ project: p, onSelect, onReload }: ProjectCardProps) {
+export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -18,9 +18,9 @@ export function ProjectCard({ project: p, onSelect, onReload }: ProjectCardProps
     setErr(null);
     try {
       if (p.status.running) {
-        await api.projects.stop(p.id);
+        await api.instances.stop(p.id);
       } else {
-        await api.projects.start(p.id);
+        await api.instances.start(p.id);
       }
       onReload();
     } catch (e) {
@@ -101,7 +101,7 @@ const badge: React.CSSProperties = {
   color: '#cdd6f4',
 };
 
-function dot(status: Project['status']): React.CSSProperties {
+function dot(status: Instance['status']): React.CSSProperties {
   return {
     width: 10,
     height: 10,

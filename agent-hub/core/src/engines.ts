@@ -2,7 +2,7 @@
  * Built-in and custom ACP engine definitions for Agent Hub.
  */
 
-import { validateProjectId } from './paths.js';
+import { validateInstanceId } from './paths.js';
 
 export const BUILTIN_ENGINE_IDS = [
   'codebuddy',
@@ -40,11 +40,23 @@ export interface CustomEngineDefinition {
   readonly args: readonly string[];
 }
 
+/**
+ * Instanceion of {@link EngineOverrides} that `listEngineInfos` consumes.
+ * Defined structurally so engines.ts need not import config.ts (which would
+ * create a cycle: config re-exports engine helpers).
+ */
+export interface EngineOverrideInstanceion {
+  readonly displayName?: string;
+  readonly disabled?: boolean;
+}
+
 export interface EngineInfo {
   readonly id: string;
   readonly displayName: string;
   readonly acpCommand: string;
   readonly builtin: boolean;
+  /** True when an operator has disabled this engine via overrides. */
+  readonly disabled?: boolean;
 }
 
 export class CustomEngineExistsError extends Error {
@@ -62,10 +74,10 @@ export class CustomEngineNotFoundError extends Error {
 }
 
 export class CustomEngineInUseError extends Error {
-  constructor(id: string, projectIds: readonly string[]) {
+  constructor(id: string, instanceIds: readonly string[]) {
     super(
-      `Custom engine "${id}" is used by project(s): ${projectIds.join(', ')}. ` +
-        'Remove or reassign those projects first.',
+      `Custom engine "${id}" is used by instance(s): ${instanceIds.join(', ')}. ` +
+        'Remove or reassign those instances first.',
     );
     this.name = 'CustomEngineInUseError';
   }
@@ -135,7 +147,7 @@ export function parseShellCommand(input: string): { command: string; args: strin
 }
 
 export function validateCustomEngineId(id: string): void {
-  validateProjectId(id);
+  validateInstanceId(id);
   if (isBuiltinEngine(id)) {
     throw new Error(`Engine id "${id}" is reserved for a built-in engine.`);
   }
@@ -157,20 +169,29 @@ export function isKnownEngine(
 
 export function listEngineInfos(
   customEngines: ReadonlyArray<CustomEngineDefinition>,
+  overrides?: Readonly<Record<string, EngineOverrideInstanceion>>,
 ): EngineInfo[] {
-  const builtin: EngineInfo[] = BUILTIN_ENGINE_IDS.map((id) => ({
-    id,
-    displayName: BUILTIN_ENGINE_LABELS[id],
-    acpCommand: '',
-    builtin: true,
-  }));
+  const builtin: EngineInfo[] = BUILTIN_ENGINE_IDS.map((id) => {
+    const ov = overrides?.[id];
+    return {
+      id,
+      displayName: ov?.displayName ?? BUILTIN_ENGINE_LABELS[id],
+      acpCommand: '',
+      builtin: true,
+      ...(ov?.disabled && { disabled: true }),
+    };
+  });
 
-  const custom: EngineInfo[] = customEngines.map((e) => ({
-    id: e.id,
-    displayName: e.displayName,
-    acpCommand: formatShellCommand(e.command, e.args),
-    builtin: false,
-  }));
+  const custom: EngineInfo[] = customEngines.map((e) => {
+    const ov = overrides?.[e.id];
+    return {
+      id: e.id,
+      displayName: ov?.displayName ?? e.displayName,
+      acpCommand: formatShellCommand(e.command, e.args),
+      builtin: false,
+      ...(ov?.disabled && { disabled: true }),
+    };
+  });
 
   return [...builtin, ...custom];
 }
@@ -207,6 +228,40 @@ export function removeCustomEngine(
     throw new CustomEngineNotFoundError(id);
   }
   return customEngines.filter((e) => e.id !== id);
+}
+
+/**
+ * Edit a custom engine's display name and/or ACP command in place. Builtin
+ * engines have no editable command (it is the bundled proxy CLI), so this is
+ * custom-only — callers gate builtin ids out at the API layer. Re-parses the
+ * shell command so `args` stay in sync with `command`.
+ */
+export function updateCustomEngine(
+  customEngines: ReadonlyArray<CustomEngineDefinition>,
+  id: string,
+  patch: { displayName?: string; acpCommand?: string },
+): CustomEngineDefinition[] {
+  const existing = findCustomEngine(customEngines, id);
+  if (existing === undefined) {
+    throw new CustomEngineNotFoundError(id);
+  }
+  let displayName = existing.displayName;
+  if (patch.displayName !== undefined) {
+    displayName = patch.displayName.trim();
+    if (displayName.length === 0) {
+      throw new Error('Display name must not be empty.');
+    }
+  }
+  let command = existing.command;
+  let args = existing.args;
+  if (patch.acpCommand !== undefined) {
+    const parsed = parseShellCommand(patch.acpCommand);
+    command = parsed.command;
+    args = parsed.args;
+  }
+  return customEngines.map((e) =>
+    e.id === id ? { ...e, displayName, command, args } : e,
+  );
 }
 
 export function parseCustomEngines(raw: unknown): CustomEngineDefinition[] {

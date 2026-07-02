@@ -45,16 +45,16 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
-import type { ApprovalPolicyConfig, ProjectConfig } from './config.js';
-import { loadOrCreateHubConfig, resolveApprovalPolicy } from './config.js';
+import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
+import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
-import { projectPaths, hubRoot } from './paths.js';
+import { instancePaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
 
 // ── types ──────────────────────────────────────────────────────────
 
-export interface ProjectState {
+export interface InstanceState {
   /** PID of the gateway child process, or 0 if we've marked it stopped. */
   readonly pid: number;
   /** Port the agent was told to bind to when it was started. */
@@ -93,19 +93,19 @@ function approvalPolicyEnv(
 // ── public API ─────────────────────────────────────────────────────
 
 /**
- * Start a project's gateway process. Must be called AFTER the project's
+ * Start a instance's gateway process. Must be called AFTER the instance's
  * identity / peers / enrollments files have been resolved — those live
- * alongside state.json in the same projects/<id>/ dir.
+ * alongside state.json in the same instances/<id>/ dir.
  *
- * Idempotent-ish: if state.json claims the project is running AND the pid
+ * Idempotent-ish: if state.json claims the instance is running AND the pid
  * is live, returns the existing pid without doing anything. If the pid is
  * dead, we overwrite state.json and start fresh.
  */
-export async function startProject(project: ProjectConfig): Promise<{
+export async function startInstance(instance: InstanceConfig): Promise<{
   pid: number;
   alreadyRunning: boolean;
 }> {
-  const paths = projectPaths(project.id);
+  const paths = instancePaths(instance.id);
 
   // Idempotency check. If the last-known pid is still alive, treat this as
   // a no-op success. Prevents accidental double-start.
@@ -115,10 +115,10 @@ export async function startProject(project: ProjectConfig): Promise<{
   }
 
   // Verify cwd exists; early hard-fail beats the gateway crashing on first tick.
-  if (!existsSync(project.cwd)) {
+  if (!existsSync(instance.cwd)) {
     throw new Error(
-      `Project cwd does not exist: ${project.cwd}. ` +
-        `Create the directory or run 'shepaw-hub project update ${project.id} --cwd <path>'.`,
+      `Instance cwd does not exist: ${instance.cwd}. ` +
+        `Create the directory or run 'shepaw-hub instance update ${instance.id} --cwd <path>'.`,
     );
   }
 
@@ -129,17 +129,28 @@ export async function startProject(project: ProjectConfig): Promise<{
 
   try {
     const hubCfg = loadOrCreateHubConfig();
-    const customEngine = findCustomEngine(hubCfg.customEngines, project.engine);
+
+    // Refuse to start a instance whose engine has been disabled via overrides.
+    // The operator must re-enable it (dashboard settings) first.
+    if (isEngineDisabled(hubCfg, instance.engine)) {
+      throw new Error(
+        `Engine "${instance.engine}" is disabled. ` +
+          `Re-enable it in the dashboard settings before starting instance "${instance.id}".`,
+      );
+    }
+
+    const customEngine = findCustomEngine(hubCfg.customEngines, instance.engine);
+    const engineEnv = resolveEngineEnvVars(hubCfg, instance.engine);
 
     const args = [
       cliPath,
       'serve',
-      '--engine', project.engine,
-      '--cwd', project.cwd,
-      '--port', String(project.port),
-      '--host', project.host,
+      '--engine', instance.engine,
+      '--cwd', instance.cwd,
+      '--port', String(instance.port),
+      '--host', instance.host,
       '--session-store-path', paths.sessionsPath,
-      ...project.extraArgs,
+      ...instance.extraArgs,
     ];
 
     if (customEngine !== undefined) {
@@ -158,11 +169,15 @@ export async function startProject(project: ProjectConfig): Promise<{
       stdio: ['ignore', logFd, logFd],
       env: {
         ...process.env,
-        // Per-project credentials (ANTHROPIC_API_KEY, CODEBUDDY_API_KEY, etc.).
+        // Engine-default credentials (engineOverrides[engine].envVars). These
+        // are the base layer: a instance can override individual keys via its
+        // own envVars below. Decrypted at spawn time; never on disk plaintext.
+        ...engineEnv,
+        // Per-instance credentials (ANTHROPIC_API_KEY, CODEBUDDY_API_KEY, etc.).
         // Decrypted from hub.json's envVars at spawn time; never appear in
-        // argv or hub.json in plaintext.
-        ...decryptEnvVars(project.envVars ?? {}, hubRoot()),
-        // Redirect SDK file-resolution to this project's isolated dir.
+        // argv or hub.json in plaintext. Instance values override engine defaults.
+        ...decryptEnvVars(instance.envVars ?? {}, hubRoot()),
+        // Redirect SDK file-resolution to this instance's isolated dir.
         // These three vars are the entire integration surface between hub
         // and the unmodified gateway binaries.
         SHEPAW_IDENTITY_PATH: paths.identityPath,
@@ -175,24 +190,24 @@ export async function startProject(project: ProjectConfig): Promise<{
             SHEPAW_HUB_FANOUT_ENROLLMENT_PATHS: fanout.enrollmentPaths,
           };
         })(),
-        // LEGACY per-project tunnel. The recommended model runs one shared
+        // LEGACY per-instance tunnel. The recommended model runs one shared
         // channel at the gateway level (see `HubConfig.gateway.tunnel` and the
-        // tunnel router); in that setup projects bind loopback-only and this
-        // block never fires because `project.tunnel` is unset. Retained so
-        // pre-refactor projects that still carry their own channel keep
+        // tunnel router); in that setup instances bind loopback-only and this
+        // block never fires because `instance.tunnel` is unset. Retained so
+        // pre-refactor instances that still carry their own channel keep
         // working. Credentials go through env vars (not argv) so they never
         // appear in `ps aux`.
-        ...(project.tunnel !== undefined
+        ...(instance.tunnel !== undefined
           ? {
-              PAW_ACP_TUNNEL_SERVER_URL: project.tunnel.serverUrl,
-              PAW_ACP_TUNNEL_CHANNEL_ID: project.tunnel.channelId,
-              PAW_ACP_TUNNEL_SECRET: project.tunnel.secret,
+              PAW_ACP_TUNNEL_SERVER_URL: instance.tunnel.serverUrl,
+              PAW_ACP_TUNNEL_CHANNEL_ID: instance.tunnel.channelId,
+              PAW_ACP_TUNNEL_SECRET: instance.tunnel.secret,
             }
           : {}),
         // Tool-call approval policy (request #4): resolve the effective policy
-        // (project override → gateway default) and hand it to the ACP proxy as
+        // (instance override → gateway default) and hand it to the ACP proxy as
         // PAW_ACP_APPROVAL_* env so it can auto-skip/deny without a round trip.
-        ...approvalPolicyEnv(resolveApprovalPolicy(hubCfg, project)),
+        ...approvalPolicyEnv(resolveApprovalPolicy(hubCfg, instance)),
       },
     });
 
@@ -214,7 +229,7 @@ export async function startProject(project: ProjectConfig): Promise<{
 
     writeState(paths.statePath, {
       pid: child.pid!,
-      port: project.port,
+      port: instance.port,
       startedAt: new Date().toISOString(),
     });
     return { pid: child.pid!, alreadyRunning: false };
@@ -226,7 +241,7 @@ export async function startProject(project: ProjectConfig): Promise<{
 }
 
 /**
- * Stop a project's gateway. Returns 'graceful' / 'hard' / 'not-running' so
+ * Stop a instance's gateway. Returns 'graceful' / 'hard' / 'not-running' so
  * the CLI can surface what actually happened.
  *
  * - 'graceful' — SIGTERM was accepted and the process exited in < 5s (Unix).
@@ -234,8 +249,8 @@ export async function startProject(project: ProjectConfig): Promise<{
  * - 'not-running' — state.json said it was running but the pid was gone.
  *                   The CLI treats this as a recoverable "already stopped".
  */
-export async function stopProject(project: ProjectConfig): Promise<StopResult> {
-  const paths = projectPaths(project.id);
+export async function stopInstance(instance: InstanceConfig): Promise<StopResult> {
+  const paths = instancePaths(instance.id);
   const prior = readState(paths.statePath);
   if (prior === undefined || prior.pid === 0 || !isAlive(prior.pid)) {
     // Nothing to do, but normalize state.json so later `status` calls are
@@ -315,7 +330,7 @@ export async function stopProject(project: ProjectConfig): Promise<StopResult> {
  * files throw — manual intervention required (unlikely; we always write
  * atomically).
  */
-export function readState(path: string): ProjectState | undefined {
+export function readState(path: string): InstanceState | undefined {
   if (!existsSync(path)) return undefined;
   const raw = readFileSync(path, 'utf-8');
   let parsed: unknown;
@@ -324,7 +339,7 @@ export function readState(path: string): ProjectState | undefined {
   } catch (err) {
     throw new Error(
       `State file at ${path} is not valid JSON: ${formatErr(err)}. ` +
-        `Delete it manually and restart the project.`,
+        `Delete it manually and restart the instance.`,
     );
   }
   if (parsed === null || typeof parsed !== 'object') return undefined;
@@ -340,7 +355,7 @@ export function readState(path: string): ProjectState | undefined {
   };
 }
 
-export function writeState(path: string, state: ProjectState): void {
+export function writeState(path: string, state: InstanceState): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
@@ -367,17 +382,17 @@ export function isAlive(pid: number): boolean {
 }
 
 /**
- * Ensure a project's config directory + log dir exist, with 0700 perms.
- * Called by start and by the initial `project add` before writing identity.
+ * Ensure a instance's config directory + log dir exist, with 0700 perms.
+ * Called by start and by the initial `instance add` before writing identity.
  */
-export function ensureProjectDir(projectId: string): void {
-  const paths = projectPaths(projectId);
+export function ensureInstanceDir(instanceId: string): void {
+  const paths = instancePaths(instanceId);
   mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
 }
 
 /**
- * Rotate the log file for a project NOW. Used by `shepaw-hub logs rotate`
+ * Rotate the log file for a instance NOW. Used by `shepaw-hub logs rotate`
  * and can be wired into a cron job. Uses rotating-file-stream's API just
  * to get a canonical "rename agent.log to agent.log.1, etc." without
  * reimplementing it.
@@ -386,8 +401,8 @@ export function ensureProjectDir(projectId: string): void {
  * by the library. If these defaults don't suit someone's workload they can
  * edit the hub's code — not worth a config flag yet.
  */
-export async function rotateProjectLogs(projectId: string): Promise<void> {
-  const paths = projectPaths(projectId);
+export async function rotateInstanceLogs(instanceId: string): Promise<void> {
+  const paths = instancePaths(instanceId);
   if (!existsSync(paths.logFile)) return;
 
   // rotating-file-stream rotates on write; we force rotation by creating a
@@ -422,7 +437,7 @@ export async function rotateProjectLogs(projectId: string): Promise<void> {
  * package's published entry file without hard-coding relative paths.
  *
  * When this code runs from a globally installed `shepaw-hub`, the gateway
- * packages must be installed globally too, or in the same project as the
+ * packages must be installed globally too, or in the same instance as the
  * hub. Standard npm workspace behavior handles this for our monorepo use.
  */
 function resolveEngineCliPath(): string {

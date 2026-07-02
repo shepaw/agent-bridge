@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
-import type { Project } from '../api/types.js';
+import type { Instance } from '../api/types.js';
 
-export function useProjects() {
-  const [projects, setProjects] = useState<Project[]>([]);
+export function useInstances() {
+  const [instances, setInstances] = useState<Instance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      const list = await api.projects.list();
-      setProjects(list);
+      const list = await api.instances.list();
+      setInstances(list);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -26,7 +26,7 @@ export function useProjects() {
     return () => clearInterval(id);
   }, [load]);
 
-  return { projects, loading, error, reload: load };
+  return { instances, loading, error, reload: load };
 }
 
 // ── Log streaming via WebSocket ────────────────────────────────────
@@ -35,17 +35,17 @@ export interface UseLogsOptions {
   tail?: number;
 }
 
-export function useLogs(projectId: string | null, opts: UseLogsOptions = {}) {
+export function useLogs(instanceId: string | null, opts: UseLogsOptions = {}) {
   const [lines, setLines] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!instanceId) return;
 
     const tail = opts.tail ?? 100;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${protocol}://${window.location.host}/ws/logs/${projectId}?tail=${tail}`;
+    const wsUrl = `${protocol}://${window.location.host}/ws/logs/${instanceId}?tail=${tail}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -74,7 +74,7 @@ export function useLogs(projectId: string | null, opts: UseLogsOptions = {}) {
       wsRef.current = null;
       setConnected(false);
     };
-  }, [projectId, opts.tail]);
+  }, [instanceId, opts.tail]);
 
   const clear = useCallback(() => setLines([]), []);
 

@@ -53,7 +53,7 @@ pairRouter.get('/enroll', (_req: Request, res: Response) => {
 
 pairRouter.post('/enroll', (req: Request, res: Response) => {
   try {
-    const { label, ttlMinutes, bootstrapProjectId, baseUrl } = req.body as Record<string, unknown>;
+    const { label, ttlMinutes, bootstrapInstanceId, baseUrl } = req.body as Record<string, unknown>;
     const ttlMs =
       typeof ttlMinutes === 'number' || typeof ttlMinutes === 'string'
         ? Math.max(1, Math.floor(Number(ttlMinutes))) * 60 * 1000
@@ -62,7 +62,7 @@ pairRouter.post('/enroll', (req: Request, res: Response) => {
     const result = createHubPairing({
       label: typeof label === 'string' ? label : undefined,
       ttlMs,
-      bootstrapProjectId: typeof bootstrapProjectId === 'string' ? bootstrapProjectId : undefined,
+      bootstrapInstanceId: typeof bootstrapInstanceId === 'string' ? bootstrapInstanceId : undefined,
       baseUrl: typeof baseUrl === 'string' ? baseUrl : undefined,
     });
 

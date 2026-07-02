@@ -15,7 +15,7 @@
  *
  * Storage format: "<iv_hex>:<authTag_hex>:<ciphertext_hex>"
  *   All three components are hexadecimal. Stored as a plain string value
- *   inside hub.json alongside other project fields.
+ *   inside hub.json alongside other instance fields.
  *
  * Security posture: "better than plaintext, suitable for single-user
  * workstations". The hub.json file is already stored 0600, so the main
@@ -26,7 +26,7 @@
  *
  * The key is derived synchronously using scrypt with intentionally low
  * parameters (N=2^14, r=8, p=1) so that CLI startup latency stays
- * imperceptible even when many projects are loaded. The threat model does
+ * imperceptible even when many instances are loaded. The threat model does
  * not require brute-force resistance — the ciphertext is only as secret as
  * the hub.json file itself.
  */
@@ -116,7 +116,7 @@ export function decryptValue(encrypted: string, hubRoot: string): string {
 
 /**
  * Encrypt a whole env-vars map. Returns a new map with the same keys but
- * encrypted values. Pass the result to ProjectConfig.envVars for storage.
+ * encrypted values. Pass the result to InstanceConfig.envVars for storage.
  */
 export function encryptEnvVars(
   vars: Record<string, string>,
@@ -130,10 +130,10 @@ export function encryptEnvVars(
 }
 
 /**
- * Decrypt a whole env-vars map stored in ProjectConfig. Returns plain
+ * Decrypt a whole env-vars map stored in InstanceConfig. Returns plain
  * key→value pairs ready for injection into a child process's env.
  * Values that cannot be decrypted are skipped with a console.error warning
- * so that a single corrupted credential does not block project start.
+ * so that a single corrupted credential does not block instance start.
  */
 export function decryptEnvVars(
   vars: Record<string, string>,
@@ -146,7 +146,7 @@ export function decryptEnvVars(
     } catch {
       console.error(
         `[shepaw-hub] Warning: could not decrypt env var "${k}" — skipping. ` +
-        `Re-save the credential via 'project update --env ${k}=<value>'.`,
+        `Re-save the credential via 'instance update --env ${k}=<value>'.`,
       );
     }
   }

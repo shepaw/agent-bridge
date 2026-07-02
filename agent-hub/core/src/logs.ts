@@ -28,7 +28,7 @@ import {
 import { once as eventOnce } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { projectPaths } from './paths.js';
+import { instancePaths } from './paths.js';
 
 export interface TailOptions {
   /** Number of trailing lines to print. Default 50. */
@@ -42,18 +42,18 @@ export interface TailOptions {
 }
 
 /**
- * Print the tail of a project's log to stdout (or an injected sink) and
+ * Print the tail of a instance's log to stdout (or an injected sink) and
  * optionally keep streaming new writes. Returns when:
  *   - follow=false → immediately after the initial tail prints
  *   - follow=true  → when signal fires (SIGINT from the CLI)
  */
-export async function tailLog(projectId: string, opts: TailOptions = {}): Promise<void> {
-  const paths = projectPaths(projectId);
+export async function tailLog(instanceId: string, opts: TailOptions = {}): Promise<void> {
+  const paths = instancePaths(instanceId);
   const tail = Math.max(0, Math.floor(opts.tail ?? 50));
   const write = opts.write ?? ((s) => process.stdout.write(s));
 
   if (!existsSync(paths.logFile)) {
-    write(`(no log file yet at ${paths.logFile} — start the project to generate one)\n`);
+    write(`(no log file yet at ${paths.logFile} — start the instance to generate one)\n`);
     if (!opts.follow) return;
     // In follow mode, wait for the file to appear.
     await waitForFile(paths.logFile, opts.signal);

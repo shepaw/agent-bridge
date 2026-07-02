@@ -1,6 +1,6 @@
 /**
  * Phase 1/2 coverage for the device-level tunnel router's dispatch logic:
- * frames arriving with a `/p/<projectId>` prefix must reach the matching
+ * frames arriving with a `/p/<instanceId>` prefix must reach the matching
  * agent's loopback port untouched (the router never terminates Noise), and
  * unknown routing keys must be rejected.
  */
@@ -11,10 +11,10 @@ import type { AddressInfo } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { HubConfig, ProjectConfig } from '../src/config.js';
+import type { HubConfig, InstanceConfig } from '../src/config.js';
 import { GatewayTunnelRouter } from '../src/tunnel-router.js';
 
-/** Minimal echo WS server standing in for a project's ACPAgentServer. */
+/** Minimal echo WS server standing in for a instance's ACPAgentServer. */
 function mockAgent(reply: (path: string) => string): Promise<{ port: number; close: () => void }> {
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   wss.on('connection', (ws, req) => {
@@ -26,7 +26,7 @@ function mockAgent(reply: (path: string) => string): Promise<{ port: number; clo
   }));
 }
 
-function project(id: string, port: number): ProjectConfig {
+function instance(id: string, port: number): InstanceConfig {
   return {
     id,
     label: id,
@@ -38,7 +38,7 @@ function project(id: string, port: number): ProjectConfig {
     extraArgs: [],
     createdAt: new Date().toISOString(),
     envVars: {},
-  } as ProjectConfig;
+  } as InstanceConfig;
 }
 
 async function freePort(): Promise<number> {
@@ -86,7 +86,7 @@ beforeEach(async () => {
 
   const cfg: HubConfig = {
     path: '/tmp/hub.json',
-    projects: [project('alpha', agentA.port), project('beta', agentB.port)],
+    instances: [instance('alpha', agentA.port), instance('beta', agentB.port)],
     customEngines: [],
   };
 
@@ -105,13 +105,13 @@ afterEach(async () => {
 });
 
 describe('GatewayTunnelRouter dispatch', () => {
-  it('routes /p/<projectId>/acp/ws to the matching agent port', async () => {
+  it('routes /p/<instanceId>/acp/ws to the matching agent port', async () => {
     const base = `ws://127.0.0.1:${routerPort}`;
     expect(await roundtrip(`${base}/p/alpha/acp/ws?agentId=x`)).toBe('A');
     expect(await roundtrip(`${base}/p/beta/acp/ws`)).toBe('B');
   });
 
-  it('rejects an unknown project routing key', async () => {
+  it('rejects an unknown instance routing key', async () => {
     const base = `ws://127.0.0.1:${routerPort}`;
     await expect(roundtrip(`${base}/p/ghost/acp/ws`)).rejects.toThrow();
   });

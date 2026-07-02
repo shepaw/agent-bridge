@@ -7,11 +7,11 @@
  * Channel Service) and a local dispatch server. Incoming public WebSocket
  * connections arrive at a routing path:
  *
- *   wss://<server>/proxy/<channelId>/p/<projectId>/acp/ws?agentId=...#fp&pk
+ *   wss://<server>/proxy/<channelId>/p/<instanceId>/acp/ws?agentId=...#fp&pk
  *
  * The TunnelClient strips the `/proxy/<channelId>` (or `/c/<alias>`) prefix
- * and forwards to `ws://127.0.0.1:<routerPort>/p/<projectId>/acp/ws?...`.
- * This router then peels the `/p/<projectId>` (or `/a/<agentId>`) segment,
+ * and forwards to `ws://127.0.0.1:<routerPort>/p/<instanceId>/acp/ws?...`.
+ * This router then peels the `/p/<instanceId>` (or `/a/<agentId>`) segment,
  * looks up the matching agent's loopback port, and proxies the *still
  * Noise-encrypted* frames straight through. The router never terminates the
  * Noise session — end-to-end encryption stays app ↔ agent, and each agent
@@ -29,8 +29,8 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { ChannelTunnelConfig, TunnelClient, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 
-import { loadOrCreateHubConfig, type HubConfig, type ProjectConfig } from './config.js';
-import { projectPaths } from './paths.js';
+import { loadOrCreateHubConfig, type HubConfig, type InstanceConfig } from './config.js';
+import { instancePaths } from './paths.js';
 
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '']);
 
@@ -48,14 +48,14 @@ export interface GatewayRouterOptions {
 }
 
 interface RouteTarget {
-  projectId: string;
+  instanceId: string;
   host: string;
   port: number;
 }
 
 interface ParsedRoute {
   /** Routing key parsed from the path prefix, if any. */
-  key: { type: 'project' | 'agent'; value: string } | null;
+  key: { type: 'instance' | 'agent'; value: string } | null;
   /** Remaining local path after stripping the routing prefix (starts with `/`). */
   localPath: string;
 }
@@ -71,7 +71,7 @@ export class GatewayTunnelRouter {
   private wsServer: WebSocketServer | undefined;
   private tunnelClient: TunnelClient | undefined;
 
-  /** Cache of agentId → projectId, rebuilt lazily. Cheap; identities are tiny. */
+  /** Cache of agentId → instanceId, rebuilt lazily. Cheap; identities are tiny. */
   private agentIdCache: Map<string, string> | undefined;
 
   constructor(opts: GatewayRouterOptions) {
@@ -156,11 +156,11 @@ export class GatewayTunnelRouter {
   private parseRoute(rawUrl: string): ParsedRoute {
     const url = new URL(rawUrl, 'http://localhost');
     const path = url.pathname;
-    const projectMatch = /^\/p\/([^/]+)(\/.*)?$/.exec(path);
-    if (projectMatch !== null) {
+    const instanceMatch = /^\/p\/([^/]+)(\/.*)?$/.exec(path);
+    if (instanceMatch !== null) {
       return {
-        key: { type: 'project', value: decodeURIComponent(projectMatch[1]!) },
-        localPath: `${projectMatch[2] ?? '/'}${url.search}`,
+        key: { type: 'instance', value: decodeURIComponent(instanceMatch[1]!) },
+        localPath: `${instanceMatch[2] ?? '/'}${url.search}`,
       };
     }
     const agentMatch = /^\/a\/([^/]+)(\/.*)?$/.exec(path);
@@ -170,11 +170,11 @@ export class GatewayTunnelRouter {
         localPath: `${agentMatch[2] ?? '/'}${url.search}`,
       };
     }
-    // No path prefix — fall back to query params (?projectId= / ?agentId=).
-    const projectId = url.searchParams.get('projectId');
+    // No path prefix — fall back to query params (?instanceId= / ?agentId=).
+    const instanceId = url.searchParams.get('instanceId');
     const agentId = url.searchParams.get('agentId');
-    if (projectId !== null && projectId.length > 0) {
-      return { key: { type: 'project', value: projectId }, localPath: `${path}${url.search}` };
+    if (instanceId !== null && instanceId.length > 0) {
+      return { key: { type: 'instance', value: instanceId }, localPath: `${path}${url.search}` };
     }
     if (agentId !== null && agentId.length > 0) {
       return { key: { type: 'agent', value: agentId }, localPath: `${path}${url.search}` };
@@ -184,12 +184,12 @@ export class GatewayTunnelRouter {
 
   private rebuildAgentIdCache(cfg: HubConfig): void {
     const cache = new Map<string, string>();
-    for (const project of cfg.projects) {
-      const idPath = projectPaths(project.id).identityPath;
+    for (const instance of cfg.instances) {
+      const idPath = instancePaths(instance.id).identityPath;
       if (!existsSync(idPath)) continue;
       try {
         const identity = loadOrCreateIdentity({ path: idPath });
-        cache.set(identity.agentId, project.id);
+        cache.set(identity.agentId, instance.id);
       } catch {
         /* skip unreadable identity */
       }
@@ -197,38 +197,38 @@ export class GatewayTunnelRouter {
     this.agentIdCache = cache;
   }
 
-  private agentIdToProjectId(cfg: HubConfig, agentId: string): string | undefined {
+  private agentIdToInstanceId(cfg: HubConfig, agentId: string): string | undefined {
     if (this.agentIdCache === undefined) this.rebuildAgentIdCache(cfg);
-    let projectId = this.agentIdCache!.get(agentId);
-    // Cache miss may mean a project was added/started since last build —
+    let instanceId = this.agentIdCache!.get(agentId);
+    // Cache miss may mean a instance was added/started since last build —
     // rebuild once and retry so newly-registered agents resolve.
-    if (projectId === undefined) {
+    if (instanceId === undefined) {
       this.rebuildAgentIdCache(cfg);
-      projectId = this.agentIdCache!.get(agentId);
+      instanceId = this.agentIdCache!.get(agentId);
     }
-    return projectId;
+    return instanceId;
   }
 
   private resolveTarget(rawUrl: string): { target: RouteTarget | undefined; localPath: string } {
     const cfg = this.loadConfig();
     const { key, localPath } = this.parseRoute(rawUrl);
 
-    let project: ProjectConfig | undefined;
+    let instance: InstanceConfig | undefined;
     if (key === null) {
-      // Single-project convenience: if exactly one project exists, use it.
-      project = cfg.projects.length === 1 ? cfg.projects[0] : undefined;
-    } else if (key.type === 'project') {
-      project = cfg.projects.find((p) => p.id === key.value);
+      // Single-instance convenience: if exactly one instance exists, use it.
+      instance = cfg.instances.length === 1 ? cfg.instances[0] : undefined;
+    } else if (key.type === 'instance') {
+      instance = cfg.instances.find((p) => p.id === key.value);
     } else {
-      const projectId = this.agentIdToProjectId(cfg, key.value);
-      project = projectId !== undefined ? cfg.projects.find((p) => p.id === projectId) : undefined;
+      const instanceId = this.agentIdToInstanceId(cfg, key.value);
+      instance = instanceId !== undefined ? cfg.instances.find((p) => p.id === instanceId) : undefined;
     }
 
-    if (project === undefined) {
+    if (instance === undefined) {
       return { target: undefined, localPath };
     }
-    const host = WILDCARD_HOSTS.has(project.host) ? '127.0.0.1' : project.host;
-    return { target: { projectId: project.id, host, port: project.port }, localPath };
+    const host = WILDCARD_HOSTS.has(instance.host) ? '127.0.0.1' : instance.host;
+    return { target: { instanceId: instance.id, host, port: instance.port }, localPath };
   }
 
   // ── HTTP forwarding ──────────────────────────────────────────────
@@ -311,7 +311,7 @@ export class GatewayTunnelRouter {
 
   private proxyWs(clientWs: WebSocket, req: IncomingMessage, target: RouteTarget, localPath: string): void {
     const localUrl = `ws://${target.host}:${target.port}${localPath}`;
-    this.log(`[Router] ws '${req.url}' → '${localUrl}' (project=${target.projectId})`);
+    this.log(`[Router] ws '${req.url}' → '${localUrl}' (instance=${target.instanceId})`);
 
     const skipWs = new Set([
       'host',
@@ -360,7 +360,7 @@ export class GatewayTunnelRouter {
     });
     upstream.on('close', (code, reason) => closeBoth(sanitizeCode(code), reason?.toString()));
     upstream.on('error', (err) => {
-      this.log(`[Router] upstream ws error (project=${target.projectId}): ${formatErr(err)}`);
+      this.log(`[Router] upstream ws error (instance=${target.instanceId}): ${formatErr(err)}`);
       closeBoth(1011, 'upstream error');
     });
 
@@ -374,7 +374,7 @@ export class GatewayTunnelRouter {
     });
     clientWs.on('close', (code, reason) => closeBoth(sanitizeCode(code), reason?.toString()));
     clientWs.on('error', (err) => {
-      this.log(`[Router] client ws error (project=${target.projectId}): ${formatErr(err)}`);
+      this.log(`[Router] client ws error (instance=${target.instanceId}): ${formatErr(err)}`);
       closeBoth(1011, 'client error');
     });
   }

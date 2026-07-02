@@ -1,39 +1,44 @@
 import { useState, useEffect } from 'react';
-import { useProjects } from './hooks/useProjects.js';
-import { ProjectCard } from './components/ProjectCard.js';
-import { ProjectDetail } from './components/ProjectDetail.js';
-import { AddProjectModal } from './components/AddProjectModal.js';
-import { CustomEnginesModal } from './components/CustomEnginesModal.js';
-import { DevicePairingModal } from './components/DevicePairingModal.js';
-import { GatewaySettingsModal } from './components/GatewaySettingsModal.js';
+import { useInstances } from './hooks/useInstances.js';
+import { InstanceCard } from './components/InstanceCard.js';
+import { InstanceDetail } from './components/InstanceDetail.js';
+import { AddInstanceModal } from './components/AddInstanceModal.js';
+import { SettingsPage } from './components/SettingsPage.js';
 
-/** Read project id from URL hash, e.g. "#project/my-project" → "my-project" */
-function getHashProjectId(): string | null {
-  const match = location.hash.match(/^#project\/(.+)$/);
+/** Read instance id from URL hash, e.g. "#instance/my-instance" → "my-instance" */
+function getHashInstanceId(): string | null {
+  const match = location.hash.match(/^#instance\/(.+)$/);
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
-export function App() {
-  const { projects, loading, error, reload } = useProjects();
-  const [selected, setSelected] = useState<string | null>(getHashProjectId);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showEngines, setShowEngines] = useState(false);
-  const [showPair, setShowPair] = useState(false);
-  const [showGateway, setShowGateway] = useState(false);
+/** True when the hash routes to the unified settings page. */
+function isSettingsRoute(): boolean {
+  return location.hash === '#settings';
+}
 
-  // Keep URL hash in sync with selected project
+export function App() {
+  const { instances, loading, error, reload } = useInstances();
+  const [selected, setSelected] = useState<string | null>(getHashInstanceId);
+  const [showSettings, setShowSettings] = useState(isSettingsRoute());
+  const [showAdd, setShowAdd] = useState(false);
+
+  // Keep URL hash in sync with the active view
   useEffect(() => {
     if (selected) {
-      location.hash = `project/${encodeURIComponent(selected)}`;
+      location.hash = `instance/${encodeURIComponent(selected)}`;
+    } else if (showSettings) {
+      location.hash = 'settings';
     } else {
-      // Remove hash without adding a history entry
       history.replaceState(null, '', location.pathname + location.search);
     }
-  }, [selected]);
+  }, [selected, showSettings]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
-    const onHashChange = () => setSelected(getHashProjectId());
+    const onHashChange = () => {
+      setSelected(getHashInstanceId());
+      setShowSettings(isSettingsRoute());
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -41,8 +46,8 @@ export function App() {
   if (selected) {
     return (
       <Layout>
-        <ProjectDetail
-          projectId={selected}
+        <InstanceDetail
+          instanceId={selected}
           onBack={() => setSelected(null)}
           onReload={reload}
         />
@@ -50,7 +55,26 @@ export function App() {
     );
   }
 
-  const running = projects.filter((p) => p.status.running).length;
+  if (showSettings) {
+    return (
+      <Layout>
+        <div style={topbar}>
+          <div>
+            <h1 style={title}>设置</h1>
+            <p style={subtitle}>全局设置 · 引擎管理 · 设备配对</p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={secondaryBtn} onClick={() => setShowSettings(false)}>
+              ← 返回实例
+            </button>
+          </div>
+        </div>
+        <SettingsPage />
+      </Layout>
+    );
+  }
+
+  const running = instances.filter((p) => p.status.running).length;
 
   return (
     <Layout>
@@ -63,41 +87,35 @@ export function App() {
               ? 'Loading...'
               : error
                 ? `Error: ${error}`
-                : `${projects.length} project${projects.length === 1 ? '' : 's'} · ${running} running`}
+                : `${instances.length} instance${instances.length === 1 ? '' : 's'} · ${running} running`}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button style={secondaryBtn} onClick={() => setShowGateway(true)}>
-            网关 / Channel
-          </button>
-          <button style={secondaryBtn} onClick={() => setShowPair(true)}>
-            设备配对
-          </button>
-          <button style={secondaryBtn} onClick={() => setShowEngines(true)}>
-            Custom Engines
+          <button style={secondaryBtn} onClick={() => setShowSettings(true)}>
+            设置
           </button>
           <button style={addBtn} onClick={() => setShowAdd(true)}>
-            + Add Project
+            + Add Instance
           </button>
         </div>
       </div>
 
-      {/* ── Project grid ───────────────────────────────────────── */}
-      {!loading && projects.length === 0 && (
+      {/* ── Instance grid ───────────────────────────────────────── */}
+      {!loading && instances.length === 0 && (
         <div style={empty}>
-          <p>No projects registered yet.</p>
+          <p>No instances registered yet.</p>
           <p style={{ color: '#a6adc8', fontSize: 14 }}>
-            Click "Add Project" or run{' '}
-            <code style={inlineCode}>shepaw-hub project add &lt;id&gt; --engine codebuddy --cwd /path</code>
+            Click "Add Instance" or run{' '}
+            <code style={inlineCode}>shepaw-hub instance add &lt;id&gt; --engine codebuddy --cwd /path</code>
           </p>
         </div>
       )}
 
       <div style={grid}>
-        {projects.map((p) => (
-          <ProjectCard
+        {instances.map((p) => (
+          <InstanceCard
             key={p.id}
-            project={p}
+            instance={p}
             onSelect={setSelected}
             onReload={reload}
           />
@@ -105,22 +123,10 @@ export function App() {
       </div>
 
       {showAdd && (
-        <AddProjectModal
+        <AddInstanceModal
           onClose={() => setShowAdd(false)}
           onCreated={reload}
         />
-      )}
-
-      {showEngines && (
-        <CustomEnginesModal onClose={() => setShowEngines(false)} />
-      )}
-
-      {showPair && (
-        <DevicePairingModal onClose={() => setShowPair(false)} />
-      )}
-
-      {showGateway && (
-        <GatewaySettingsModal onClose={() => setShowGateway(false)} />
       )}
     </Layout>
   );

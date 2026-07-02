@@ -1,7 +1,7 @@
 /**
  * WebSocket log streaming.
  *
- * Clients connect to: ws://<host>:<port>/ws/logs/<projectId>[?tail=N]
+ * Clients connect to: ws://<host>:<port>/ws/logs/<instanceId>[?tail=N]
  *
  * The server immediately streams the last N lines (default 50), then keeps
  * the connection alive and pushes new log bytes as they appear (follow mode).
@@ -9,7 +9,7 @@
  *
  * Message protocol (server → client):
  *   { type: 'data',  text: string }  — log chunk
- *   { type: 'error', text: string }  — error message (project not found, etc.)
+ *   { type: 'error', text: string }  — error message (instance not found, etc.)
  *   { type: 'end' }                  — server closed the stream
  *
  * Message protocol (client → server):
@@ -18,30 +18,30 @@
 
 import { IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { loadOrCreateHubConfig, getProject, tailLog, ProjectNotFoundError } from '@shepaw/agent-hub-core';
+import { loadOrCreateHubConfig, getInstance, tailLog, InstanceNotFoundError } from '@shepaw/agent-hub-core';
 
 export function attachLogsWss(wss: WebSocketServer): void {
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    // URL format: /ws/logs/<projectId>?tail=N
+    // URL format: /ws/logs/<instanceId>?tail=N
     const url = new URL(req.url ?? '/', 'http://localhost');
     const segments = url.pathname.split('/').filter(Boolean);
     // segments: ['ws', 'logs', '<id>']
-    const projectId = segments[2];
+    const instanceId = segments[2];
 
-    if (!projectId) {
-      sendMsg(ws, { type: 'error', text: 'Missing project ID in URL path' });
+    if (!instanceId) {
+      sendMsg(ws, { type: 'error', text: 'Missing instance ID in URL path' });
       ws.close();
       return;
     }
 
     const tailN = Number(url.searchParams.get('tail') ?? '50');
 
-    // Validate project exists
+    // Validate instance exists
     try {
       const cfg = loadOrCreateHubConfig();
-      getProject(cfg, projectId);
+      getInstance(cfg, instanceId);
     } catch (err) {
-      const msg = err instanceof ProjectNotFoundError ? err.message : String(err);
+      const msg = err instanceof InstanceNotFoundError ? err.message : String(err);
       sendMsg(ws, { type: 'error', text: msg });
       ws.close();
       return;
@@ -58,7 +58,7 @@ export function attachLogsWss(wss: WebSocketServer): void {
     ws.on('error', () => ac.abort());
 
     // Start tailing in the background
-    tailLog(projectId, {
+    tailLog(instanceId, {
       tail: Number.isFinite(tailN) ? tailN : 50,
       follow: true,
       signal: ac.signal,

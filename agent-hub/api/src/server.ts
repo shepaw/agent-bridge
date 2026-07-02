@@ -2,7 +2,7 @@
  * Express server for the Shepaw Agent Hub dashboard.
  *
  * - REST API at /api/*
- * - WebSocket log streaming at /ws/logs/<projectId>
+ * - WebSocket log streaming at /ws/logs/<instanceId>
  * - Static SPA served from ui/dist at everything else
  *
  * The server is intentionally simple: no auth by default (it's meant to run
@@ -20,7 +20,7 @@ import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
 
-import { projectsRouter } from './routes/projects.js';
+import { instancesRouter } from './routes/instances.js';
 import { enginesRouter } from './routes/engines.js';
 import { pairRouter } from './routes/pair.js';
 import { gatewayRouter } from './routes/gateway.js';
@@ -44,7 +44,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   app.use(express.json());
 
   // ── API routes ───────────────────────────────────────────────────
-  app.use('/api/projects', projectsRouter);
+  app.use('/api/instances', instancesRouter);
+  // Backward-compat alias: the router was renamed from "project" to "instance".
+  // Old clients/scripts hitting /api/projects get the same handler.
+  app.use('/api/projects', instancesRouter);
   app.use('/api/engines', enginesRouter);
   app.use('/api/pair', pairRouter);
   app.use('/api/gateway', gatewayRouter);

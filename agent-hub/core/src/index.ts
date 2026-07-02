@@ -3,30 +3,52 @@
  *
  * The CLI is the primary surface, but the pieces are also exposed here so
  * operators who want to build their own tooling (e.g. a GUI supervisor or
- * a CI script that spins up ephemeral projects) can.
+ * a CI script that spins up ephemeral instances) can.
  */
 
 export {
-  addProject,
+  addInstance,
   addCustomEngineToHub,
+  clearEngineApproval,
   DEFAULT_ROUTER_HOST,
   DEFAULT_ROUTER_PORT,
-  deleteProjectEnvVar,
-  findProject,
-  getProject,
+  deleteEngineEnvVar,
+  deleteInstanceEnvVar,
+  engineEnvVarKeys,
+  findInstance,
+  getInstance,
+  isEngineDisabled,
+  isKnownEngineForOverrides,
   loadOrCreateHubConfig,
-  ProjectExistsError,
-  ProjectNotFoundError,
+  InstanceExistsError,
+  InstanceNotFoundError,
   removeCustomEngineFromHub,
-  removeProject,
+  removeInstance,
   resolveApprovalPolicy,
+  resolveEngineEnvVars,
   saveHubConfig,
+  setEngineEnvVar,
+  setEngineOverride,
   setHubGateway,
-  setProjectEnvVar,
+  setInstanceEnvVar,
+  updateCustomEngineInHub,
   updateHubMeta,
-  updateProject,
+  updateInstance,
 } from './config.js';
-export type { AgentEngine, ApprovalMode, ApprovalPolicyConfig, CredentialHint, GatewayConfig, HubConfig, HubCredentialCache, LoadHubOptions, ProjectConfig, TunnelConfig } from './config.js';
+export type {
+  AgentEngine,
+  ApprovalMode,
+  ApprovalPolicyConfig,
+  CredentialHint,
+  EngineOverrides,
+  EngineOverridesMap,
+  GatewayConfig,
+  HubConfig,
+  HubCredentialCache,
+  LoadHubOptions,
+  InstanceConfig,
+  TunnelConfig,
+} from './config.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
@@ -40,10 +62,10 @@ export {
   hubEnrollmentsPath,
   hubRoot,
   normalizeCwd,
-  projectPaths,
-  validateProjectId,
+  instancePaths,
+  validateInstanceId,
 } from './paths.js';
-export type { ProjectPaths } from './paths.js';
+export type { InstancePaths } from './paths.js';
 
 export { GatewayTunnelRouter } from './tunnel-router.js';
 export type { GatewayRouterOptions } from './tunnel-router.js';
@@ -60,15 +82,15 @@ export { nextFreePort, NoFreePortError, probeBindable } from './ports.js';
 export type { FindPortOptions } from './ports.js';
 
 export {
-  ensureProjectDir,
+  ensureInstanceDir,
   isAlive,
   readState,
-  rotateProjectLogs,
-  startProject,
-  stopProject,
+  rotateInstanceLogs,
+  startInstance,
+  stopInstance,
   writeState,
 } from './spawn.js';
-export type { ProjectState, StopResult } from './spawn.js';
+export type { InstanceState, StopResult } from './spawn.js';
 
 export { tailLog } from './logs.js';
 export type { TailOptions } from './logs.js';
@@ -92,17 +114,17 @@ export type {
   HubPairingResult,
 } from './pairing.js';
 export {
-  probeProjectRuntime,
-  readProjectProcessStatus,
+  probeInstanceRuntime,
+  readInstanceProcessStatus,
 } from './runtime-status.js';
 export type {
   AgentAvailability,
-  ProbeProjectRuntimeOptions,
-  ProjectProcessStatus,
-  ProjectRuntimeStatus,
+  ProbeInstanceRuntimeOptions,
+  InstanceProcessStatus,
+  InstanceRuntimeStatus,
 } from './runtime-status.js';
-export { deleteProjectSession, listProjectSessions } from './sessions.js';
-export type { ProjectSessionEntry } from './sessions.js';
+export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
+export type { InstanceSessionEntry } from './sessions.js';
 
 export {
   BUILTIN_ENGINE_IDS,
@@ -118,4 +140,4 @@ export {
   parseShellCommand,
   validateCustomEngineId,
 } from './engines.js';
-export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo } from './engines.js';
+export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo, EngineOverrideInstanceion } from './engines.js';

@@ -1,25 +1,25 @@
 /**
- * Projects REST routes.
+ * Instances REST routes.
  *
- * GET    /api/projects               — list all projects with live status
- * GET    /api/projects/meta          — hub metadata: lastTunnelServerUrl + credential hints
- * POST   /api/projects               — register a new project
- * GET    /api/projects/:id           — get one project + state
- * DELETE /api/projects/:id           — unregister (stops first if running)
- * PATCH  /api/projects/:id           — update label/host/cwd/baseUrl/extraArgs
- * POST   /api/projects/:id/start     — start the gateway process
- * POST   /api/projects/:id/stop      — stop the gateway process
- * GET    /api/projects/:id/peers     — list authorized peers
- * POST   /api/projects/:id/peers     — add a peer { pubkey, label? }
- * DELETE /api/projects/:id/peers/:fp — remove a peer by fingerprint
- * POST   /api/projects/:id/enroll    — mint a new pairing code { label?, ttlMinutes? }
- * GET    /api/projects/:id/enroll    — list outstanding pairing codes
- * DELETE /api/projects/:id/enroll/:code — revoke a pairing code
- * GET    /api/projects/:id/sessions   — list persisted Shepaw→ACP session mappings
- * DELETE /api/projects/:id/sessions/:shepawSessionId — remove a stale mapping
- * GET    /api/projects/:id/envvars   — list env var keys (values masked)
- * PUT    /api/projects/:id/envvars/:key — set a single env var (also updates credential hints cache)
- * DELETE /api/projects/:id/envvars/:key — delete a single env var
+ * GET    /api/instances               — list all instances with live status
+ * GET    /api/instances/meta          — hub metadata: lastTunnelServerUrl + credential hints
+ * POST   /api/instances               — register a new instance
+ * GET    /api/instances/:id           — get one instance + state
+ * DELETE /api/instances/:id           — unregister (stops first if running)
+ * PATCH  /api/instances/:id           — update label/host/cwd/baseUrl/extraArgs
+ * POST   /api/instances/:id/start     — start the gateway process
+ * POST   /api/instances/:id/stop      — stop the gateway process
+ * GET    /api/instances/:id/peers     — list authorized peers
+ * POST   /api/instances/:id/peers     — add a peer { pubkey, label? }
+ * DELETE /api/instances/:id/peers/:fp — remove a peer by fingerprint
+ * POST   /api/instances/:id/enroll    — mint a new pairing code { label?, ttlMinutes? }
+ * GET    /api/instances/:id/enroll    — list outstanding pairing codes
+ * DELETE /api/instances/:id/enroll/:code — revoke a pairing code
+ * GET    /api/instances/:id/sessions   — list persisted Shepaw→ACP session mappings
+ * DELETE /api/instances/:id/sessions/:shepawSessionId — remove a stale mapping
+ * GET    /api/instances/:id/envvars   — list env var keys (values masked)
+ * PUT    /api/instances/:id/envvars/:key — set a single env var (also updates credential hints cache)
+ * DELETE /api/instances/:id/envvars/:key — delete a single env var
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -34,52 +34,53 @@ import {
   revokeEnrollmentToken,
 } from 'shepaw-acp-sdk';
 import {
-  addProject,
-  deleteProjectEnvVar,
+  addInstance,
+  deleteInstanceEnvVar,
   decryptValue,
   encryptValue,
-  ensureProjectDir,
-  getProject,
+  ensureInstanceDir,
+  getInstance,
   hubRoot,
-  listProjectSessions,
-  deleteProjectSession,
+  listInstanceSessions,
+  deleteInstanceSession,
   loadOrCreateHubConfig,
   nextFreePort,
-  probeProjectRuntime,
-  projectPaths,
-  ProjectExistsError,
-  ProjectNotFoundError,
+  probeInstanceRuntime,
+  instancePaths,
+  InstanceExistsError,
+  InstanceNotFoundError,
   readState,
-  removeProject,
-  setProjectEnvVar,
-  startProject,
-  stopProject,
+  removeInstance,
+  setInstanceEnvVar,
+  startInstance,
+  stopInstance,
   updateHubMeta,
-  updateProject,
+  updateInstance,
   type AgentEngine,
   type CredentialHint,
   type HubCredentialCache,
-  type ProjectConfig,
+  type InstanceConfig,
   type TunnelConfig,
   isKnownEngine,
   isAlive,
 } from '@shepaw/agent-hub-core';
+import { parseApprovalBody } from './approval.js';
 
-export const projectsRouter = Router();
+export const instancesRouter = Router();
 
 // ── helpers ────────────────────────────────────────────────────────
 
-async function projectStatus(project: ProjectConfig) {
-  return probeProjectRuntime(project);
+async function instanceStatus(instance: InstanceConfig) {
+  return probeInstanceRuntime(instance);
 }
 
-async function enrichProject(p: ProjectConfig) {
+async function enrichInstance(p: InstanceConfig) {
   return {
     ...p,
     // Never expose encrypted envVar values — only the key names.
     envVars: undefined,
     envVarKeys: Object.keys(p.envVars ?? {}),
-    status: await projectStatus(p),
+    status: await instanceStatus(p),
   };
 }
 
@@ -150,11 +151,11 @@ function buildCredentialHints(
 
 // ── list all ───────────────────────────────────────────────────────
 
-projectsRouter.get('/', async (_req: Request, res: Response) => {
+instancesRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const projects = await Promise.all(cfg.projects.map((p) => enrichProject(p)));
-    res.json(projects);
+    const instances = await Promise.all(cfg.instances.map((p) => enrichInstance(p)));
+    res.json(instances);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -163,11 +164,11 @@ projectsRouter.get('/', async (_req: Request, res: Response) => {
 // ── hub meta (credential hints + lastTunnelServerUrl) ──────────────
 
 /**
- * GET /api/projects/meta
+ * GET /api/instances/meta
  * Returns hub-level metadata: lastTunnelServerUrl and per-engine credential
  * hints (masked values only — encrypted blobs are never sent to the client).
  */
-projectsRouter.get('/meta', (_req: Request, res: Response) => {
+instancesRouter.get('/meta', (_req: Request, res: Response) => {
   const cfg = loadOrCreateHubConfig();
   const root = hubRoot();
 
@@ -183,17 +184,17 @@ projectsRouter.get('/meta', (_req: Request, res: Response) => {
     }
   }
 
-  // Back-fill from existing projects for any engine that has no persisted hint yet.
-  // This makes hints available for projects created before the hints cache was introduced,
+  // Back-fill from existing instances for any engine that has no persisted hint yet.
+  // This makes hints available for instances created before the hints cache was introduced,
   // without requiring a migration — the first call to /meta populates the cache.
   let needsPersist = false;
   const updatedHintCache: HubCredentialCache = { ...(cfg.credentialHints ?? {}) };
-  for (const project of cfg.projects) {
-    const eng = project.engine;
+  for (const instance of cfg.instances) {
+    const eng = instance.engine;
     if (hints[eng]) continue;  // already covered by persisted hints
-    const envVars = project.envVars ?? {};
+    const envVars = instance.envVars ?? {};
     if (Object.keys(envVars).length === 0) continue;
-    // Decrypt and build masked hints for this engine from the first project found.
+    // Decrypt and build masked hints for this engine from the first instance found.
     const engineHints: Record<string, CredentialHint> = { ...(updatedHintCache[eng] ?? {}) };
     let changed = false;
     for (const [key, encrypted] of Object.entries(envVars)) {
@@ -229,7 +230,7 @@ projectsRouter.get('/meta', (_req: Request, res: Response) => {
 
 // ── create ─────────────────────────────────────────────────────────
 
-projectsRouter.post('/', async (req: Request, res: Response) => {
+instancesRouter.post('/', async (req: Request, res: Response) => {
   try {
     const { id, engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars } = req.body as Record<string, unknown>;
     if (typeof id !== 'string' || id.length === 0) {
@@ -238,7 +239,7 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
     }
     const cfg = loadOrCreateHubConfig();
     const resolvedEngine = parseEngine(engine ?? 'codebuddy');
-    const reservedPorts = cfg.projects.map((p) => p.port);
+    const reservedPorts = cfg.instances.map((p) => p.port);
     const resolvedPort = typeof port === 'number' ? port : await nextFreePort({ reserved: reservedPorts });
 
     const resolvedTunnel = parseTunnelBody(tunnel);
@@ -259,7 +260,7 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
       : {};
 
     // Merge in cached credentials for keys the user did NOT explicitly provide.
-    // Decrypt the cached encrypted values so they can be re-encrypted into the new project.
+    // Decrypt the cached encrypted values so they can be re-encrypted into the new instance.
     const root = hubRoot();
     const engineHints = cfg.credentialHints?.[resolvedEngine] ?? {};
     const mergedEnvVars: Record<string, string> = { ...explicitEnvVars };
@@ -273,7 +274,7 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
       }
     }
 
-    const project: Omit<ProjectConfig, 'envVars'> & { plainEnvVars?: Record<string, string> } = {
+    const instance: Omit<InstanceConfig, 'envVars'> & { plainEnvVars?: Record<string, string> } = {
       id,
       label: typeof label === 'string' ? label : id,
       engine: resolvedEngine,
@@ -287,10 +288,10 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
       plainEnvVars: Object.keys(mergedEnvVars).length > 0 ? mergedEnvVars : undefined,
     };
 
-    addProject(cfg, project);
-    ensureProjectDir(id);
+    addInstance(cfg, instance);
+    ensureInstanceDir(id);
     const savedCfg = loadOrCreateHubConfig();
-    const saved = savedCfg.projects.find((p) => p.id === id) ?? project as unknown as ProjectConfig;
+    const saved = savedCfg.instances.find((p) => p.id === id) ?? instance as unknown as InstanceConfig;
 
     // Update hub-level metadata: cache credential hints, lastTunnelServerUrl, tunnel secret hint.
     // Only update hints for keys the user explicitly provided (not auto-filled from cache).
@@ -312,9 +313,9 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
       updateHubMeta(savedCfg, meta);
     }
 
-    res.status(201).json(await enrichProject(saved));
+    res.status(201).json(await enrichInstance(saved));
   } catch (err) {
-    if (err instanceof ProjectExistsError) {
+    if (err instanceof InstanceExistsError) {
       res.status(409).json({ error: err.message });
     } else {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -324,13 +325,13 @@ projectsRouter.post('/', async (req: Request, res: Response) => {
 
 // ── get one ────────────────────────────────────────────────────────
 
-projectsRouter.get('/:id', async (req: Request, res: Response) => {
+instancesRouter.get('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
-    res.json(await enrichProject(p));
+    const p = getInstance(cfg, req.params.id!);
+    res.json(await enrichInstance(p));
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -340,19 +341,19 @@ projectsRouter.get('/:id', async (req: Request, res: Response) => {
 
 // ── delete ─────────────────────────────────────────────────────────
 
-projectsRouter.delete('/:id', async (req: Request, res: Response) => {
+instancesRouter.delete('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
-    const paths = projectPaths(p.id);
+    const p = getInstance(cfg, req.params.id!);
+    const paths = instancePaths(p.id);
     const state = readState(paths.statePath);
     if (state !== undefined && state.pid > 0 && isAlive(state.pid)) {
-      await stopProject(p);
+      await stopInstance(p);
     }
-    removeProject(cfg, p.id);
+    removeInstance(cfg, p.id);
     res.json({ ok: true });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -362,12 +363,12 @@ projectsRouter.delete('/:id', async (req: Request, res: Response) => {
 
 // ── patch ──────────────────────────────────────────────────────────
 
-projectsRouter.patch('/:id', async (req: Request, res: Response) => {
+instancesRouter.patch('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const existing = getProject(cfg, req.params.id!);
+    const existing = getInstance(cfg, req.params.id!);
     const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars } = req.body as Record<string, unknown>;
-    const patch: Parameters<typeof updateProject>[2] = {};
+    const patch: Parameters<typeof updateInstance>[2] = {};
     if (typeof label === 'string') patch.label = label;
     if (typeof host === 'string') patch.host = host;
     if (typeof cwd === 'string') patch.cwd = cwd;
@@ -406,8 +407,8 @@ projectsRouter.patch('/:id', async (req: Request, res: Response) => {
           .map(([k, v]) => [k, v as string]),
       );
     }
-    const next = updateProject(cfg, req.params.id!, patch);
-    const updated = next.projects.find((p) => p.id === req.params.id)!;
+    const next = updateInstance(cfg, req.params.id!, patch);
+    const updated = next.instances.find((p) => p.id === req.params.id)!;
 
     // If a new tunnel was set, update lastTunnelServerUrl and lastTunnelSecretHint in hub meta.
     if (patch.tunnel) {
@@ -422,9 +423,9 @@ projectsRouter.patch('/:id', async (req: Request, res: Response) => {
       });
     }
 
-    res.json(await enrichProject(updated));
+    res.json(await enrichInstance(updated));
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: String(err) });
@@ -432,17 +433,58 @@ projectsRouter.patch('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// ── start ──────────────────────────────────────────────────────────
+// ── per-instance approval ───────────────────────────────────────────
 
-projectsRouter.post('/:id/start', async (req: Request, res: Response) => {
+/**
+ * PUT /api/instances/:id/approval — set a per-instance tool-call approval
+ * override. Body is an ApprovalPolicyConfig. Replaces the device-wide /
+ * engine-level default for this instance only.
+ */
+instancesRouter.put('/:id/approval', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
-    ensureProjectDir(p.id);
-    const result = await startProject(p);
+    getInstance(cfg, req.params.id!); // throws 404 if missing
+    const approval = parseApprovalBody(req.body as Record<string, unknown>);
+    const next = updateInstance(cfg, req.params.id!, { approval });
+    const updated = next.instances.find((p) => p.id === req.params.id)!;
+    res.json(await enrichInstance(updated));
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+/** DELETE /api/instances/:id/approval — clear the override (inherit engine/global default). */
+instancesRouter.delete('/:id/approval', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const next = updateInstance(cfg, req.params.id!, { approval: undefined });
+    const updated = next.instances.find((p) => p.id === req.params.id)!;
+    res.json(await enrichInstance(updated));
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+// ── start ──────────────────────────────────────────────────────────
+
+instancesRouter.post('/:id/start', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    const p = getInstance(cfg, req.params.id!);
+    ensureInstanceDir(p.id);
+    const result = await startInstance(p);
     res.json({ pid: result.pid, alreadyRunning: result.alreadyRunning });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -452,14 +494,14 @@ projectsRouter.post('/:id/start', async (req: Request, res: Response) => {
 
 // ── stop ───────────────────────────────────────────────────────────
 
-projectsRouter.post('/:id/stop', async (req: Request, res: Response) => {
+instancesRouter.post('/:id/stop', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
-    const result = await stopProject(p);
+    const p = getInstance(cfg, req.params.id!);
+    const result = await stopInstance(p);
     res.json({ result });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -469,11 +511,11 @@ projectsRouter.post('/:id/stop', async (req: Request, res: Response) => {
 
 // ── envvars ────────────────────────────────────────────────────────
 
-/** GET /api/projects/:id/envvars — list keys with masked values (first/last chars visible) */
-projectsRouter.get('/:id/envvars', (req: Request, res: Response) => {
+/** GET /api/instances/:id/envvars — list keys with masked values (first/last chars visible) */
+instancesRouter.get('/:id/envvars', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
+    const p = getInstance(cfg, req.params.id!);
     const root = hubRoot();
     const result = Object.entries(p.envVars ?? {}).map(([key, encrypted]) => {
       let masked = '••••••••';
@@ -487,7 +529,7 @@ projectsRouter.get('/:id/envvars', (req: Request, res: Response) => {
     });
     res.json(result);
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -495,17 +537,17 @@ projectsRouter.get('/:id/envvars', (req: Request, res: Response) => {
   }
 });
 
-/** PUT /api/projects/:id/envvars/:key — set (or replace) a single env var */
-projectsRouter.put('/:id/envvars/:key', (req: Request, res: Response) => {
+/** PUT /api/instances/:id/envvars/:key — set (or replace) a single env var */
+instancesRouter.put('/:id/envvars/:key', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
+    const p = getInstance(cfg, req.params.id!);
     const { value } = req.body as Record<string, unknown>;
     if (typeof value !== 'string') {
       res.status(400).json({ error: '"value" must be a string' });
       return;
     }
-    setProjectEnvVar(cfg, req.params.id!, req.params.key!, value);
+    setInstanceEnvVar(cfg, req.params.id!, req.params.key!, value);
     // Update credential hints cache for this engine.
     if (value.length > 0) {
       const freshCfg = loadOrCreateHubConfig();
@@ -515,7 +557,7 @@ projectsRouter.put('/:id/envvars/:key', (req: Request, res: Response) => {
     }
     res.json({ ok: true, key: req.params.key });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: String(err) });
@@ -523,15 +565,15 @@ projectsRouter.put('/:id/envvars/:key', (req: Request, res: Response) => {
   }
 });
 
-/** DELETE /api/projects/:id/envvars/:key — remove a single env var */
-projectsRouter.delete('/:id/envvars/:key', (req: Request, res: Response) => {
+/** DELETE /api/instances/:id/envvars/:key — remove a single env var */
+instancesRouter.delete('/:id/envvars/:key', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    deleteProjectEnvVar(cfg, req.params.id!, req.params.key!);
+    getInstance(cfg, req.params.id!);
+    deleteInstanceEnvVar(cfg, req.params.id!, req.params.key!);
     res.json({ ok: true });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -541,15 +583,15 @@ projectsRouter.delete('/:id/envvars/:key', (req: Request, res: Response) => {
 
 // ── peers ──────────────────────────────────────────────────────────
 
-projectsRouter.get('/:id/peers', (req: Request, res: Response) => {
+instancesRouter.get('/:id/peers', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    const paths = projectPaths(req.params.id!);
+    getInstance(cfg, req.params.id!);
+    const paths = instancePaths(req.params.id!);
     const peers = loadOrCreatePeers({ path: paths.peersPath });
     res.json(peers.peers);
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -557,20 +599,20 @@ projectsRouter.get('/:id/peers', (req: Request, res: Response) => {
   }
 });
 
-projectsRouter.post('/:id/peers', (req: Request, res: Response) => {
+instancesRouter.post('/:id/peers', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
+    getInstance(cfg, req.params.id!);
     const { pubkey, label } = req.body as Record<string, unknown>;
     if (typeof pubkey !== 'string' || pubkey.length === 0) {
       res.status(400).json({ error: 'pubkey is required' });
       return;
     }
-    const paths = projectPaths(req.params.id!);
+    const paths = instancePaths(req.params.id!);
     const entry = addPeer(paths.peersPath, pubkey, typeof label === 'string' ? label : undefined);
     res.status(201).json(entry);
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: String(err) });
@@ -578,11 +620,11 @@ projectsRouter.post('/:id/peers', (req: Request, res: Response) => {
   }
 });
 
-projectsRouter.delete('/:id/peers/:fp', (req: Request, res: Response) => {
+instancesRouter.delete('/:id/peers/:fp', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    const paths = projectPaths(req.params.id!);
+    getInstance(cfg, req.params.id!);
+    const paths = instancePaths(req.params.id!);
     const removed = removePeerByFingerprint(paths.peersPath, req.params.fp!);
     if (removed) {
       res.json({ ok: true });
@@ -590,7 +632,7 @@ projectsRouter.delete('/:id/peers/:fp', (req: Request, res: Response) => {
       res.status(404).json({ error: `No peer with fingerprint ${req.params.fp}` });
     }
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -600,15 +642,15 @@ projectsRouter.delete('/:id/peers/:fp', (req: Request, res: Response) => {
 
 // ── enrollment ─────────────────────────────────────────────────────
 
-projectsRouter.get('/:id/enroll', (req: Request, res: Response) => {
+instancesRouter.get('/:id/enroll', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    const paths = projectPaths(req.params.id!);
+    getInstance(cfg, req.params.id!);
+    const paths = instancePaths(req.params.id!);
     const store = loadOrCreateEnrollments({ path: paths.enrollmentsPath });
     res.json(store.tokens.map((t) => ({ ...t, display: formatCodeForDisplay(t.code) })));
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -616,12 +658,12 @@ projectsRouter.get('/:id/enroll', (req: Request, res: Response) => {
   }
 });
 
-projectsRouter.post('/:id/enroll', (req: Request, res: Response) => {
+instancesRouter.post('/:id/enroll', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    const p = getProject(cfg, req.params.id!);
-    const paths = projectPaths(req.params.id!);
-    ensureProjectDir(req.params.id!);
+    const p = getInstance(cfg, req.params.id!);
+    const paths = instancePaths(req.params.id!);
+    ensureInstanceDir(req.params.id!);
 
     const { label, ttlMinutes, baseUrl } = req.body as Record<string, unknown>;
     const ttlMs = Math.max(1, Math.floor(Number(ttlMinutes ?? 10))) * 60 * 1000;
@@ -660,7 +702,7 @@ projectsRouter.post('/:id/enroll', (req: Request, res: Response) => {
       fingerprint: identity.fingerprint,
     });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: String(err) });
@@ -668,11 +710,11 @@ projectsRouter.post('/:id/enroll', (req: Request, res: Response) => {
   }
 });
 
-projectsRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
+instancesRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    const paths = projectPaths(req.params.id!);
+    getInstance(cfg, req.params.id!);
+    const paths = instancePaths(req.params.id!);
     const ok = revokeEnrollmentToken(paths.enrollmentsPath, req.params.code!);
     if (ok) {
       res.json({ ok: true });
@@ -680,7 +722,7 @@ projectsRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
       res.status(404).json({ error: `No outstanding code matching "${req.params.code}"` });
     }
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -690,14 +732,14 @@ projectsRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
 
 // ── sessions ─────────────────────────────────────────────────────
 
-projectsRouter.get('/:id/sessions', (req: Request, res: Response) => {
+instancesRouter.get('/:id/sessions', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    const sessions = listProjectSessions(req.params.id!);
+    getInstance(cfg, req.params.id!);
+    const sessions = listInstanceSessions(req.params.id!);
     res.json({ sessions });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
@@ -705,18 +747,18 @@ projectsRouter.get('/:id/sessions', (req: Request, res: Response) => {
   }
 });
 
-projectsRouter.delete('/:id/sessions/:shepawSessionId', (req: Request, res: Response) => {
+instancesRouter.delete('/:id/sessions/:shepawSessionId', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
-    getProject(cfg, req.params.id!);
-    const removed = deleteProjectSession(req.params.id!, req.params.shepawSessionId!);
+    getInstance(cfg, req.params.id!);
+    const removed = deleteInstanceSession(req.params.id!, req.params.shepawSessionId!);
     if (!removed) {
       res.status(404).json({ error: `No session mapping for "${req.params.shepawSessionId}".` });
       return;
     }
     res.json({ ok: true });
   } catch (err) {
-    if (err instanceof ProjectNotFoundError) {
+    if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });

@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { useLogs } from '../hooks/useProjects.js';
+import { useLogs } from '../hooks/useInstances.js';
 
 interface LogViewerProps {
-  projectId: string;
+  instanceId: string;
 }
 
-export function LogViewer({ projectId }: LogViewerProps) {
-  const { lines, connected, clear } = useLogs(projectId, { tail: 200 });
+export function LogViewer({ instanceId }: LogViewerProps) {
+  const { lines, connected, clear } = useLogs(instanceId, { tail: 200 });
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom

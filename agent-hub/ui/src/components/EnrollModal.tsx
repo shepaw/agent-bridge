@@ -4,12 +4,12 @@ import { api } from '../api/client.js';
 import type { EnrollToken } from '../api/types.js';
 
 interface EnrollModalProps {
-  projectId: string;
+  instanceId: string;
   onClose: () => void;
   baseUrl?: string;
 }
 
-export function EnrollModal({ projectId, onClose, baseUrl: initialBaseUrl }: EnrollModalProps) {
+export function EnrollModal({ instanceId, onClose, baseUrl: initialBaseUrl }: EnrollModalProps) {
   const [token, setToken] = useState<EnrollToken | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -20,7 +20,7 @@ export function EnrollModal({ projectId, onClose, baseUrl: initialBaseUrl }: Enr
     setLoading(true);
     setErr(null);
     try {
-      const t = await api.enroll.mint(projectId, {
+      const t = await api.enroll.mint(instanceId, {
         ttlMinutes: 10,
         label: label || undefined,
         baseUrl: tunnelUrl || undefined,
@@ -37,7 +37,7 @@ export function EnrollModal({ projectId, onClose, baseUrl: initialBaseUrl }: Enr
     <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Pair device — {projectId}</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Pair device — {instanceId}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 

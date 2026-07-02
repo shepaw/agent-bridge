@@ -3,23 +3,23 @@
  *
  * ```
  * $SHEPAW_HUB_HOME (or ~/.config/shepaw-hub/)
- * ├── hub.json                       — top-level config; list of projects
+ * ├── hub.json                       — top-level config; list of instances
  * ├── enrollments.json               — hub-wide pairing codes (device pairing)
- * └── projects/
- *     └── <project-id>/
- *         ├── identity.json           — per-project X25519 static keypair
- *         ├── authorized_peers.json   — per-project allowlist
- *         ├── enrollments.json        — per-project pairing-code store
+ * └── projects/                      — on-disk dir kept as `projects/` for compat
+ *     └── <instance-id>/
+ *         ├── identity.json           — per-instance X25519 static keypair
+ *         ├── authorized_peers.json   — per-instance allowlist
+ *         ├── enrollments.json        — per-instance pairing-code store
  *         ├── state.json              — pid / port / startedAt / exitCode
  *         ├── sessions.json           — Shepaw session_id → upstream ACP session_id
  *         └── logs/
  *             └── agent.log           — stdout+stderr from the gateway child
  * ```
  *
- * **Per-project isolation is the whole point.** Each project has its own
- * identity (X25519 keypair) so compromising one project's keys does NOT
- * grant impersonation of any other project. Each project has its own peers
- * list so revoking a device from project A leaves project B's pairing with
+ * **Per-instance isolation is the whole point.** Each instance has its own
+ * identity (X25519 keypair) so compromising one instance's keys does NOT
+ * grant impersonation of any other instance. Each instance has its own peers
+ * list so revoking a device from instance A leaves instance B's pairing with
  * that same device intact. The hub is purely a supervisor/config layer; the
  * gateway binaries it spawns are unmodified.
  *
@@ -37,7 +37,7 @@
 import { homedir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
 
-export interface ProjectPaths {
+export interface InstancePaths {
   readonly root: string;
   readonly identityPath: string;
   readonly peersPath: string;
@@ -89,29 +89,32 @@ export function gatewayLogFile(root: string = hubRoot()): string {
 }
 
 /**
- * Derive every file path for a given project. Does NOT create the directory —
+ * Derive every file path for a given instance. Does NOT create the directory —
  * callers that persist via `config.ts` / spawn logic mkdir on write.
  *
- * `projectId` is trusted to be validated (see `validateProjectId`); we don't
+ * `instanceId` is trusted to be validated (see `validateInstanceId`); we don't
  * re-validate here because this function is called from many sites and
  * double-validation just obscures the error source.
  */
-export function projectPaths(projectId: string, root: string = hubRoot()): ProjectPaths {
-  const projectRoot = join(root, 'projects', projectId);
+export function instancePaths(instanceId: string, root: string = hubRoot()): InstancePaths {
+  // On-disk directory stays `projects/` for backward compatibility with
+  // existing identity/peers/sessions data. Only the code concept was renamed
+  // to "instance"; the storage path is an implementation detail.
+  const instanceRoot = join(root, 'projects', instanceId);
   return {
-    root: projectRoot,
-    identityPath: join(projectRoot, 'identity.json'),
-    peersPath: join(projectRoot, 'authorized_peers.json'),
-    enrollmentsPath: join(projectRoot, 'enrollments.json'),
-    statePath: join(projectRoot, 'state.json'),
-    sessionsPath: join(projectRoot, 'sessions.json'),
-    logsDir: join(projectRoot, 'logs'),
-    logFile: join(projectRoot, 'logs', 'agent.log'),
+    root: instanceRoot,
+    identityPath: join(instanceRoot, 'identity.json'),
+    peersPath: join(instanceRoot, 'authorized_peers.json'),
+    enrollmentsPath: join(instanceRoot, 'enrollments.json'),
+    statePath: join(instanceRoot, 'state.json'),
+    sessionsPath: join(instanceRoot, 'sessions.json'),
+    logsDir: join(instanceRoot, 'logs'),
+    logFile: join(instanceRoot, 'logs', 'agent.log'),
   };
 }
 
 /**
- * Validate a project id supplied by the user on the CLI.
+ * Validate a instance id supplied by the user on the CLI.
  *
  * Rules (intentionally strict — these strings end up as directory names on
  * three operating systems, potentially in shell commands, and sometimes in
@@ -123,23 +126,23 @@ export function projectPaths(projectId: string, root: string = hubRoot()): Proje
  *   - cannot be a single dot or contain '..' (path traversal defense)
  *
  * On Windows, additionally reject reserved device names (CON, PRN, NUL, etc.)
- * — these would cause `mkdir projects/con` to fail mysteriously.
+ * — these would cause `mkdir instances/con` to fail mysteriously.
  */
-export function validateProjectId(id: string): void {
+export function validateInstanceId(id: string): void {
   if (typeof id !== 'string' || id.length === 0) {
-    throw new Error('Project id must be a non-empty string.');
+    throw new Error('Instance id must be a non-empty string.');
   }
   if (id.length > 64) {
-    throw new Error(`Project id too long (${id.length} > 64 chars): "${id}".`);
+    throw new Error(`Instance id too long (${id.length} > 64 chars): "${id}".`);
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) {
     throw new Error(
-      `Project id must be ASCII letters/digits/underscore/hyphen, ` +
+      `Instance id must be ASCII letters/digits/underscore/hyphen, ` +
         `starting with letter or digit (got "${id}").`,
     );
   }
   if (id.includes('..')) {
-    throw new Error(`Project id cannot contain "..": "${id}".`);
+    throw new Error(`Instance id cannot contain "..": "${id}".`);
   }
   if (process.platform === 'win32') {
     const reserved = new Set([
@@ -149,7 +152,7 @@ export function validateProjectId(id: string): void {
     ]);
     if (reserved.has(id.toUpperCase())) {
       throw new Error(
-        `"${id}" is a reserved device name on Windows and cannot be used as a project id.`,
+        `"${id}" is a reserved device name on Windows and cannot be used as a instance id.`,
       );
     }
   }
@@ -159,11 +162,11 @@ export function validateProjectId(id: string): void {
  * Defensive normalizer for user-supplied cwd values. Resolves relative paths
  * against process.cwd() and verifies the result is absolute; we do NOT
  * require the directory to exist at add time — an operator may pre-register
- * a project before cloning the repo. Existence is checked at `start` time.
+ * a instance before cloning the repo. Existence is checked at `start` time.
  */
 export function normalizeCwd(cwd: string): string {
   if (typeof cwd !== 'string' || cwd.length === 0) {
-    throw new Error('Project cwd must be a non-empty string.');
+    throw new Error('Instance cwd must be a non-empty string.');
   }
   // Expand ~ to home directory before checking if absolute
   let expanded = cwd;

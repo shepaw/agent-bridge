@@ -1,13 +1,13 @@
 /**
- * Read and manage per-project session mappings persisted by the ACP proxy gateway.
+ * Read and manage per-instance session mappings persisted by the ACP proxy gateway.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { projectPaths } from './paths.js';
+import { instancePaths } from './paths.js';
 
-export interface ProjectSessionEntry {
+export interface InstanceSessionEntry {
   /** Shepaw-side session identifier (sent by the mobile app). */
   readonly shepawSessionId: string;
   /** Upstream ACP agent session identifier. */
@@ -19,8 +19,8 @@ interface PersistedShape {
   map: Record<string, string>;
 }
 
-function sessionsFilePath(projectId: string): string {
-  return projectPaths(projectId).sessionsPath;
+function sessionsFilePath(instanceId: string): string {
+  return instancePaths(instanceId).sessionsPath;
 }
 
 function readPersistedMap(path: string): Map<string, string> {
@@ -52,17 +52,17 @@ function writePersistedMap(path: string, map: Map<string, string>): void {
   writeFileSync(path, JSON.stringify(data, null, 2), 'utf-8');
 }
 
-/** List persisted Shepaw → ACP session mappings for a hub project. */
-export function listProjectSessions(projectId: string): ProjectSessionEntry[] {
-  const map = readPersistedMap(sessionsFilePath(projectId));
+/** List persisted Shepaw → ACP session mappings for a hub instance. */
+export function listInstanceSessions(instanceId: string): InstanceSessionEntry[] {
+  const map = readPersistedMap(sessionsFilePath(instanceId));
   return [...map.entries()]
     .map(([shepawSessionId, acpSessionId]) => ({ shepawSessionId, acpSessionId }))
     .sort((a, b) => a.shepawSessionId.localeCompare(b.shepawSessionId));
 }
 
 /** Remove a stale mapping. Returns false when the entry did not exist. */
-export function deleteProjectSession(projectId: string, shepawSessionId: string): boolean {
-  const path = sessionsFilePath(projectId);
+export function deleteInstanceSession(instanceId: string, shepawSessionId: string): boolean {
+  const path = sessionsFilePath(instanceId);
   const map = readPersistedMap(path);
   if (!map.has(shepawSessionId)) return false;
   map.delete(shepawSessionId);

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
-import type { Project, Peer, EnrollToken } from '../api/types.js';
+import type { Instance, Peer, EnrollToken } from '../api/types.js';
 import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
+import { InstanceApprovalSection } from './InstanceApprovalSection.js';
 import { maskSecret } from '../utils/maskSecret.js';
 import {
   availabilityColor,
@@ -13,14 +14,14 @@ import {
   formatRuntimeSummary,
 } from '../utils/runtimeStatus.js';
 
-interface ProjectDetailProps {
-  projectId: string;
+interface InstanceDetailProps {
+  instanceId: string;
   onBack: () => void;
   onReload: () => void;
 }
 
-export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProps) {
-  const [project, setProject] = useState<Project | null>(null);
+export function InstanceDetail({ instanceId, onBack, onReload }: InstanceDetailProps) {
+  const [instance, setInstance] = useState<Instance | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   // key -> masked display value, populated from GET /envvars
   const [envMasked, setEnvMasked] = useState<Record<string, string>>({});
@@ -56,18 +57,19 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   const [editTunnelChannelId, setEditTunnelChannelId] = useState('');
   const [editTunnelSecret, setEditTunnelSecret] = useState('');
   const [editClearTunnel, setEditClearTunnel] = useState(false);
+  const [showTunnelAdvanced, setShowTunnelAdvanced] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
 
   const load = async () => {
     try {
-      const p = await api.projects.get(projectId);
-      const ps = await api.peers.list(projectId);
-      setProject(p);
+      const p = await api.instances.get(instanceId);
+      const ps = await api.peers.list(instanceId);
+      setInstance(p);
       setPeers(ps);
 
       if ((p.envVarKeys ?? []).length > 0) {
-        const envvars = await api.envvars.list(projectId).catch(() => [] as { key: string; value: string }[]);
+        const envvars = await api.envvars.list(instanceId).catch(() => [] as { key: string; value: string }[]);
         const masked: Record<string, string> = {};
         for (const { key, value } of envvars) masked[key] = value;
         setEnvMasked(masked);
@@ -81,12 +83,12 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     }
   };
 
-  useEffect(() => { void load(); }, [projectId]);
+  useEffect(() => { void load(); }, [instanceId]);
 
   useEffect(() => {
     const id = setInterval(() => { void load(); }, 3000);
     return () => clearInterval(id);
-  }, [projectId]);
+  }, [instanceId]);
 
   // QR expiry countdown
   useEffect(() => {
@@ -108,9 +110,9 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setQrLoading(true);
     setQrErr(null);
     try {
-      const t = await api.enroll.mint(projectId, {
+      const t = await api.enroll.mint(instanceId, {
         ttlMinutes: 10,
-        baseUrl: project?.baseUrl || undefined,
+        baseUrl: instance?.baseUrl || undefined,
       });
       setQrToken(t);
     } catch (e) {
@@ -126,14 +128,14 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   };
 
   const toggle = async () => {
-    if (!project) return;
+    if (!instance) return;
     setBusy(true);
     setErr(null);
     try {
-      if (project.status.running) {
-        await api.projects.stop(project.id);
+      if (instance.status.running) {
+        await api.instances.stop(instance.id);
       } else {
-        await api.projects.start(project.id);
+        await api.instances.start(instance.id);
       }
       await load();
       onReload();
@@ -150,7 +152,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setAddPeerBusy(true);
     setAddPeerErr(null);
     try {
-      await api.peers.add(projectId, addPeerPubkey.trim(), addPeerLabel.trim() || undefined);
+      await api.peers.add(instanceId, addPeerPubkey.trim(), addPeerLabel.trim() || undefined);
       setAddPeerPubkey('');
       setAddPeerLabel('');
       setShowAddPeer(false);
@@ -173,7 +175,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setEnvBusy((b) => ({ ...b, [key]: true }));
     setEnvErr(null);
     try {
-      await api.envvars.set(projectId, key, value);
+      await api.envvars.set(instanceId, key, value);
       setEnvEditing((e) => { const n = { ...e }; delete n[key]; return n; });
       await load();
     } catch (e) {
@@ -187,7 +189,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     setEnvBusy((b) => ({ ...b, [key]: true }));
     setEnvErr(null);
     try {
-      await api.envvars.remove(projectId, key);
+      await api.envvars.remove(instanceId, key);
       await load();
     } catch (e) {
       setEnvErr(e instanceof Error ? e.message : String(e));
@@ -200,7 +202,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   const TUNNEL_SECRET_UNCHANGED = '\x00unchanged';
   const ENV_UNCHANGED = '\x00unchanged';
 
-  const openEdit = (p: typeof project) => {
+  const openEdit = (p: typeof instance) => {
     if (!p) return;
     setEditLabel(p.label);
     setEditCwd(p.cwd);
@@ -212,6 +214,9 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
     // Pre-fill sentinel so existing secret is kept when left untouched.
     setEditTunnelSecret(p.tunnel ? TUNNEL_SECRET_UNCHANGED : '');
     setEditClearTunnel(false);
+    // Auto-expand the advanced tunnel section only when the instance already
+    // has a per-instance tunnel, so existing config stays visible/editable.
+    setShowTunnelAdvanced(!!p.tunnel);
     setEditErr(null);
     setShowEdit(true);
   };
@@ -226,7 +231,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
       // Server/channel pre-filled from existing tunnel — only require secret when
       // the user explicitly typed a new one, or when there was no tunnel before.
       const hasTunnelFields = editTunnelServer && editTunnelChannelId;
-      const isNewTunnel = hasTunnelFields && !project?.tunnel; // no prior tunnel
+      const isNewTunnel = hasTunnelFields && !instance?.tunnel; // no prior tunnel
       if (hasTunnelFields && isNewTunnel && !effectiveSecret) {
         setEditErr('Secret is required when adding a new tunnel.');
         setEditBusy(false);
@@ -253,7 +258,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
           tunnelPatch = { tunnel: { serverUrl: editTunnelServer, channelId: editTunnelChannelId, secret: '' } };
         }
       }
-      await api.projects.update(projectId, {
+      await api.instances.update(instanceId, {
         label: editLabel || undefined,
         cwd: editCwd || undefined,
         host: editHost || undefined,
@@ -273,17 +278,17 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
 
   const removePeer = async (fp: string) => {
     try {
-      await api.peers.remove(projectId, fp);
+      await api.peers.remove(instanceId, fp);
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const removeProject = async () => {
-    if (!confirm(`Remove project "${projectId}"?`)) return;
+  const removeInstance = async () => {
+    if (!confirm(`Remove instance "${instanceId}"?`)) return;
     try {
-      await api.projects.remove(projectId);
+      await api.instances.remove(instanceId);
       onReload();
       onBack();
     } catch (e) {
@@ -292,7 +297,7 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
   };
 
   if (loading) return <p style={{ color: '#a6adc8' }}>Loading...</p>;
-  if (!project) return <p style={{ color: '#f38ba8' }}>{err ?? 'Not found'}</p>;
+  if (!instance) return <p style={{ color: '#f38ba8' }}>{err ?? 'Not found'}</p>;
 
   return (
     <div>
@@ -302,23 +307,23 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
       {/* Header */}
       <div style={header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={dot(project.status)} />
-          <h2 style={{ margin: 0, color: '#cdd6f4' }}>{project.label}</h2>
-          {project.status.busyLevel !== null && project.status.availability === 'online' && (
-            <code style={{ ...badge, background: busyColor(project.status), color: '#1e1e2e' }}>
-              {busyLabel(project.status)}
+          <span style={dot(instance.status)} />
+          <h2 style={{ margin: 0, color: '#cdd6f4' }}>{instance.label}</h2>
+          {instance.status.busyLevel !== null && instance.status.availability === 'online' && (
+            <code style={{ ...badge, background: busyColor(instance.status), color: '#1e1e2e' }}>
+              {busyLabel(instance.status)}
             </code>
           )}
-          <code style={badge}>{project.id}</code>
-          <code style={{ ...badge, background: '#313244' }}>{project.engine}</code>
+          <code style={badge}>{instance.id}</code>
+          <code style={{ ...badge, background: '#313244' }}>{instance.engine}</code>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
-            style={actionBtn(project.status.running ? '#c0392b' : '#27ae60')}
+            style={actionBtn(instance.status.running ? '#c0392b' : '#27ae60')}
             disabled={busy}
             onClick={() => void toggle()}
           >
-            {busy ? '...' : project.status.running ? 'Stop' : 'Start'}
+            {busy ? '...' : instance.status.running ? 'Stop' : 'Start'}
           </button>
           <button style={actionBtn('#89dceb')} onClick={openQr}>
             📷 Scan to Connect
@@ -329,10 +334,10 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
           <button style={actionBtn('#94e2d5')} onClick={() => setShowResume(true)}>
             Resume Session
           </button>
-          <button style={actionBtn('#f9e2af')} onClick={() => openEdit(project)}>
+          <button style={actionBtn('#f9e2af')} onClick={() => openEdit(instance)}>
             Edit
           </button>
-          <button style={actionBtn('#e74c3c')} onClick={() => void removeProject()}>
+          <button style={actionBtn('#e74c3c')} onClick={() => void removeInstance()}>
             Remove
           </button>
         </div>
@@ -402,11 +407,11 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
           <div style={editGrid}>
             <div style={editField}>
               <label style={editLbl}>Label</label>
-              <input style={editInp} value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder={projectId} />
+              <input style={editInp} value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder={instanceId} />
             </div>
             <div style={editField}>
               <label style={editLbl}>Working Directory <span style={{ color: '#f38ba8' }}>*</span></label>
-              <input style={editInp} value={editCwd} onChange={(e) => setEditCwd(e.target.value)} placeholder="/path/to/project" required />
+              <input style={editInp} value={editCwd} onChange={(e) => setEditCwd(e.target.value)} placeholder="/path/to/instance" required />
             </div>
             <div style={editField}>
               <label style={editLbl}>Bind Host</label>
@@ -426,41 +431,59 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
           </div>
 
           <div style={editTunnelSection}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ color: '#a6adc8', fontSize: 13, fontWeight: 600 }}>Tunnel (Shepaw Channel Service)</span>
-              {project.tunnel && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f38ba8', fontSize: 12, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={editClearTunnel} onChange={(e) => setEditClearTunnel(e.target.checked)} />
-                  Remove tunnel
-                </label>
+            <button
+              type="button"
+              style={tunnelAdvancedToggle}
+              onClick={() => setShowTunnelAdvanced((v) => !v)}
+            >
+              {showTunnelAdvanced ? '▼' : '▶'} 高级:单独的外网 channel (per-instance tunnel)
+              {instance.tunnel && (
+                <span style={{ color: '#f9e2af', fontSize: 11, marginLeft: 8 }}>· 已配置</span>
               )}
-            </div>
-            {!editClearTunnel && (
-              <div style={editGrid}>
-                <div style={editField}>
-                  <label style={editLbl}>Server URL</label>
-                  <input style={editInp} value={editTunnelServer} onChange={(e) => setEditTunnelServer(e.target.value)} placeholder="https://channel.example.com" />
+            </button>
+            <p style={{ color: '#6c7086', fontSize: 12, margin: '6px 0 0' }}>
+              可选。通常在「设置 → 全局」配置共享 channel 即可，无需在此填写。仅当该 agent 需要独立 channel 时才配置。
+            </p>
+
+            {showTunnelAdvanced && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                  <span style={{ color: '#a6adc8', fontSize: 13, fontWeight: 600 }}>Tunnel (Shepaw Channel Service)</span>
+                  {instance.tunnel && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f38ba8', fontSize: 12, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={editClearTunnel} onChange={(e) => setEditClearTunnel(e.target.checked)} />
+                      Remove tunnel
+                    </label>
+                  )}
                 </div>
-                <div style={editField}>
-                  <label style={editLbl}>Channel ID</label>
-                  <input style={editInp} value={editTunnelChannelId} onChange={(e) => setEditTunnelChannelId(e.target.value)} placeholder="ch_abc123" />
-                </div>
-                <div style={editField}>
-                  <label style={editLbl}>Secret</label>
-                  <input
-                    style={editInp}
-                    type={editTunnelSecret === TUNNEL_SECRET_UNCHANGED ? 'text' : 'password'}
-                    value={editTunnelSecret === TUNNEL_SECRET_UNCHANGED
-                      ? (project?.tunnel ? maskSecret(project.tunnel.secret) : '')
-                      : editTunnelSecret}
-                    onChange={(e) => setEditTunnelSecret(e.target.value)}
-                    onFocus={() => {
-                      if (editTunnelSecret === TUNNEL_SECRET_UNCHANGED) setEditTunnelSecret('');
-                    }}
-                    placeholder="Enter new secret to change"
-                  />
-                </div>
-              </div>
+                {!editClearTunnel && (
+                  <div style={editGrid}>
+                    <div style={editField}>
+                      <label style={editLbl}>Server URL</label>
+                      <input style={editInp} value={editTunnelServer} onChange={(e) => setEditTunnelServer(e.target.value)} placeholder="https://channel.example.com" />
+                    </div>
+                    <div style={editField}>
+                      <label style={editLbl}>Channel ID</label>
+                      <input style={editInp} value={editTunnelChannelId} onChange={(e) => setEditTunnelChannelId(e.target.value)} placeholder="ch_abc123" />
+                    </div>
+                    <div style={editField}>
+                      <label style={editLbl}>Secret</label>
+                      <input
+                        style={editInp}
+                        type={editTunnelSecret === TUNNEL_SECRET_UNCHANGED ? 'text' : 'password'}
+                        value={editTunnelSecret === TUNNEL_SECRET_UNCHANGED
+                          ? (instance?.tunnel ? maskSecret(instance.tunnel.secret) : '')
+                          : editTunnelSecret}
+                        onChange={(e) => setEditTunnelSecret(e.target.value)}
+                        onFocus={() => {
+                          if (editTunnelSecret === TUNNEL_SECRET_UNCHANGED) setEditTunnelSecret('');
+                        }}
+                        placeholder="Enter new secret to change"
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -474,41 +497,41 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
 
       {/* Info grid */}
       <div style={infoGrid}>
-        <InfoItem label="Bind" value={`${project.host}:${project.port}`} />
-        <InfoItem label="CWD" value={project.cwd} />
-        {project.baseUrl && <InfoItem label="Base URL" value={project.baseUrl} />}
-        <InfoItem label="Runtime" value={formatRuntimeSummary(project.status)} />
-        {project.status.activeTasks !== null && (
-          <InfoItem label="Active tasks" value={String(project.status.activeTasks)} />
+        <InfoItem label="Bind" value={`${instance.host}:${instance.port}`} />
+        <InfoItem label="CWD" value={instance.cwd} />
+        {instance.baseUrl && <InfoItem label="Base URL" value={instance.baseUrl} />}
+        <InfoItem label="Runtime" value={formatRuntimeSummary(instance.status)} />
+        {instance.status.activeTasks !== null && (
+          <InfoItem label="Active tasks" value={String(instance.status.activeTasks)} />
         )}
-        {project.status.connectedClients !== null && (
-          <InfoItem label="Connected clients" value={String(project.status.connectedClients)} />
+        {instance.status.connectedClients !== null && (
+          <InfoItem label="Connected clients" value={String(instance.status.connectedClients)} />
         )}
-        {project.status.acpSessionCount !== null && (
-          <InfoItem label="ACP sessions" value={String(project.status.acpSessionCount)} />
+        {instance.status.acpSessionCount !== null && (
+          <InfoItem label="ACP sessions" value={String(instance.status.acpSessionCount)} />
         )}
-        {project.status.uptimeMs !== null && project.status.uptimeMs > 0 && (
-          <InfoItem label="Uptime" value={formatUptime(project.status.uptimeMs)} />
+        {instance.status.uptimeMs !== null && instance.status.uptimeMs > 0 && (
+          <InfoItem label="Uptime" value={formatUptime(instance.status.uptimeMs)} />
         )}
-        {project.status.probeError && (
-          <InfoItem label="Probe error" value={project.status.probeError} />
+        {instance.status.probeError && (
+          <InfoItem label="Probe error" value={instance.status.probeError} />
         )}
-        <InfoItem label="Last probe" value={new Date(project.status.probedAt).toLocaleTimeString()} />
-        {project.status.startedAt && <InfoItem label="Started" value={new Date(project.status.startedAt).toLocaleString()} />}
-        {project.status.stoppedAt && <InfoItem label="Stopped" value={new Date(project.status.stoppedAt).toLocaleString()} />}
-        <InfoItem label="Created" value={new Date(project.createdAt).toLocaleString()} />
+        <InfoItem label="Last probe" value={new Date(instance.status.probedAt).toLocaleTimeString()} />
+        {instance.status.startedAt && <InfoItem label="Started" value={new Date(instance.status.startedAt).toLocaleString()} />}
+        {instance.status.stoppedAt && <InfoItem label="Stopped" value={new Date(instance.status.stoppedAt).toLocaleString()} />}
+        <InfoItem label="Created" value={new Date(instance.createdAt).toLocaleString()} />
       </div>
 
-      {/* Legacy env vars (only shown when a project already has stored keys) */}
-      {(project.envVarKeys ?? []).length > 0 && (
+      {/* Legacy env vars (only shown when a instance already has stored keys) */}
+      {(instance.envVarKeys ?? []).length > 0 && (
         <>
           <h4 style={sectionTitle}>Environment Variables</h4>
           <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-            Legacy per-project env injection. New ACP deployments normally do not need these.
+            Legacy per-instance env injection. New ACP deployments normally do not need these.
           </p>
           {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
           <div style={credTable}>
-            {(project.envVarKeys ?? []).map((key) => {
+            {(instance.envVarKeys ?? []).map((key) => {
               const isEditing = envEditing[key] !== undefined;
               const isBusy = envBusy[key] === true;
               return (
@@ -563,29 +586,37 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
         </>
       )}
 
-      {/* Tunnel info */}
-      {project.tunnel && (        <>
-          <h4 style={sectionTitle}>Tunnel (Shepaw Channel Service)</h4>
+      {/* Per-instance tunnel info (advanced) */}
+      {instance.tunnel && (        <>
+          <h4 style={sectionTitle}>单独的外网 channel (per-instance tunnel) <span style={{ color: '#6c7086', fontSize: 11, fontWeight: 400 }}>· 高级</span></h4>
+          <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
+            该 agent 使用独立 channel 外网可达，与全局共享 channel 互不冲突。如无需独立 channel，可在编辑里移除。
+          </p>
           <div style={tunnelCard}>
             <div style={tunnelRow}>
               <span style={tunnelLabel}>Server</span>
-              <span style={tunnelValue}>{project.tunnel.serverUrl}</span>
+              <span style={tunnelValue}>{instance.tunnel.serverUrl}</span>
             </div>
             <div style={tunnelRow}>
               <span style={tunnelLabel}>Channel ID</span>
-              <code style={tunnelCode}>{project.tunnel.channelId}</code>
+              <code style={tunnelCode}>{instance.tunnel.channelId}</code>
             </div>
             <div style={tunnelRow}>
               <span style={tunnelLabel}>Secret</span>
-              <code style={{ ...tunnelCode, color: '#cdd6f4' }}>{maskSecret(project.tunnel.secret)}</code>
+              <code style={{ ...tunnelCode, color: '#cdd6f4' }}>{maskSecret(instance.tunnel.secret)}</code>
             </div>
           </div>
         </>
       )}
 
+      {/* Per-instance tool-call approval override */}
+      {instance && (
+        <InstanceApprovalSection instance={instance} onChanged={load} />
+      )}
+
       {/* Logs */}
       <h4 style={sectionTitle}>Logs</h4>
-      <LogViewer projectId={projectId} />
+      <LogViewer instanceId={instanceId} />
 
       {/* Peers */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, borderBottom: '1px solid #313244', paddingBottom: 6 }}>
@@ -658,11 +689,11 @@ export function ProjectDetail({ projectId, onBack, onReload }: ProjectDetailProp
       )}
 
       {showEnroll && (
-        <EnrollModal projectId={projectId} onClose={() => setShowEnroll(false)} baseUrl={project?.baseUrl} />
+        <EnrollModal instanceId={instanceId} onClose={() => setShowEnroll(false)} baseUrl={instance?.baseUrl} />
       )}
 
       {showResume && (
-        <SessionResumeModal projectId={projectId} onClose={() => setShowResume(false)} />
+        <SessionResumeModal instanceId={instanceId} onClose={() => setShowResume(false)} />
       )}
     </div>
   );
@@ -694,7 +725,7 @@ const badge: React.CSSProperties = {
   borderRadius: 4, color: '#cdd6f4',
 };
 
-function dot(status: Project['status']): React.CSSProperties {
+function dot(status: Instance['status']): React.CSSProperties {
   return { width: 10, height: 10, borderRadius: '50%', background: availabilityColor(status) };
 }
 
@@ -823,6 +854,11 @@ const editTunnelSection: React.CSSProperties = {
   background: '#1e1e2e', border: '1px solid #313244',
   borderRadius: 6, padding: '10px 12px',
   display: 'flex', flexDirection: 'column', gap: 10,
+};
+
+const tunnelAdvancedToggle: React.CSSProperties = {
+  background: 'none', border: 'none', color: '#a6adc8', cursor: 'pointer',
+  fontSize: 13, fontWeight: 600, padding: 0, textAlign: 'left',
 };
 
 const editSubmitBtn: React.CSSProperties = {
