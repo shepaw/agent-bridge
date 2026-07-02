@@ -5,18 +5,21 @@
  * runs commands and returns stdout/stderr to the upstream agent.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import type * as acp from '@agentclientprotocol/sdk';
 
 interface TerminalRecord {
   readonly id: string;
-  readonly proc: ChildProcessWithoutNullStreams;
+  readonly proc: ChildProcess;
   output: string;
   truncated: boolean;
   exitStatus: acp.TerminalExitStatus | null;
   byteLimit: number;
+  /** Resolves once the process closes or fails to spawn. */
+  readonly done: Promise<void>;
+  settle: () => void;
 }
 
 export class TerminalHost {
@@ -26,10 +29,22 @@ export class TerminalHost {
     const terminalId = randomUUID();
     const byteLimit = params.outputByteLimit ?? 256 * 1024;
 
-    const proc = spawn(params.command, params.args ?? [], {
+    const args = params.args ?? [];
+    // Many coding agents (CodeBuddy, Claude Code, …) pack the entire shell
+    // command line into `command` and leave `args` empty. Running that through
+    // a shell handles both that case and the correct argv form. When explicit
+    // args are provided we use argv directly so paths with spaces survive.
+    const useShell = args.length === 0;
+
+    const proc = spawn(params.command, args, {
       cwd: params.cwd ?? undefined,
       env: envRecord(params.env),
-      shell: process.platform === 'win32',
+      shell: useShell || process.platform === 'win32',
+    });
+
+    let settle!: () => void;
+    const done = new Promise<void>((resolve) => {
+      settle = resolve;
     });
 
     const record: TerminalRecord = {
@@ -39,6 +54,8 @@ export class TerminalHost {
       truncated: false,
       exitStatus: null,
       byteLimit,
+      done,
+      settle,
     };
 
     const append = (chunk: Buffer): void => {
@@ -52,13 +69,24 @@ export class TerminalHost {
       }
     };
 
-    proc.stdout.on('data', append);
-    proc.stderr.on('data', append);
+    proc.stdout?.on('data', append);
+    proc.stderr?.on('data', append);
     proc.on('close', (code, signal) => {
-      record.exitStatus = {
-        exitCode: code,
-        signal: signal ?? null,
-      };
+      if (record.exitStatus === null) {
+        record.exitStatus = { exitCode: code, signal: signal ?? null };
+      }
+      record.settle();
+    });
+    // CRITICAL: a spawn failure (ENOENT, EACCES, …) emits an 'error' event.
+    // Without this listener Node rethrows it as an unhandled error and the
+    // whole proxy process crashes. Record it as a failed exit instead so the
+    // upstream agent just sees the command fail.
+    proc.on('error', (err: Error) => {
+      append(Buffer.from(`\n[shepaw] failed to run command: ${err.message}\n`, 'utf-8'));
+      if (record.exitStatus === null) {
+        record.exitStatus = { exitCode: 127, signal: null };
+      }
+      record.settle();
     });
 
     this.terminals.set(terminalId, record);
@@ -76,15 +104,12 @@ export class TerminalHost {
 
   async waitForExit(params: acp.WaitForTerminalExitRequest): Promise<acp.WaitForTerminalExitResponse> {
     const record = this.require(params.terminalId);
-    if (record.exitStatus !== null) {
-      return {
-        exitCode: record.exitStatus.exitCode,
-        signal: record.exitStatus.signal,
-      };
+    if (record.exitStatus === null) {
+      // Await close OR spawn-error (both settle `done`), so a failed spawn
+      // resolves the wait instead of hanging forever on a 'close' that never
+      // fires.
+      await record.done;
     }
-    await new Promise<void>((resolve) => {
-      record.proc.once('close', () => resolve());
-    });
     const status = record.exitStatus ?? { exitCode: null, signal: null };
     return { exitCode: status.exitCode, signal: status.signal };
   }
