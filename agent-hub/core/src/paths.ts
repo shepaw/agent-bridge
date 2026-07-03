@@ -88,6 +88,36 @@ export function gatewayLogFile(root: string = hubRoot()): string {
   return join(gatewayLogsDir(root), 'gateway.log');
 }
 
+/** Long-term X25519 identity for the device-level peer service (shepaw://peer). */
+export function peerIdentityPath(root: string = hubRoot()): string {
+  return join(root, 'peer-identity.json');
+}
+
+/** Active pairing-code file (CLI writes, peer daemon reads on handshake). */
+export function peerPairingPath(root: string = hubRoot()): string {
+  return join(root, 'peer-pairing.json');
+}
+
+/** Persistent paired-device store for the peer service. */
+export function peerDevicesPath(root: string = hubRoot()): string {
+  return join(root, 'peer-devices.json');
+}
+
+/** State file for the device-level peer service process. */
+export function peerStatePath(root: string = hubRoot()): string {
+  return join(root, 'peer-state.json');
+}
+
+/** Directory holding the peer service's rotating log. */
+export function peerLogsDir(root: string = hubRoot()): string {
+  return join(root, 'peer-logs');
+}
+
+/** Log file for the device-level peer service process. */
+export function peerLogFile(root: string = hubRoot()): string {
+  return join(peerLogsDir(root), 'peer.log');
+}
+
 /**
  * Derive every file path for a given instance. Does NOT create the directory —
  * callers that persist via `config.ts` / spawn logic mkdir on write.

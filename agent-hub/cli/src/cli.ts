@@ -84,12 +84,18 @@ import {
   stopGatewayRouter,
   readGatewayState,
   isGatewayRunning,
+  startPeerService,
+  stopPeerService,
+  peerServiceStatus,
+  mintPairingQr,
+  loadPairedPeers,
+  removePairedPeer,
 } from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
 // 'project' is kept as a backward-compat alias for 'instance' (the concept
 // was renamed); old `shepaw-hub project add ...` invocations still work.
-const multiWord = new Set(['instance', 'project', 'peers', 'logs', 'enroll', 'gateway']);
+const multiWord = new Set(['instance', 'project', 'peers', 'peer', 'logs', 'enroll', 'gateway']);
 if (
   process.argv.length >= 4 &&
   typeof process.argv[2] === 'string' &&
@@ -1034,6 +1040,98 @@ cli
     }
   });
 
+// ── peer service (shepaw://peer) ───────────────────────────────────
+
+cli
+  .command('peer-start', 'Start the device peer service (shepaw://peer responder)')
+  .action(async () => {
+    try {
+      const res = await startPeerService();
+      console.log(`Peer service ${res.alreadyRunning ? 'already running' : 'started'} — pid ${res.pid}, bind ${res.host}:${res.port}/peer/ws`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('peer-stop', 'Stop the device peer service')
+  .action(async () => {
+    try {
+      const res = await stopPeerService();
+      console.log(`Peer service: ${res}`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('peer-status', 'Show peer service running state + paired devices')
+  .action(() => {
+    try {
+      const st = peerServiceStatus();
+      console.log(`Peer service: ${st.running ? 'running' : 'stopped'}`);
+      if (st.running) console.log(`  pid:        ${st.pid}`);
+      console.log(`  bind:       ${st.host}:${st.port}/peer/ws`);
+      if (st.startedAt) console.log(`  started at: ${st.startedAt}`);
+      const devices = loadPairedPeers();
+      console.log(`  paired:     ${devices.length} device(s)`);
+      for (const d of devices) {
+        console.log(`    ${d.fingerprint}  ${d.deviceName}  (paired ${d.pairedAt})`);
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('peer-pair', 'Mint a shepaw://peer pairing code + QR (scan with Shepaw app → Device Pairing)')
+  .option('--label <label>', 'Unused placeholder (kept for symmetry with pair)')
+  .action(async () => {
+    try {
+      const res = await mintPairingQr();
+      console.log('');
+      console.log(`  Pairing code:  ${res.code}`);
+      console.log(`  Expires in:    ${Math.round((res.expiresAt - Date.now()) / 1000)}s`);
+      console.log(`  Endpoint:      ${res.localEndpoint}`);
+      console.log(`  Fingerprint:   ${res.fingerprint}`);
+      console.log('');
+      console.log('  Scan with the Shepaw app (Device Pairing / Scan to Connect):');
+      console.log('');
+      qrcode.generate(res.qrPayload, { small: true }, (qr: string) => console.log(qr));
+      console.log('');
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('peer-devices', 'List devices paired with the peer service')
+  .action(() => {
+    try {
+      const devices = loadPairedPeers();
+      if (devices.length === 0) {
+        console.log('No paired devices.');
+        return;
+      }
+      for (const d of devices) {
+        console.log(`${d.fingerprint}  ${d.deviceName}  ${d.deviceId}  (paired ${d.pairedAt})`);
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('peer-devices-remove <fingerprint>', 'Revoke a paired device')
+  .action((fingerprint: string) => {
+    try {
+      const remaining = removePairedPeer(fingerprint);
+      console.log(`Removed. ${remaining.length} device(s) still paired.`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
 // ── web dashboard ──────────────────────────────────────────────────
 
 cli
@@ -1077,6 +1175,7 @@ cli.help((sections) => {
     [/logs-(rotate)/g, 'logs $1'],
     [/enroll-(list|revoke)/g, 'enroll $1'],
     [/gateway-(set-channel|clear-channel|set-approval|show|start|stop|status)/g, 'gateway $1'],
+    [/peer-(start|stop|status|pair|devices|devices-remove)/g, 'peer $1'],
   ];
   for (const s of sections) {
     if (typeof s.body === 'string') {

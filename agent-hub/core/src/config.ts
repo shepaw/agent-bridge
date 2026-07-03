@@ -103,6 +103,15 @@ export const DEFAULT_ROUTER_HOST = '127.0.0.1';
 /** Default local port the tunnel router listens on for dispatch. */
 export const DEFAULT_ROUTER_PORT = 18789;
 
+/** Default host the peer service binds to (LAN-reachable so phones can connect). */
+export const DEFAULT_PEER_HOST = '0.0.0.0';
+/**
+ * Default port the peer service listens on (`/peer/ws`). The Shepaw desktop
+ * app claims 18792 for its own peer server, so the hub uses 18793 to coexist
+ * on the same host. The actual port is advertised in the QR `local` endpoint.
+ */
+export const DEFAULT_PEER_PORT = 18793;
+
 /**
  * Gateway-level (device-wide) configuration.
  *
@@ -253,6 +262,18 @@ export interface EngineOverrides {
 /** Map keyed by engine id (built-in or custom). */
 export type EngineOverridesMap = Record<string, EngineOverrides>;
 
+/**
+ * Device-level peer service config. The peer service implements the
+ * `shepaw://peer` responder so a Shepaw app can pair with the hub over the
+ * LAN and reach every managed instance through one P2P channel.
+ */
+export interface PeerServiceConfig {
+  /** Bind host. Default `0.0.0.0` (LAN-reachable). */
+  readonly host: string;
+  /** Listen port for `/peer/ws`. Default 18792 (matches the app). */
+  readonly port: number;
+}
+
 export interface HubConfig {
   readonly path: string;
   readonly instances: ReadonlyArray<InstanceConfig>;
@@ -260,6 +281,8 @@ export interface HubConfig {
   readonly customEngines: ReadonlyArray<CustomEngineDefinition>;
   /** Gateway-level (device-wide) config: shared channel tunnel + router port. */
   readonly gateway?: GatewayConfig;
+  /** Device-level peer service config (host/port). */
+  readonly peer?: PeerServiceConfig;
   /** Per-engine overrides (disabled / displayName / envVars / approval). */
   readonly engineOverrides?: EngineOverridesMap;
   /** Last Tunnel Server URL used — pre-filled when creating a new instance. */
@@ -317,7 +340,7 @@ function migrateLegacyInstancesDir(): void {
  * if the file's permission bits have been loosened (to catch accidental
  * `chmod -R 755 ~/.config/shepaw-hub`).
  */
-export function saveHubConfig(path: string, config: Pick<HubConfig, 'instances' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway' | 'engineOverrides'>): void {
+export function saveHubConfig(path: string, config: Pick<HubConfig, 'instances' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway' | 'peer' | 'engineOverrides'>): void {
   persist(path, config.instances, hubPersistMeta(config));
 }
 
@@ -772,11 +795,12 @@ interface OnDiskSchema {
   lastTunnelSecretHint?: CredentialHint;
   credentialHints?: HubCredentialCache;
   gateway?: GatewayConfig;
+  peer?: PeerServiceConfig;
   engineOverrides?: EngineOverridesMap;
 }
 
 function hubPersistMeta(
-  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway' | 'engineOverrides'>,
+  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway' | 'peer' | 'engineOverrides'>,
 ): PersistOptions {
   return {
     lastTunnelServerUrl: config.lastTunnelServerUrl,
@@ -784,6 +808,7 @@ function hubPersistMeta(
     credentialHints: config.credentialHints,
     customEngines: config.customEngines,
     gateway: config.gateway,
+    peer: config.peer,
     engineOverrides: config.engineOverrides,
   };
 }
@@ -869,8 +894,17 @@ function loadExisting(path: string): HubConfig {
     lastTunnelSecretHint: parseCredentialHint(obj.lastTunnelSecretHint),
     credentialHints: parseCredentialHints(obj.credentialHints),
     gateway: parseGatewayConfig(obj.gateway),
+    peer: parsePeerConfig(obj.peer),
     ...(engineOverrides !== undefined && { engineOverrides }),
   };
+}
+
+function parsePeerConfig(v: unknown): PeerServiceConfig | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const host = typeof o.host === 'string' && o.host.length > 0 ? o.host : DEFAULT_PEER_HOST;
+  const port = typeof o.port === 'number' && Number.isInteger(o.port) && o.port > 0 ? o.port : DEFAULT_PEER_PORT;
+  return { host, port };
 }
 
 function parseGatewayConfig(v: unknown): GatewayConfig | undefined {
@@ -949,6 +983,7 @@ interface PersistOptions {
   credentialHints?: HubCredentialCache;
   customEngines?: ReadonlyArray<CustomEngineDefinition>;
   gateway?: GatewayConfig;
+  peer?: PeerServiceConfig;
   engineOverrides?: EngineOverridesMap;
 }
 
@@ -961,6 +996,7 @@ function persist(path: string, instances: ReadonlyArray<InstanceConfig>, opts?: 
     ...(opts?.lastTunnelSecretHint !== undefined && { lastTunnelSecretHint: opts.lastTunnelSecretHint }),
     ...(opts?.credentialHints !== undefined && { credentialHints: opts.credentialHints }),
     ...(opts?.gateway !== undefined && { gateway: opts.gateway }),
+    ...(opts?.peer !== undefined && { peer: opts.peer }),
     ...(opts?.engineOverrides !== undefined && { engineOverrides: opts.engineOverrides }),
   };
 

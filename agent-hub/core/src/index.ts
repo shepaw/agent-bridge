@@ -47,8 +47,21 @@ export type {
   HubCredentialCache,
   LoadHubOptions,
   InstanceConfig,
+  PeerServiceConfig,
   TunnelConfig,
 } from './config.js';
+export { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from './config.js';
+
+// ── peer service (shepaw://peer responder + agent-host proxy) ──────
+export {
+  isPeerServiceRunning,
+  mintPairingQr,
+  peerServiceStatus,
+  startPeerService,
+  stopPeerService,
+} from './peer/peer-process.js';
+export type { MintPairingResult } from './peer/peer-process.js';
+export { loadPairedPeers, removePairedPeer, type PairedPeer } from './peer/peer-store.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
