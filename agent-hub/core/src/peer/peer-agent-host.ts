@@ -102,39 +102,54 @@ export async function chatWithInstance(
   };
 
   try {
-    // 1. Open + handshake.
+    // 1. Open WS + send Noise msg1 (no enroll — peer service is pre-authorized).
     await new Promise<void>((resolve, reject) => {
       const onOpen = (): void => {
         ws.off('error', reject);
-        ws.off('close', reject);
-        // Build msg1 payload (no enroll — peer service is pre-authorized).
         const msg1Payload = JSON.stringify({ agentId: instanceIdentity.agentId, clientVersion: 'shepaw-hub-peer/1.0' });
         const msg1 = session.writeHandshake1(Buffer.from(msg1Payload, 'utf-8'));
         ws.send(encodeFrame({ t: 'hs', payload: msg1 }));
+        resolve();
       };
       ws.once('open', onOpen);
       ws.once('error', reject);
+      ws.once('close', (code) => reject(new Error(`ws closed before open (code ${code})`)));
     });
 
-    // Wait for msg2.
+    // Wait for msg2 (10s handshake timeout).
     await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.off('message', onMsg);
+        ws.off('close', onClose);
+        reject(new Error('agent handshake timeout (no msg2)'));
+      }, 10_000);
+      const cleanup = (): void => { clearTimeout(timer); };
       const onMsg = (data: WebSocket.RawData): void => {
         try {
           const frame = decodeFrame(data.toString('utf-8'));
           if (frame.t !== 'hs') {
+            cleanup();
             reject(new Error(`expected hs frame, got ${frame.t}`));
             return;
           }
           session.readHandshake2(frame.payload);
+          cleanup();
           ws.off('message', onMsg);
+          ws.off('close', onClose);
           resolve();
         } catch (err) {
+          cleanup();
           ws.off('message', onMsg);
+          ws.off('close', onClose);
           reject(err);
         }
       };
-      ws.once('message', onMsg);
-      ws.once('close', (code) => reject(new Error(`ws closed during handshake (code ${code})`)));
+      const onClose = (code: number): void => {
+        cleanup();
+        reject(new Error(`ws closed during handshake (code ${code})`));
+      };
+      ws.on('message', onMsg);
+      ws.once('close', onClose);
     });
 
     // 2. Send agent.chat.

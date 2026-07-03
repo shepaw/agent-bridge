@@ -51,18 +51,21 @@ export async function drivePeerConnection(opts: {
     }
     const state: InflightChat = { shouldCancel: false };
     inflight.set(requestId, state);
+    log(`agent_chat req=${requestId} agent=${agentId}`);
     try {
       await chatWithInstance(
         peerIdentity,
         { agentId, message, sessionId: params.session_id as string | undefined, shouldCancel: () => state.shouldCancel },
         {
           onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
-          onDone: (content, metadata) => send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }),
-          onError: (msg) => send({ type: 'agent_error', request_id: requestId, message: msg }),
+          onDone: (content, metadata) => { log(`agent_done req=${requestId}`); send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }); },
+          onError: (msg) => { log(`agent_error req=${requestId}: ${msg}`); send({ type: 'agent_error', request_id: requestId, message: msg }); },
         },
       );
     } catch (err) {
-      send({ type: 'agent_error', request_id: requestId, message: err instanceof Error ? err.message : String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`agent_chat req=${requestId} threw: ${msg}`);
+      send({ type: 'agent_error', request_id: requestId, message: msg });
     } finally {
       inflight.delete(requestId);
     }
