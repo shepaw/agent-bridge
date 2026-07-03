@@ -5,7 +5,7 @@
  * $SHEPAW_HUB_HOME (or ~/.config/shepaw-hub/)
  * ├── hub.json                       — top-level config; list of instances
  * ├── enrollments.json               — hub-wide pairing codes (device pairing)
- * └── projects/                      — on-disk dir kept as `projects/` for compat
+ * └── instances/
  *     └── <instance-id>/
  *         ├── identity.json           — per-instance X25519 static keypair
  *         ├── authorized_peers.json   — per-instance allowlist
@@ -97,10 +97,7 @@ export function gatewayLogFile(root: string = hubRoot()): string {
  * double-validation just obscures the error source.
  */
 export function instancePaths(instanceId: string, root: string = hubRoot()): InstancePaths {
-  // On-disk directory stays `projects/` for backward compatibility with
-  // existing identity/peers/sessions data. Only the code concept was renamed
-  // to "instance"; the storage path is an implementation detail.
-  const instanceRoot = join(root, 'projects', instanceId);
+  const instanceRoot = join(root, 'instances', instanceId);
   return {
     root: instanceRoot,
     identityPath: join(instanceRoot, 'identity.json'),

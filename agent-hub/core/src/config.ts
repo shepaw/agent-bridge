@@ -29,7 +29,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { hubConfigPath, validateInstanceId, normalizeCwd, hubRoot } from './paths.js';
 import { encryptEnvVars, encryptValue, decryptValue, decryptEnvVars } from './crypto.js';
@@ -284,11 +284,32 @@ export interface LoadHubOptions {
  */
 export function loadOrCreateHubConfig(opts: LoadHubOptions = {}): HubConfig {
   const path = opts.path ?? hubConfigPath();
+  migrateLegacyInstancesDir();
   if (!existsSync(path)) {
     persist(path, [], { customEngines: [] });
     return { path, instances: [], customEngines: [] };
   }
   return loadExisting(path);
+}
+
+/**
+ * One-time on-disk migration: the per-instance data directory was renamed
+ * from `projects/` to `instances/`. If the new dir is absent but the legacy
+ * dir exists, rename it. Idempotent — once renamed, the legacy dir is gone
+ * and this is a cheap no-op (two existsSync calls). Skipped in tests that
+ * pin a custom home with no legacy dir.
+ */
+function migrateLegacyInstancesDir(): void {
+  const root = hubRoot();
+  const legacy = join(root, 'projects');
+  const next = join(root, 'instances');
+  if (existsSync(next) || !existsSync(legacy)) return;
+  try {
+    renameSync(legacy, next);
+  } catch {
+    // If the rename fails (permissions, partial state), leave it — the hub
+    // will surface missing-instance errors rather than crash on load.
+  }
 }
 
 /**
