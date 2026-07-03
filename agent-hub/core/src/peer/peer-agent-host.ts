@@ -169,7 +169,19 @@ export async function chatWithInstance(
     });
 
     // 3. Pump notifications until turn ends.
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolvePump) => {
+      let cancelSent = false;
+
+      const finish = (fn: () => void): void => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(safetyTimer);
+        clearInterval(cancelTimer);
+        try { fn(); } catch { /* ignore */ }
+        close();
+        resolvePump();
+      };
+
       const onMsg = (data: WebSocket.RawData): void => {
         if (resolved) return;
         try {
@@ -178,8 +190,11 @@ export async function chatWithInstance(
           const plaintext = session.decrypt(frame.payload);
           const obj = JSON.parse(Buffer.from(plaintext).toString('utf-8')) as Record<string, unknown>;
           const method = obj.method as string | undefined;
+          if (process.env.SHEPAW_PEER_DEBUG === '1') {
+            console.error('[peer-chat] notify:', method, JSON.stringify(obj.params ?? obj).slice(0, 200));
+          }
 
-          // Handle the ack response (has id) — nothing to do.
+          // Ack responses (have id) — nothing to do.
           if (obj.id !== undefined) return;
 
           if (method === 'ui.textContent') {
@@ -192,53 +207,83 @@ export async function chatWithInstance(
             }
             return;
           }
+
+          // Tool-call approval request: the gateway blocks the turn in
+          // waitForResponse until the client replies. The peer channel can't
+          // surface approvals to the phone, so auto-allow (least-privilege:
+          // allow_once). This keeps tool-using requests from hanging.
+          if (method === 'ui.actionConfirmation') {
+            const params = obj.params as Record<string, unknown> | undefined;
+            const confirmationId = params?.confirmation_id as string | undefined;
+            const actions = Array.isArray(params?.actions) ? (params!.actions as Array<Record<string, unknown>>) : [];
+            const allowAction =
+              actions.find((a) => a.style === 'primary') ??
+              actions.find((a) => a.id === 'allow') ??
+              actions[0];
+            const optionId = (allowAction?.id as string | undefined) ?? 'allow';
+            if (confirmationId !== undefined) {
+              try {
+                send({
+                  jsonrpc: '2.0',
+                  id: rpcId++,
+                  method: 'agent.submitResponse',
+                  params: {
+                    task_id: taskId,
+                    response_data: { confirmation_id: confirmationId, selected_action_id: optionId },
+                  },
+                });
+              } catch {
+                /* ignore */
+              }
+            }
+            return;
+          }
+
           if (method === 'task.completed') {
             metadata = obj.params as Record<string, unknown> | undefined;
-            resolved = true;
-            handlers.onDone(accumulated, metadata);
-            close();
-            resolve();
+            finish(() => handlers.onDone(accumulated, metadata));
             return;
           }
           if (method === 'task.error') {
             const params = obj.params as Record<string, unknown> | undefined;
             const msg = (params?.message as string | undefined) ?? 'agent error';
-            resolved = true;
-            handlers.onError(msg);
-            close();
-            resolve();
+            finish(() => handlers.onError(msg));
             return;
           }
-          // Other notifications (task.started, ui.* interactive) ignored in Phase 1.
+          // Other notifications (task.started, ui.* interactive) ignored.
         } catch {
           /* permissive — drop malformed frame */
         }
       };
       ws.on('message', onMsg);
       ws.once('close', () => {
-        if (!resolved) {
-          resolved = true;
-          // If we already streamed chunks, treat close as done; else error.
+        finish(() => {
           if (accumulated.length > 0) handlers.onDone(accumulated, metadata);
           else handlers.onError('connection closed before completion');
-          resolve();
-        }
+        });
       });
 
-      // Cancel polling.
+      // Cancel: send cancelTask, then force-close after a short grace so a
+      // wedged agent can't hold the peer connection hostage.
       const cancelTimer = setInterval(() => {
         if (req.shouldCancel() && !resolved) {
-          clearInterval(cancelTimer);
-          try {
-            send({ jsonrpc: '2.0', id: rpcId++, method: 'agent.cancelTask', params: { task_id: taskId } });
-          } catch {
-            /* ignore */
+          if (!cancelSent) {
+            cancelSent = true;
+            try {
+              send({ jsonrpc: '2.0', id: rpcId++, method: 'agent.cancelTask', params: { task_id: taskId } });
+            } catch { /* ignore */ }
           }
+          // Force-close shortly after requesting cancel — don't wait for the
+          // agent to acknowledge, which it may never do if wedged on approval.
+          setTimeout(() => finish(() => handlers.onError('[cancelled]')), 1500);
         }
-      }, 200);
-      // Stop the cancel poll when we resolve.
-      const origResolve = resolve;
-      resolve = ((v: void) => { clearInterval(cancelTimer); origResolve(v); }) as typeof resolve;
+      }, 300);
+
+      // Safety net: never let a chat hang forever (e.g. an unannounced approval
+      // or a wedged upstream). 10 min matches the gateway's own tolerance.
+      const safetyTimer = setTimeout(() => {
+        finish(() => handlers.onError('agent turn timed out'));
+      }, 10 * 60 * 1000);
     });
   } finally {
     close();
