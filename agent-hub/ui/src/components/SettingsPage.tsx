@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { GatewaySettingsPanel } from './GatewaySettingsModal.js';
 import { DevicePairingPanel } from './DevicePairingModal.js';
 import { EngineManager } from './EngineManager.js';
+import { PeerPairingPanel } from './PeerPairingPanel.js';
 
-type Tab = 'global' | 'engines';
+type Tab = 'global' | 'engines' | 'peer';
 
 /**
  * Unified settings page. Hosts the three configuration surfaces:
@@ -21,6 +22,7 @@ export function SettingsPage() {
       <div style={tabs}>
         <button style={tabBtn(tab === 'global')} onClick={() => setTab('global')}>全局设置</button>
         <button style={tabBtn(tab === 'engines')} onClick={() => setTab('engines')}>引擎管理</button>
+        <button style={tabBtn(tab === 'peer')} onClick={() => setTab('peer')}>Peer 配对</button>
       </div>
 
       <div style={panel}>
@@ -32,8 +34,11 @@ export function SettingsPage() {
               <GatewaySettingsPanel />
             </section>
             <section style={card}>
-              <h3 style={cardTitle}>设备配对</h3>
-              <p style={cardHint}>用 Shepaw App 扫描一次，授权本机上的全部 Agent。</p>
+              <h3 style={cardTitle}>设备配对（Add Agent 流 · shepaw://pair）</h3>
+              <p style={cardHint}>
+                用 Shepaw App 的「Add Agent」扫码入口扫描。注意：这是 shepaw://pair 协议，
+                与「Peer 配对」分区的 shepaw://peer 不同，请确认手机用的是 Add Agent 扫码器。
+              </p>
               <DevicePairingPanel />
             </section>
           </>
@@ -44,6 +49,17 @@ export function SettingsPage() {
             <h3 style={cardTitle}>引擎管理</h3>
             <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认凭据与审核策略。</p>
             <EngineManager />
+          </section>
+        )}
+
+        {tab === 'peer' && (
+          <section style={card}>
+            <h3 style={cardTitle}>Peer 配对（Device Pairing 流 · shepaw://peer）</h3>
+            <p style={cardHint}>
+              启动 peer 服务后生成二维码，用 Shepaw App 的「Device Pairing / Scan to Connect」扫码。
+              配对后手机可通过 peer 通道访问本机全部实例。
+            </p>
+            <PeerPairingPanel />
           </section>
         )}
       </div>

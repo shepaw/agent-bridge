@@ -12,7 +12,10 @@ import type {
   HubPairedDevice,
   HubPairingResult,
   MaskedEnvVar,
+  PairedPeer,
   Peer,
+  PeerPairingResult,
+  PeerServiceStatus,
   Instance,
   StoredSession,
   UpdateCustomEngineInput,
@@ -192,5 +195,23 @@ export const api = {
 
     stop: (): Promise<{ result: string; status: GatewayRouterStatus }> =>
       request('/gateway/stop', { method: 'POST' }),
+  },
+
+  peer: {
+    get: (): Promise<{ status: PeerServiceStatus; devices: PairedPeer[] }> => request('/peer'),
+
+    start: (): Promise<{ ok: boolean; status: PeerServiceStatus }> =>
+      request('/peer/start', { method: 'POST' }),
+
+    stop: (): Promise<{ ok: boolean; result: string; status: PeerServiceStatus }> =>
+      request('/peer/stop', { method: 'POST' }),
+
+    pair: (): Promise<PeerPairingResult> =>
+      request('/peer/pair', { method: 'POST' }),
+
+    devices: (): Promise<{ devices: PairedPeer[] }> => request('/peer/devices'),
+
+    removeDevice: (fingerprint: string): Promise<{ ok: boolean; devices: PairedPeer[] }> =>
+      request(`/peer/devices/${fingerprint}`, { method: 'DELETE' }),
   },
 };

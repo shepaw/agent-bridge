@@ -126,6 +126,36 @@ export interface MaskedEnvVar {
   value: string;
 }
 
+/** Runtime status of the device peer service. */
+export interface PeerServiceStatus {
+  running: boolean;
+  pid: number | null;
+  port: number;
+  host: string;
+  startedAt: string | null;
+}
+
+/** A device paired with the hub via the shepaw://peer flow. */
+export interface PairedPeer {
+  id: string;
+  deviceName: string;
+  deviceId: string;
+  publicKey: string;
+  fingerprint: string;
+  localEndpoint?: string;
+  channelEndpoint?: string;
+  pairedAt: string;
+}
+
+/** Result of POST /api/peer/pair — mint a shepaw://peer QR. */
+export interface PeerPairingResult {
+  code: string;
+  qrPayload: string;
+  expiresAt: number;
+  localEndpoint: string;
+  fingerprint: string;
+}
+
 export interface SessionResume {
   sessionId: string;
   message?: string;

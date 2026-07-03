@@ -24,6 +24,7 @@ import { instancesRouter } from './routes/instances.js';
 import { enginesRouter } from './routes/engines.js';
 import { pairRouter } from './routes/pair.js';
 import { gatewayRouter } from './routes/gateway.js';
+import { peerRouter } from './routes/peer.js';
 import { attachLogsWss } from './ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +52,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   app.use('/api/engines', enginesRouter);
   app.use('/api/pair', pairRouter);
   app.use('/api/gateway', gatewayRouter);
+  app.use('/api/peer', peerRouter);
 
   // ── Health check ─────────────────────────────────────────────────
   app.get('/api/health', (_req: Request, res: Response) => {
