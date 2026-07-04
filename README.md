@@ -12,8 +12,7 @@ agent-bridge/
 │   └── shepaw-acp-sdk-typescript/    # TypeScript SDK (npm i shepaw-acp-sdk)
 │
 ├── implementations/
-│   ├── acp-proxy-ts/                 # Unified ACP proxy gateway (recommended)
-│   └── paw-agent-py/                 # Multi-platform OS control agent (Python, unmaintained)
+│   └── acp-proxy-ts/                 # Unified ACP proxy gateway
 │
 ├── agent-hub/                        # Multi-project supervisor (CLI + Web UI)
 │
