@@ -32,6 +32,7 @@ import {
   loadOrCreateHubConfig,
   removeCustomEngineFromHub,
   resolveEngineAvailability,
+  resolveEngineEnvVars,
   runEngineInstall,
   setEngineEnvVar,
   setEngineOverride,
@@ -64,7 +65,10 @@ enginesRouter.get('/', (_req: Request, res: Response) => {
     const engines = listEngineInfos(cfg.customEngines, overrides).map((info) => {
       const ov = overrides[info.id];
       const disabled = ov?.disabled === true;
-      const enriched = enrichEngineInfo(info, cfg.customEngines, disabled);
+      const engineEnv = resolveEngineEnvVars(cfg, info.id);
+      const enriched = enrichEngineInfo(info, cfg.customEngines, disabled, {
+        cursorApiKey: info.id === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
+      });
       return {
         ...enriched,
         disabled,

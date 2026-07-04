@@ -158,26 +158,47 @@ export function resolveEngineSpec(engineId: string, opts: ResolveEngineSpecOptio
   );
 }
 
+function isHealthyCursorCli(binaryPath: string): boolean {
+  try {
+    const result = spawnSync(binaryPath, ['--version'], {
+      env: { ...process.env, NO_OPEN_BROWSER: '1', CURSOR_AGENT_DISABLE_DEBUG_LOG: '1' },
+      encoding: 'utf8',
+      timeout: 12_000,
+      stdio: 'pipe',
+    });
+    const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    if (result.status !== 0) return false;
+    if (combined.includes('index.js:')) return false;
+    return combined.trim().length > 0 && combined.length < 120;
+  } catch {
+    return false;
+  }
+}
+
 function resolveCursorCliBinary(): string | null {
   const dirs = [
     join(homedir(), '.local', 'bin'),
     '/opt/homebrew/bin',
     '/usr/local/bin',
   ];
+  const candidates: string[] = [];
   for (const name of ['agent', 'cursor-agent']) {
     for (const dir of dirs) {
       const full = join(dir, name);
-      if (existsSync(full)) return full;
+      if (existsSync(full)) candidates.push(full);
     }
     const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], {
       encoding: 'utf8',
     });
     if (which.status === 0) {
       const line = which.stdout.trim().split(/\r?\n/)[0]?.trim();
-      if (line) return line;
+      if (line) candidates.push(line);
     }
   }
-  return null;
+  const unique = [...new Set(candidates)];
+  const healthy = unique.filter((p) => isHealthyCursorCli(p));
+  if (healthy.length > 0) return healthy[0]!;
+  return unique[0] ?? null;
 }
 
 /** Resolve npx on Windows (.cmd shim); resolve Cursor CLI binary at spawn time. */

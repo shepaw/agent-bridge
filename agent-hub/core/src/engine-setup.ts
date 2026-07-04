@@ -82,14 +82,6 @@ export function cursorCliSearchPaths(): string[] {
   return paths;
 }
 
-export function resolveCursorCliBinary(): string | null {
-  for (const name of CURSOR_CLI_BINARIES) {
-    const path = resolveBinaryPath(name, cursorCliSearchPaths());
-    if (path !== null) return path;
-  }
-  return null;
-}
-
 export function getCursorAcpCommand(): string {
   const bin = resolveCursorCliBinary();
   return bin !== null ? `${bin} acp` : BUILTIN_ENGINE_ACP_COMMANDS.cursor;
@@ -116,7 +108,9 @@ export function detectLocalDirPermissionIssue(): string | null {
 }
 
 export function checkCursorInstallStatus(): EngineInstallStatus {
-  const binaryPath = resolveCursorCliBinary();
+  const candidates = cursorCliCandidates();
+  const healthy = candidates.filter((p) => isHealthyCursorCli(p));
+  const binaryPath = healthy[0] ?? candidates[0] ?? null;
   if (binaryPath === null) {
     return {
       installed: false,
@@ -125,12 +119,111 @@ export function checkCursorInstallStatus(): EngineInstallStatus {
       checkError: detectLocalDirPermissionIssue() ?? '未找到 agent 或 cursor-agent 命令',
     };
   }
+  if (!isHealthyCursorCli(binaryPath)) {
+    return {
+      installed: false,
+      binaryPath,
+      version: null,
+      checkError:
+        '已找到 cursor-agent 但 CLI 无法正常运行（Homebrew 版本已知有问题）。' +
+        '请运行：curl https://cursor.com/install -fsS | bash',
+    };
+  }
   return {
     installed: true,
     binaryPath,
-    version: null,
+    version: probeVersion(binaryPath, binaryPath.endsWith('cursor-agent') ? 'cursor-agent' : 'agent'),
     checkError: null,
   };
+}
+
+const CURSOR_API_PROBE_URL = 'https://api.cursor.com/v0/me';
+
+/** Probe whether a Cursor User API Key is accepted (sync, ~1–3s). */
+export function probeCursorApiKey(apiKey: string): 'valid' | 'invalid' | 'unknown' {
+  const trimmed = apiKey.trim();
+  if (trimmed.length === 0) return 'invalid';
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const r=await fetch(${JSON.stringify(CURSOR_API_PROBE_URL)},{headers:{Authorization:'Bearer '+process.env._CURSOR_PROBE_KEY}});process.exit(r.ok?0:r.status===401?1:2);`,
+      ],
+      {
+        env: { ...process.env, _CURSOR_PROBE_KEY: trimmed },
+        timeout: 12_000,
+        stdio: 'pipe',
+      },
+    );
+    if (result.status === 0) return 'valid';
+    if (result.status === 1) return 'invalid';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** True when the CLI responds cleanly to --version (Homebrew cask builds have regressed). */
+export function isHealthyCursorCli(binaryPath: string): boolean {
+  try {
+    const result = spawnSync(binaryPath, ['--version'], {
+      env: { ...process.env, NO_OPEN_BROWSER: '1', CURSOR_AGENT_DISABLE_DEBUG_LOG: '1' },
+      encoding: 'utf8',
+      timeout: 12_000,
+      stdio: 'pipe',
+    });
+    const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    if (result.status !== 0) return false;
+    if (combined.includes('index.js:')) return false;
+    return combined.trim().length > 0 && combined.length < 120;
+  } catch {
+    return false;
+  }
+}
+
+function cursorCliCandidates(): string[] {
+  const names = [...CURSOR_CLI_BINARIES];
+  const paths = cursorCliSearchPaths();
+  const found: string[] = [];
+  for (const name of names) {
+    const path = resolveBinaryPath(name, paths);
+    if (path !== null) found.push(path);
+  }
+  return [...new Set(found)];
+}
+
+export function resolveCursorCliBinary(): string | null {
+  const candidates = cursorCliCandidates();
+  const healthy = candidates.filter((p) => isHealthyCursorCli(p));
+  if (healthy.length > 0) return healthy[0]!;
+  return candidates[0] ?? null;
+}
+
+function resolveCursorAuthAvailability(
+  status: EngineInstallStatus,
+  cursorApiKey: string | undefined,
+): EngineAvailability | null {
+  const key = cursorApiKey?.trim();
+  if (key === undefined || key.length === 0) {
+    return {
+      ...status,
+      available: false,
+      unavailableReason:
+        '未认证：请运行 cursor-agent login，或在引擎设置中配置有效的 CURSOR_API_KEY（Cursor → Settings → Integrations → User API Keys）',
+    };
+  }
+  const probe = probeCursorApiKey(key);
+  if (probe === 'invalid') {
+    return {
+      ...status,
+      available: false,
+      unavailableReason:
+        'CURSOR_API_KEY 无效（API 返回 401）。请在 Cursor → Settings → Integrations 重新生成 User API Key 并更新引擎凭据',
+    };
+  }
+  return null;
 }
 
 const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
@@ -250,22 +343,16 @@ const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
     checkBinary: 'agent',
     checkPaths: [LOCAL_BIN, '/opt/homebrew/bin'],
     installable: true,
-    installCommand:
-      process.platform === 'darwin'
-        ? 'brew install --cask cursor-cli || curl https://cursor.com/install -fsS | bash'
-        : 'curl https://cursor.com/install -fsS | bash',
+    installCommand: 'curl https://cursor.com/install -fsS | bash',
     requiredEnvVars: [
-      { key: 'CURSOR_API_KEY', description: 'Cursor API Key（可选，若已 agent login 可省略）', optional: true },
+      { key: 'CURSOR_API_KEY', description: 'User API Key（Cursor → Integrations）；ACP 模式需要有效 Key 或 agent login', optional: true },
     ],
     steps: [
       {
         title: '安装 Cursor CLI',
         description:
-          'macOS 推荐 Homebrew（安装为 cursor-agent）；官方 curl 脚本安装为 agent 到 ~/.local/bin。桌面版 Cursor 不包含此 CLI。',
-        command:
-          process.platform === 'darwin'
-            ? 'brew install --cask cursor-cli'
-            : 'curl https://cursor.com/install -fsS | bash',
+          '推荐官方 curl 安装（~/.local/bin/agent）。Homebrew 的 cursor-agent 在部分版本上无法正常启动 ACP，若已安装 brew 版请改用 curl 安装。',
+        command: 'curl https://cursor.com/install -fsS | bash',
       },
       {
         title: '确保 CLI 在 PATH 中',
@@ -405,7 +492,7 @@ export function checkCustomEngineInstallStatus(command: string): EngineInstallSt
  */
 export function resolveEngineAvailability(
   engineId: string,
-  opts: { disabled?: boolean; customCommand?: string } = {},
+  opts: { disabled?: boolean; customCommand?: string; cursorApiKey?: string } = {},
 ): EngineAvailability {
   const status = opts.customCommand !== undefined
     ? checkCustomEngineInstallStatus(opts.customCommand)
@@ -425,6 +512,10 @@ export function resolveEngineAvailability(
       unavailableReason: status.checkError ?? '运行环境未就绪',
     };
   }
+  if (engineId === 'cursor') {
+    const authBlock = resolveCursorAuthAvailability(status, opts.cursorApiKey);
+    if (authBlock !== null) return authBlock;
+  }
   return {
     ...status,
     available: true,
@@ -436,11 +527,13 @@ export function enrichEngineInfo(
   info: EngineInfo,
   customEngines: readonly CustomEngineDefinition[],
   disabled: boolean,
+  opts: { cursorApiKey?: string } = {},
 ): EngineInfo {
   const custom = findCustomEngine(customEngines, info.id);
   const avail = resolveEngineAvailability(info.id, {
     disabled,
     customCommand: custom?.command,
+    cursorApiKey: info.id === 'cursor' ? opts.cursorApiKey : undefined,
   });
   return {
     ...info,

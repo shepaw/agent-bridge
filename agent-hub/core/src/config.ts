@@ -652,8 +652,10 @@ export function addInstance(
     );
   }
   const customEngine = findCustomEngine(config.customEngines, normalized.engine);
+  const engineEnv = resolveEngineEnvVars(config, normalized.engine);
   const availability = resolveEngineAvailability(normalized.engine, {
     customCommand: customEngine?.command,
+    cursorApiKey: normalized.engine === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
   });
   if (!availability.available) {
     throw new Error(
@@ -750,8 +752,10 @@ export function updateInstance(
   }
   if (rest.engine !== undefined) {
     const customEngine = findCustomEngine(config.customEngines, rest.engine);
+    const engineEnv = resolveEngineEnvVars(config, rest.engine);
     const availability = resolveEngineAvailability(rest.engine, {
       customCommand: customEngine?.command,
+      cursorApiKey: rest.engine === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
     });
     if (!availability.available) {
       throw new Error(

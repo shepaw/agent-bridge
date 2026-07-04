@@ -148,6 +148,8 @@ export {
   resolveCursorCliBinary,
   getCursorAcpCommand,
   checkCustomEngineInstallStatus,
+  probeCursorApiKey,
+  isHealthyCursorCli,
   checkCursorInstallStatus,
   checkEngineInstallStatus,
   enrichEngineInfo,

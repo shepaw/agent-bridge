@@ -16,6 +16,7 @@ import {
   resolveBinaryPath,
   resolveCursorCliBinary,
   resolveEngineAvailability,
+  probeCursorApiKey,
 } from '../src/engine-setup.js';
 
 describe('engine-setup', () => {
@@ -33,18 +34,20 @@ describe('engine-setup', () => {
     expect(guide.docsUrl).toContain('cursor.com');
   });
 
-  it('resolveCursorCliBinary finds cursor-agent from Homebrew', () => {
-    const brewAgent = '/opt/homebrew/bin/cursor-agent';
-    if (existsSync(brewAgent)) {
-      expect(resolveCursorCliBinary()).toBe(brewAgent);
+  it('resolveCursorCliBinary prefers healthy official agent over Homebrew', () => {
+    const resolved = resolveCursorCliBinary();
+    if (existsSync('/Users/edenzou/.local/bin/agent')) {
+      expect(resolved).toBe('/Users/edenzou/.local/bin/agent');
+    } else if (existsSync('/opt/homebrew/bin/cursor-agent')) {
+      expect(resolved).toContain('cursor-agent');
     }
   });
 
-  it('checkCursorInstallStatus detects cursor-agent when present', () => {
+  it('checkCursorInstallStatus detects healthy cursor CLI when present', () => {
     const status = checkCursorInstallStatus();
-    if (existsSync('/opt/homebrew/bin/cursor-agent')) {
+    if (existsSync('/Users/edenzou/.local/bin/agent')) {
       expect(status.installed).toBe(true);
-      expect(status.binaryPath).toContain('cursor-agent');
+      expect(status.binaryPath).toBe('/Users/edenzou/.local/bin/agent');
     }
   });
 
@@ -88,5 +91,17 @@ describe('engine-setup', () => {
     const avail = resolveEngineAvailability('codebuddy', { disabled: true });
     expect(avail.available).toBe(false);
     expect(avail.unavailableReason).toBe('引擎已禁用');
+  });
+
+  it('probeCursorApiKey rejects empty and bogus keys', () => {
+    expect(probeCursorApiKey('')).toBe('invalid');
+    expect(probeCursorApiKey('not-a-real-key')).toBe('invalid');
+  });
+
+  it('resolveEngineAvailability blocks cursor with invalid API key', () => {
+    if (!existsSync('/opt/homebrew/bin/cursor-agent')) return;
+    const avail = resolveEngineAvailability('cursor', { cursorApiKey: 'invalid-test-key' });
+    expect(avail.available).toBe(false);
+    expect(avail.unavailableReason).toMatch(/无效|401/);
   });
 });

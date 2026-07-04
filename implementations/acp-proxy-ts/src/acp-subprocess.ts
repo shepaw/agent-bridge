@@ -224,6 +224,8 @@ export class AcpSubprocess {
     });
     log('spawning ACP agent: %s %s (cwd=%s)', command, args.join(' '), this.cwd);
 
+    let stderrTail = '';
+
     const child = spawn(command, args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -243,13 +245,29 @@ export class AcpSubprocess {
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf-8').trim();
-      if (text.length > 0) log('agent stderr: %s', text);
+      const text = chunk.toString('utf-8');
+      stderrTail = (stderrTail + text).slice(-2048);
+      const line = text.trim();
+      if (line.length > 0 && line.length <= 500) {
+        log('agent stderr: %s', line);
+      } else if (line.length > 500) {
+        log('agent stderr: %s…', line.slice(0, 500));
+      }
     });
+
+    const exitError = (code: number | null, signal: NodeJS.Signals | null): Error => {
+      const hint =
+        this.spec.id === 'cursor'
+          ? ' — check CURSOR_API_KEY or run cursor-agent login'
+          : '';
+      const detail = stderrTail.trim().length > 0 ? ` stderr: ${summarizeStderr(stderrTail)}` : '';
+      return new Error(`ACP agent exited (${code ?? signal})${hint}${detail}`);
+    };
 
     child.on('exit', (code, signal) => {
       log('ACP agent exited code=%s signal=%s', code, signal);
-      this.connection?.close(new Error(`ACP agent exited (${code ?? signal})`));
+      const err = exitError(code, signal);
+      this.connection?.close(err);
       this.connection = undefined;
       this.child = undefined;
       this.initPromise = undefined;
@@ -295,30 +313,38 @@ export class AcpSubprocess {
 
     this.connection = clientApp.connect(stream);
 
-    const initResult = await this.connection.agent.request(acp.methods.agent.initialize, {
-      protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: {
-          readTextFile: true,
-          writeTextFile: true,
+    try {
+      const initResult = await this.connection.agent.request(acp.methods.agent.initialize, {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: {
+            readTextFile: true,
+            writeTextFile: true,
+          },
+          terminal: true,
         },
-        terminal: true,
-      },
-      clientInfo: {
-        name: 'shepaw-acp-proxy',
-        title: 'Shepaw ACP Proxy',
-        version: '0.2.0',
-      },
-    });
+        clientInfo: {
+          name: 'shepaw-acp-proxy',
+          title: 'Shepaw ACP Proxy',
+          version: '0.2.0',
+        },
+      });
 
-    this.agentCaps = initResult;
-    log(
-      'ACP initialized: protocol v%s agent=%s resume=%s load=%s',
-      initResult.protocolVersion,
-      initResult.agentInfo?.title ?? initResult.agentInfo?.name ?? 'unknown',
-      supportsSessionResume(initResult),
-      supportsSessionLoad(initResult),
-    );
+      this.agentCaps = initResult;
+      log(
+        'ACP initialized: protocol v%s agent=%s resume=%s load=%s',
+        initResult.protocolVersion,
+        initResult.agentInfo?.title ?? initResult.agentInfo?.name ?? 'unknown',
+        supportsSessionResume(initResult),
+        supportsSessionLoad(initResult),
+      );
+    } catch (err) {
+      const base = err instanceof Error ? err : new Error(String(err));
+      if (this.spec.id === 'cursor' && !base.message.includes('cursor-agent login')) {
+        throw new Error(`${base.message} (Cursor: invalid API key or run cursor-agent login)`);
+      }
+      throw base;
+    }
   }
 
   async stop(): Promise<void> {
@@ -673,6 +699,11 @@ export class AcpSubprocess {
     await writeFile(params.path, params.content, 'utf-8');
     return {};
   }
+}
+
+function summarizeStderr(text: string): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length <= 240 ? oneLine : `${oneLine.slice(0, 240)}…`;
 }
 
 function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

@@ -46,7 +46,7 @@ import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
 import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
-import { augmentSpawnPath, getCursorAcpCommand, resolveCursorCliBinary } from './engine-setup.js';
+import { augmentSpawnPath, getCursorAcpCommand, resolveCursorCliBinary, resolveEngineAvailability } from './engine-setup.js';
 import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
@@ -144,6 +144,17 @@ export async function startInstance(instance: InstanceConfig): Promise<{
 
     const customEngine = findCustomEngine(hubCfg.customEngines, instance.engine);
     const engineEnv = resolveEngineEnvVars(hubCfg, instance.engine);
+
+    const availability = resolveEngineAvailability(instance.engine, {
+      customCommand: customEngine?.command,
+      cursorApiKey: instance.engine === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
+    });
+    if (!availability.available) {
+      throw new Error(
+        `Engine "${instance.engine}" is not available: ${availability.unavailableReason ?? 'environment not ready'}. ` +
+          'Fix credentials or install the CLI under Settings → Engine Management.',
+      );
+    }
 
     // Authorize the device-level peer service to connect to this instance's
     // /acp/ws (it acts as a Noise IK initiator to proxy agent_chat requests

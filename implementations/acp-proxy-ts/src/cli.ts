@@ -129,7 +129,19 @@ cli
     const resolved = spawnCommand(spec, process.env);
     console.log(`  spawn: ${formatSpawnCommandLine(resolved.command, resolved.args)}\n`);
 
-    await agent.init();
+    try {
+      await agent.init();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`\nFailed to start upstream ACP agent: ${msg}`);
+      if (engine === 'cursor') {
+        console.error(
+          'Cursor hint: run `cursor-agent login` or set a valid CURSOR_API_KEY ' +
+            '(Cursor → Settings → Integrations → User API Keys).',
+        );
+      }
+      process.exit(1);
+    }
     await agent.run({ host: opts.host, port });
   });
 
