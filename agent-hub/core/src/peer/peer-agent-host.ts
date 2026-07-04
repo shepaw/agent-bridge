@@ -37,6 +37,22 @@ export interface ChatHandlers {
   onChunk: (content: string) => void;
   onDone: (fullContent: string, metadata?: Record<string, unknown>) => void;
   onError: (message: string) => void;
+  /**
+   * Request a tool-call approval decision from the user (the phone). Resolves
+   * with the selected action id (optionId), or '' to deny/cancel. The caller
+   * (peer proxy) relays this as `agent.submitResponse` to the local agent.
+   */
+  onApproval: (req: ApprovalRequest) => Promise<string>;
+}
+
+/** A tool-call approval request forwarded to the phone for a user decision. */
+export interface ApprovalRequest {
+  readonly confirmationId: string;
+  readonly taskId: string;
+  readonly prompt: string;
+  readonly actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
+  readonly toolKind?: string;
+  readonly toolCallId?: string;
 }
 
 export interface ChatRequest {
@@ -209,33 +225,54 @@ export async function chatWithInstance(
           }
 
           // Tool-call approval request: the gateway blocks the turn in
-          // waitForResponse until the client replies. The peer channel can't
-          // surface approvals to the phone, so auto-allow (least-privilege:
-          // allow_once). This keeps tool-using requests from hanging.
+          // waitForResponse until the client replies with agent.submitResponse.
+          // Relay the decision to the phone (B): send agent_approval_req over
+          // the peer channel, await agent_approval_resp, then submit. Fail
+          // closed (deny) on timeout/error.
           if (method === 'ui.actionConfirmation') {
             const params = obj.params as Record<string, unknown> | undefined;
             const confirmationId = params?.confirmation_id as string | undefined;
-            const actions = Array.isArray(params?.actions) ? (params!.actions as Array<Record<string, unknown>>) : [];
-            const allowAction =
-              actions.find((a) => a.style === 'primary') ??
-              actions.find((a) => a.id === 'allow') ??
-              actions[0];
-            const optionId = (allowAction?.id as string | undefined) ?? 'allow';
-            if (confirmationId !== undefined) {
-              try {
+            if (confirmationId === undefined) return;
+            const actions = Array.isArray(params?.actions)
+              ? (params!.actions as Array<Record<string, unknown>>).map((a) => ({
+                  id: String(a.id ?? ''),
+                  label: typeof a.label === 'string' ? a.label : undefined,
+                  style: typeof a.style === 'string' ? a.style : undefined,
+                }))
+              : [];
+            const extra = (params?.extra as Record<string, unknown> | undefined) ?? {};
+            void Promise.resolve(
+              handlers.onApproval({
+                confirmationId,
+                taskId,
+                prompt: (params?.prompt as string | undefined) ?? '',
+                actions,
+                toolKind: typeof extra.tool_kind === 'string' ? extra.tool_kind : undefined,
+                toolCallId: typeof extra.tool_call_id === 'string' ? extra.tool_call_id : undefined,
+              }),
+            )
+              .then((selected) => {
                 send({
                   jsonrpc: '2.0',
                   id: rpcId++,
                   method: 'agent.submitResponse',
                   params: {
                     task_id: taskId,
-                    response_data: { confirmation_id: confirmationId, selected_action_id: optionId },
+                    response_data: { confirmation_id: confirmationId, selected_action_id: selected ?? '' },
                   },
                 });
-              } catch {
-                /* ignore */
-              }
-            }
+              })
+              .catch(() => {
+                send({
+                  jsonrpc: '2.0',
+                  id: rpcId++,
+                  method: 'agent.submitResponse',
+                  params: {
+                    task_id: taskId,
+                    response_data: { confirmation_id: confirmationId, selected_action_id: '' },
+                  },
+                });
+              });
             return;
           }
 
@@ -281,9 +318,11 @@ export async function chatWithInstance(
 
       // Safety net: never let a chat hang forever (e.g. an unannounced approval
       // or a wedged upstream). 10 min matches the gateway's own tolerance.
+      // Safety net: never let a chat hang forever. 30 min accounts for a user
+      // approval pause (proxied to the phone) plus task runtime.
       const safetyTimer = setTimeout(() => {
         finish(() => handlers.onError('agent turn timed out'));
-      }, 10 * 60 * 1000);
+      }, 30 * 60 * 1000);
     });
   } finally {
     close();

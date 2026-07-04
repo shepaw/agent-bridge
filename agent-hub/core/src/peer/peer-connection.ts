@@ -32,6 +32,9 @@ export async function drivePeerConnection(opts: {
 }): Promise<void> {
   const { ws, session, peerIdentity, peerId, log } = opts;
   const inflight = new Map<string, InflightChat>();
+  // Pending tool-call approvals: confirmationId → resolver. The phone replies
+  // with agent_approval_resp; on disconnect/timeout we resolve '' (deny).
+  const pendingApprovals = new Map<string, (selected: string) => void>();
   let lastActivity = Date.now();
   let closed = false;
 
@@ -39,6 +42,35 @@ export async function drivePeerConnection(opts: {
     if (closed || ws.readyState !== ws.OPEN) return;
     const ct = session.encrypt(Buffer.from(JSON.stringify(obj), 'utf-8'));
     ws.send(encodeFrame({ t: 'data', payload: ct }));
+  };
+
+  /** Relay a tool-call approval to the phone and await its decision. */
+  const requestApproval = (chatRequestId: string, req: {
+    confirmationId: string; taskId: string; prompt: string;
+    actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
+    toolKind?: string; toolCallId?: string;
+  }): Promise<string> => {
+    send({
+      type: 'agent_approval_req',
+      approval_id: req.confirmationId,
+      request_id: chatRequestId,
+      task_id: req.taskId,
+      prompt: req.prompt,
+      actions: req.actions,
+      ...(req.toolKind !== undefined ? { tool_kind: req.toolKind } : {}),
+      ...(req.toolCallId !== undefined ? { tool_call_id: req.toolCallId } : {}),
+    });
+    return new Promise<string>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingApprovals.delete(req.confirmationId);
+        log(`approval ${req.confirmationId} timed out → deny`);
+        resolve(''); // fail closed
+      }, 5 * 60 * 1000);
+      pendingApprovals.set(req.confirmationId, (selected) => {
+        clearTimeout(timer);
+        resolve(selected);
+      });
+    });
   };
 
   const handleAgentChat = async (params: Record<string, unknown>): Promise<void> => {
@@ -60,6 +92,7 @@ export async function drivePeerConnection(opts: {
           onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
           onDone: (content, metadata) => { log(`agent_done req=${requestId}`); send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }); },
           onError: (msg) => { log(`agent_error req=${requestId}: ${msg}`); send({ type: 'agent_error', request_id: requestId, message: msg }); },
+          onApproval: (a) => requestApproval(requestId, a),
         },
       );
     } catch (err) {
@@ -99,6 +132,20 @@ export async function drivePeerConnection(opts: {
           }
           break;
         }
+        case 'agent_approval_resp': {
+          // Phone user's tool-call decision; resolve the pending approval.
+          const aid = obj.approval_id as string | undefined;
+          const sel = obj.selected_action_id as string | undefined;
+          if (aid !== undefined) {
+            const resolver = pendingApprovals.get(aid);
+            if (resolver !== undefined) {
+              pendingApprovals.delete(aid);
+              log(`approval ${aid} → ${sel && sel.length > 0 ? 'allow' : 'deny'}`);
+              resolver(sel ?? '');
+            }
+          }
+          break;
+        }
         case 'message':
         case 'ack':
           // Phase 1: no chat persistence; acknowledged but ignored.
@@ -129,16 +176,15 @@ export async function drivePeerConnection(opts: {
   }, HEARTBEAT_INTERVAL_MS);
 
   await new Promise<void>((resolve) => {
-    ws.once('close', () => {
+    const teardown = (): void => {
       closed = true;
       clearInterval(heartbeat);
-      log(`peer ${peerId} disconnected`);
+      // Fail-closed any pending approvals so local agents don't hang.
+      for (const resolver of pendingApprovals.values()) resolver('');
+      pendingApprovals.clear();
       resolve();
-    });
-    ws.once('error', () => {
-      closed = true;
-      clearInterval(heartbeat);
-      resolve();
-    });
+    };
+    ws.once('close', () => { log(`peer ${peerId} disconnected`); teardown(); });
+    ws.once('error', teardown);
   });
 }
