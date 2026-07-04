@@ -15,6 +15,7 @@ export function PeerPairingPanel() {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = async () => {
@@ -91,6 +92,20 @@ export function PeerPairingPanel() {
           <p style={{ color: '#a6e3a1', fontSize: 24, letterSpacing: 6, margin: '12px 0 4px' }}>{pairing.code}</p>
           <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>{secondsLeft > 0 ? `${secondsLeft}s 后过期` : '已过期'}</p>
           <p style={{ color: '#6c7086', fontSize: 12, marginTop: 8 }}>入口：{pairing.localEndpoint}</p>
+          <div style={linkBox}>
+            <div style={linkLabel}>配对链接(无摄像头可粘贴此链接到 app「Device Pairing → 输入」)</div>
+            <div style={linkRow}>
+              <code style={linkCode} title={pairing.qrPayload}>{pairing.qrPayload}</code>
+              <button
+                style={copyBtn}
+                onClick={() => { try { void navigator.clipboard.writeText(pairing.qrPayload); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ } }}
+              >{copied ? '已复制' : '复制'}</button>
+            </div>
+            <div style={linkHint}>
+              Android 模拟器:把链接里的 <code>{'192.168.x.x'}</code> 改成 <code>10.0.2.2</code>;
+              iOS 模拟器可用 <code>localhost</code>。
+            </div>
+          </div>
         </div>
       )}
 
@@ -124,6 +139,12 @@ const code: React.CSSProperties = { background: '#181825', border: '1px solid #3
 const primaryBtn: React.CSSProperties = { background: '#89b4fa', color: '#1e1e2e', border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', fontWeight: 600 };
 const dangerBtn: React.CSSProperties = { background: '#452632', color: '#f38ba8', border: '1px solid #f38ba8', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontSize: 12 };
 const qrBlock: React.CSSProperties = { textAlign: 'center', marginBottom: 16 };
+const linkBox: React.CSSProperties = { marginTop: 14, padding: '10px 12px', background: '#11111b', border: '1px solid #313244', borderRadius: 6, textAlign: 'left' };
+const linkLabel: React.CSSProperties = { color: '#a6adc8', fontSize: 12, marginBottom: 6 };
+const linkRow: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'stretch' };
+const linkCode: React.CSSProperties = { flex: 1, padding: '6px 8px', background: '#181825', border: '1px solid #313244', borderRadius: 4, color: '#89dceb', fontSize: 11, wordBreak: 'break-all', overflow: 'hidden' };
+const copyBtn: React.CSSProperties = { background: '#313244', color: '#cdd6f4', border: '1px solid #45475a', borderRadius: 4, padding: '0 12px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' };
+const linkHint: React.CSSProperties = { color: '#6c7086', fontSize: 11, marginTop: 8, lineHeight: 1.5 };
 const section: React.CSSProperties = { marginTop: 16, borderTop: '1px solid #313244', paddingTop: 14 };
 const sectionTitle: React.CSSProperties = { margin: '0 0 8px', color: '#cdd6f4', fontSize: 14 };
 const deviceRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #313244' };
