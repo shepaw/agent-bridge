@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { isBuiltinEngine, type BuiltinAgentEngine } from './engines.js';
+import { findCustomEngine, isBuiltinEngine, type BuiltinAgentEngine, type CustomEngineDefinition, type EngineInfo } from './engines.js';
 
 export interface EngineSetupStep {
   readonly title: string;
@@ -46,6 +46,11 @@ export interface EngineInstallStatus {
   readonly checkError: string | null;
 }
 
+export interface EngineAvailability extends EngineInstallStatus {
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+}
+
 export interface EngineInstallResult {
   readonly ok: boolean;
   readonly stdout: string;
@@ -56,10 +61,8 @@ export interface EngineInstallResult {
 /** Built-in upstream ACP spawn commands (mirrors acp-proxy-ts/src/engines.ts). */
 export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = {
   'claude-code': 'npx -y @agentclientprotocol/claude-agent-acp@latest',
-  tclaude: 'npx -y @agentclientprotocol/claude-agent-acp@latest',
   codebuddy: 'codebuddy --acp',
   codex: 'npx -y @zed-industries/codex-acp@latest',
-  tcodex: 'npx -y @zed-industries/codex-acp@latest',
   opencode: 'npx -y opencode-ai@latest acp',
   openclaw: 'npx -y openclaw acp',
   cursor: 'agent acp',
@@ -95,21 +98,6 @@ const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
         description: '首次启动也会自动下载；一键安装会预先拉取适配器包。',
         command: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
       },
-    ],
-  },
-  tclaude: {
-    engineId: 'tclaude',
-    summary: 'TClaude 与 Claude Code 共用同一 ACP 适配器，凭据与路由由 Hub 内部处理。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.tclaude,
-    checkBinary: 'npx',
-    installable: true,
-    installCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
-    requiredEnvVars: [
-      { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API Key' },
-    ],
-    steps: [
-      { title: '安装 Node.js', description: '需要 Node.js 18+ 与 npx。', command: 'node --version' },
-      { title: '配置凭据', description: '在默认凭据区设置 ANTHROPIC_API_KEY 等变量。' },
     ],
   },
   codebuddy: {
@@ -158,19 +146,6 @@ const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
         command: 'npx -y @zed-industries/codex-acp@latest --version',
         description: '一键安装会预先下载 Codex ACP 包。',
       },
-    ],
-  },
-  tcodex: {
-    engineId: 'tcodex',
-    summary: 'TCodex 与 Codex 共用 ACP 适配器。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.tcodex,
-    checkBinary: 'npx',
-    installable: true,
-    installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
-    requiredEnvVars: [{ key: 'OPENAI_API_KEY', description: 'OpenAI API Key' }],
-    steps: [
-      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
-      { title: '配置凭据', description: '设置 OPENAI_API_KEY。' },
     ],
   },
   opencode: {
@@ -334,6 +309,73 @@ export function resolveBinaryPath(
     if (line) return line;
   }
   return null;
+}
+
+export function checkCustomEngineInstallStatus(command: string): EngineInstallStatus {
+  const binaryPath = resolveBinaryPath(command, [...SPAWN_PATH_PREFIXES]);
+  if (binaryPath === null) {
+    return {
+      installed: false,
+      binaryPath: null,
+      version: null,
+      checkError: `未找到 ${command} 命令`,
+    };
+  }
+  return {
+    installed: true,
+    binaryPath,
+    version: probeVersion(binaryPath, command),
+    checkError: null,
+  };
+}
+
+/**
+ * Whether an engine can be selected for new instances: not disabled and CLI/runtime present.
+ */
+export function resolveEngineAvailability(
+  engineId: string,
+  opts: { disabled?: boolean; customCommand?: string } = {},
+): EngineAvailability {
+  const status = opts.customCommand !== undefined
+    ? checkCustomEngineInstallStatus(opts.customCommand)
+    : checkEngineInstallStatus(engineId);
+
+  if (opts.disabled === true) {
+    return {
+      ...status,
+      available: false,
+      unavailableReason: '引擎已禁用',
+    };
+  }
+  if (!status.installed) {
+    return {
+      ...status,
+      available: false,
+      unavailableReason: status.checkError ?? '运行环境未就绪',
+    };
+  }
+  return {
+    ...status,
+    available: true,
+    unavailableReason: null,
+  };
+}
+
+export function enrichEngineInfo(
+  info: EngineInfo,
+  customEngines: readonly CustomEngineDefinition[],
+  disabled: boolean,
+): EngineInfo {
+  const custom = findCustomEngine(customEngines, info.id);
+  const avail = resolveEngineAvailability(info.id, {
+    disabled,
+    customCommand: custom?.command,
+  });
+  return {
+    ...info,
+    available: avail.available,
+    unavailableReason: avail.unavailableReason,
+  };
 }
 
 export function checkEngineInstallStatus(engineId: string): EngineInstallStatus {

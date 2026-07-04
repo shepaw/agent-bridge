@@ -8,6 +8,7 @@ import {
   isBuiltinEngineId,
   listBuiltinEngineIds,
   listEngineIds,
+  resolveEngineSpec,
   spawnCommand,
 } from '../src/engines.js';
 import { mapSessionUpdate } from '../src/session-mapper.js';
@@ -16,17 +17,19 @@ describe('engines', () => {
   it('lists all supported agents', () => {
     const ids = listBuiltinEngineIds();
     expect(ids).toContain('claude-code');
-    expect(ids).toContain('tclaude');
     expect(ids).toContain('codebuddy');
     expect(ids).toContain('codex');
-    expect(ids).toContain('tcodex');
     expect(ids).toContain('cursor');
     expect(ids.length).toBe(Object.keys(ACP_ENGINES).length);
   });
 
-  it('tclaude and tcodex use the same spawn command as their upstream counterparts', () => {
-    expect(getEngineSpec('tclaude').args).toEqual(getBuiltinEngineSpec('claude-code').args);
-    expect(getEngineSpec('tcodex').args).toEqual(getBuiltinEngineSpec('codex').args);
+  it('resolves custom engine via acp-command override', () => {
+    const spec = resolveEngineSpec('tclaude', {
+      acpCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest',
+      displayName: 'TClaude',
+    });
+    expect(spec.id).toBe('tclaude');
+    expect(spec.command).toBe('npx');
   });
 
   it('validates engine ids', () => {

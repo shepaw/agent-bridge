@@ -8,9 +8,7 @@ import { validateInstanceId } from './paths.js';
 export const BUILTIN_ENGINE_IDS = [
   'codebuddy',
   'claude-code',
-  'tclaude',
   'codex',
-  'tcodex',
   'opencode',
   'openclaw',
   'cursor',
@@ -25,9 +23,7 @@ export type AgentEngine = BuiltinAgentEngine | (string & {});
 export const BUILTIN_ENGINE_LABELS: Record<BuiltinAgentEngine, string> = {
   codebuddy: 'CodeBuddy Code',
   'claude-code': 'Claude Code',
-  tclaude: 'TClaude',
   codex: 'Codex',
-  tcodex: 'TCodex',
   opencode: 'OpenCode',
   openclaw: 'OpenClaw',
   cursor: 'Cursor',
@@ -58,6 +54,10 @@ export interface EngineInfo {
   readonly builtin: boolean;
   /** True when an operator has disabled this engine via overrides. */
   readonly disabled?: boolean;
+  /** False when disabled or upstream CLI / runtime is not installed. */
+  readonly available?: boolean;
+  /** Human-readable reason when {@link available} is false. */
+  readonly unavailableReason?: string | null;
 }
 
 export class CustomEngineExistsError extends Error {

@@ -4,6 +4,7 @@ import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
 import { AddInstanceModal } from './components/AddInstanceModal.js';
 import { SettingsPage } from './components/SettingsPage.js';
+import { buildSettingsHash, parseSettingsHash, type SettingsTab } from './utils/settingsRoute.js';
 
 /** Read instance id from URL hash, e.g. "#instance/my-instance" → "my-instance" */
 function getHashInstanceId(): string | null {
@@ -11,33 +12,47 @@ function getHashInstanceId(): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
-/** True when the hash routes to the unified settings page. */
-function isSettingsRoute(): boolean {
-  return location.hash === '#settings';
+function getInitialSettingsRoute() {
+  return parseSettingsHash(location.hash);
 }
 
 export function App() {
   const { instances, loading, error, reload } = useInstances();
+  const initialSettings = getInitialSettingsRoute();
   const [selected, setSelected] = useState<string | null>(getHashInstanceId);
-  const [showSettings, setShowSettings] = useState(isSettingsRoute());
+  const [showSettings, setShowSettings] = useState(initialSettings.active);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
+  const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [showAdd, setShowAdd] = useState(false);
+
+  const openEngineSettings = (engineId: string) => {
+    setShowAdd(false);
+    setSelected(null);
+    setShowSettings(true);
+    setSettingsTab('engines');
+    setFocusEngineId(engineId);
+    location.hash = buildSettingsHash('engines', engineId);
+  };
 
   // Keep URL hash in sync with the active view
   useEffect(() => {
     if (selected) {
       location.hash = `instance/${encodeURIComponent(selected)}`;
     } else if (showSettings) {
-      location.hash = 'settings';
+      location.hash = buildSettingsHash(settingsTab, focusEngineId ?? undefined);
     } else {
       history.replaceState(null, '', location.pathname + location.search);
     }
-  }, [selected, showSettings]);
+  }, [selected, showSettings, settingsTab, focusEngineId]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
     const onHashChange = () => {
       setSelected(getHashInstanceId());
-      setShowSettings(isSettingsRoute());
+      const route = parseSettingsHash(location.hash);
+      setShowSettings(route.active);
+      setSettingsTab(route.tab);
+      setFocusEngineId(route.focusEngineId);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -64,12 +79,21 @@ export function App() {
             <p style={subtitle}>全局设置 · 引擎管理 · 设备配对</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={secondaryBtn} onClick={() => setShowSettings(false)}>
-              ← 返回实例
-            </button>
-          </div>
+          <button style={secondaryBtn} onClick={() => {
+            setShowSettings(false);
+            setSettingsTab('global');
+            setFocusEngineId(null);
+          }}>
+            ← 返回实例
+          </button>
         </div>
-        <SettingsPage />
+      </div>
+        <SettingsPage
+          tab={settingsTab}
+          onTabChange={setSettingsTab}
+          focusEngineId={focusEngineId}
+          onFocusEngineHandled={() => setFocusEngineId(null)}
+        />
       </Layout>
     );
   }
@@ -91,7 +115,11 @@ export function App() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button style={secondaryBtn} onClick={() => setShowSettings(true)}>
+          <button style={secondaryBtn} onClick={() => {
+            setSettingsTab('global');
+            setFocusEngineId(null);
+            setShowSettings(true);
+          }}>
             设置
           </button>
           <button style={addBtn} onClick={() => setShowAdd(true)}>
@@ -126,6 +154,7 @@ export function App() {
         <AddInstanceModal
           onClose={() => setShowAdd(false)}
           onCreated={reload}
+          onOpenEngineSettings={openEngineSettings}
         />
       )}
     </Layout>

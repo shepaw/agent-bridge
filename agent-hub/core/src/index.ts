@@ -145,12 +145,16 @@ export type { InstanceSessionEntry } from './sessions.js';
 export {
   BUILTIN_ENGINE_ACP_COMMANDS,
   augmentSpawnPath,
+  checkCustomEngineInstallStatus,
   checkEngineInstallStatus,
+  enrichEngineInfo,
   getEngineSetupGuide,
   resolveBinaryPath,
+  resolveEngineAvailability,
   runEngineInstall,
 } from './engine-setup.js';
 export type {
+  EngineAvailability,
   EngineEnvVarHint,
   EngineInstallResult,
   EngineInstallStatus,

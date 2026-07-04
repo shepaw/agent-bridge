@@ -20,22 +20,24 @@ import {
   CustomEngineExistsError,
   CustomEngineInUseError,
   CustomEngineNotFoundError,
+  checkCustomEngineInstallStatus,
   checkEngineInstallStatus,
   deleteEngineEnvVar,
   decryptValue,
   engineEnvVarKeys,
+  enrichEngineInfo,
   getEngineSetupGuide,
   isKnownEngineForOverrides,
   listEngineInfos,
   loadOrCreateHubConfig,
   removeCustomEngineFromHub,
+  resolveEngineAvailability,
   runEngineInstall,
   setEngineEnvVar,
   setEngineOverride,
   updateCustomEngineInHub,
   findCustomEngine,
   formatShellCommand,
-  resolveBinaryPath,
 } from '@shepaw/agent-hub-core';
 import { hubRoot } from '@shepaw/agent-hub-core';
 import { parseApprovalBody } from './approval.js';
@@ -61,9 +63,11 @@ enginesRouter.get('/', (_req: Request, res: Response) => {
     const overrides = cfg.engineOverrides ?? {};
     const engines = listEngineInfos(cfg.customEngines, overrides).map((info) => {
       const ov = overrides[info.id];
+      const disabled = ov?.disabled === true;
+      const enriched = enrichEngineInfo(info, cfg.customEngines, disabled);
       return {
-        ...info,
-        disabled: ov?.disabled === true,
+        ...enriched,
+        disabled,
         approval: ov?.approval ?? null,
         envVarKeys: engineEnvVarKeys(cfg, info.id),
       };
@@ -113,23 +117,7 @@ enginesRouter.get('/:id/setup', (req: Request, res: Response) => {
       };
     }
     const status = custom !== undefined
-      ? (() => {
-          const binaryPath = resolveBinaryPath(custom.command, []);
-          if (binaryPath === null) {
-            return {
-              installed: false,
-              binaryPath: null,
-              version: null,
-              checkError: `未找到 ${custom.command} 命令`,
-            };
-          }
-          return {
-            installed: true,
-            binaryPath,
-            version: null,
-            checkError: null,
-          };
-        })()
+      ? checkCustomEngineInstallStatus(custom.command)
       : checkEngineInstallStatus(engineId);
     const disabled = cfg.engineOverrides?.[engineId]?.disabled === true;
     res.json({ guide, status, disabled });

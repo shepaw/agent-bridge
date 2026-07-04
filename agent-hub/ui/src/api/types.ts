@@ -3,9 +3,7 @@
 export type AgentEngine =
   | 'codebuddy'
   | 'claude-code'
-  | 'tclaude'
   | 'codex'
-  | 'tcodex'
   | 'opencode'
   | 'openclaw'
   | 'cursor'
@@ -100,6 +98,9 @@ export interface EngineInfo {
   approval?: ApprovalPolicy | null;
   /** Engine-default env var key names (values never exposed). */
   envVarKeys?: string[];
+  /** False when disabled or upstream CLI is missing. */
+  available?: boolean;
+  unavailableReason?: string | null;
 }
 
 export interface CreateCustomEngineInput {

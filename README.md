@@ -61,7 +61,7 @@ node dist/cli.js serve --engine claude-code --cwd ~/your-project --port 8090
 node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
 ```
 
-Supported `--engine` values: `claude-code`, `tclaude`, `codebuddy`, `codex`, `tcodex`,
+Supported `--engine` values: `claude-code`, `codebuddy`, `codex`,
 `opencode`, `openclaw`, `cursor`, `hermes`. See
 [`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
 

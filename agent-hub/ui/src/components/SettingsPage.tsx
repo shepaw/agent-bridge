@@ -1,10 +1,8 @@
-import { useState } from 'react';
 import { GatewaySettingsPanel } from './GatewaySettingsModal.js';
 import { DevicePairingPanel } from './DevicePairingModal.js';
 import { EngineManager } from './EngineManager.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
-
-type Tab = 'global' | 'engines' | 'peer';
+import type { SettingsTab } from '../utils/settingsRoute.js';
 
 /**
  * Unified settings page. Hosts the three configuration surfaces:
@@ -14,15 +12,23 @@ type Tab = 'global' | 'engines' | 'peer';
  * Instances (agent instances) live on the main dashboard; per-instance approval
  * is edited in InstanceDetail.
  */
-export function SettingsPage() {
-  const [tab, setTab] = useState<Tab>('global');
-
+export function SettingsPage({
+  tab,
+  onTabChange,
+  focusEngineId,
+  onFocusEngineHandled,
+}: {
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
+  focusEngineId: string | null;
+  onFocusEngineHandled: () => void;
+}) {
   return (
     <div>
       <div style={tabs}>
-        <button style={tabBtn(tab === 'global')} onClick={() => setTab('global')}>全局设置</button>
-        <button style={tabBtn(tab === 'engines')} onClick={() => setTab('engines')}>引擎管理</button>
-        <button style={tabBtn(tab === 'peer')} onClick={() => setTab('peer')}>Peer 配对</button>
+        <button style={tabBtn(tab === 'global')} onClick={() => onTabChange('global')}>全局设置</button>
+        <button style={tabBtn(tab === 'engines')} onClick={() => onTabChange('engines')}>引擎管理</button>
+        <button style={tabBtn(tab === 'peer')} onClick={() => onTabChange('peer')}>Peer 配对</button>
       </div>
 
       <div style={panel}>
@@ -48,7 +54,10 @@ export function SettingsPage() {
           <section style={card}>
             <h3 style={cardTitle}>引擎管理</h3>
             <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认凭据与审核策略。</p>
-            <EngineManager />
+            <EngineManager
+              focusEngineId={focusEngineId}
+              onFocusEngineHandled={onFocusEngineHandled}
+            />
           </section>
         )}
 

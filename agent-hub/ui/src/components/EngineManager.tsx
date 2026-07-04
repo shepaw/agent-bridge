@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import type {
   ApprovalPolicy,
@@ -14,7 +14,13 @@ import { ApprovalPolicyEditor, emptyApprovalPolicy } from './ApprovalPolicyEdito
  * per-engine overrides — enable/disable, display name + ACP command (custom
  * only), default credentials, and a default tool-call approval policy.
  */
-export function EngineManager() {
+export function EngineManager({
+  focusEngineId = null,
+  onFocusEngineHandled,
+}: {
+  focusEngineId?: string | null;
+  onFocusEngineHandled?: () => void;
+}) {
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -74,7 +80,14 @@ export function EngineManager() {
 
       <div style={listCol}>
         {engines.map((eng) => (
-          <EngineRow key={eng.id} engine={eng} onChanged={load} />
+          <EngineRow
+            key={eng.id}
+            engine={eng}
+            onChanged={load}
+            initialOpen={eng.id === focusEngineId}
+            highlight={eng.id === focusEngineId}
+            onOpened={eng.id === focusEngineId ? onFocusEngineHandled : undefined}
+          />
         ))}
       </div>
 
@@ -83,8 +96,21 @@ export function EngineManager() {
   );
 }
 
-function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
+function EngineRow({
+  engine,
+  onChanged,
+  initialOpen = false,
+  highlight = false,
+  onOpened,
+}: {
+  engine: EngineInfo;
+  onChanged: () => void;
+  initialOpen?: boolean;
+  highlight?: boolean;
+  onOpened?: () => void;
+}) {
+  const [open, setOpen] = useState(initialOpen);
+  const rowRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -106,6 +132,20 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
     setAcpCommand(engine.acpCommand);
     setApproval(engine.approval ?? emptyApprovalPolicy());
   }, [engine]);
+
+  useEffect(() => {
+    if (initialOpen) {
+      setOpen(true);
+      void loadEnv();
+    }
+  }, [initialOpen]);
+
+  useEffect(() => {
+    if (highlight && open && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      onOpened?.();
+    }
+  }, [highlight, open, onOpened]);
 
   const loadEnv = async () => {
     try {
@@ -216,7 +256,7 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
   };
 
   return (
-    <div style={row}>
+    <div ref={rowRef} style={{ ...row, ...(highlight ? rowHighlight : {}) }}>
       <div style={rowHead}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <strong style={{ color: engine.disabled ? '#6c7086' : '#cdd6f4' }}>{engine.displayName}</strong>
@@ -224,6 +264,14 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
           <span style={{ ...tag, background: engine.builtin ? '#3a4a2a' : '#313244', color: engine.builtin ? '#a6e3a1' : '#cdd6f4' }}>
             {engine.builtin ? '内置' : '自定义'}
           </span>
+          {engine.available === true && (
+            <span style={{ ...tag, background: '#3a4a2a', color: '#a6e3a1' }}>可用</span>
+          )}
+          {engine.available === false && (
+            <span style={{ ...tag, background: '#452632', color: '#f38ba8' }} title={engine.unavailableReason ?? undefined}>
+              不可用
+            </span>
+          )}
           {engine.disabled && <span style={{ ...tag, background: '#452632', color: '#f38ba8' }}>已禁用</span>}
           {engine.approval && <span style={{ ...tag, background: '#2a3a4a', color: '#89dceb' }}>审核: {engine.approval.mode}</span>}
           {engine.envVarKeys && engine.envVarKeys.length > 0 && (
@@ -485,6 +533,7 @@ const sectionTitle: React.CSSProperties = { margin: '0 0 10px', color: '#cdd6f4'
 const hint: React.CSSProperties = { color: '#6c7086', fontSize: 12, margin: '0 0 10px' };
 const listCol: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 };
 const row: React.CSSProperties = { background: '#181825', border: '1px solid #313244', borderRadius: 8, padding: 12 };
+const rowHighlight: React.CSSProperties = { borderColor: '#89b4fa', boxShadow: '0 0 0 1px #89b4fa33' };
 const rowHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' };
 const rowBody: React.CSSProperties = { marginTop: 12, borderTop: '1px solid #313244', paddingTop: 12 };
 const subSection: React.CSSProperties = { marginBottom: 16 };

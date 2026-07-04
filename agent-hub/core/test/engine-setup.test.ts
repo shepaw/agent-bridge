@@ -13,6 +13,7 @@ import {
   checkEngineInstallStatus,
   getEngineSetupGuide,
   resolveBinaryPath,
+  resolveEngineAvailability,
 } from '../src/engine-setup.js';
 
 describe('engine-setup', () => {
@@ -54,13 +55,21 @@ describe('engine-setup', () => {
   });
 
   it('augmentSpawnPath prepends existing directories', () => {
-    fakeBin = mkdtempSync(join(tmpdir(), 'shepaw-path-'));
-    expect(existsSync(fakeBin)).toBe(true);
-
-    const originalPrefixes = process.env.SHEPAW_TEST_BIN;
-    // augmentSpawnPath uses fixed SPAWN_PATH_PREFIXES; verify it does not throw
     const next = augmentSpawnPath({ PATH: '/usr/bin' });
     expect(next.PATH).toBeTruthy();
-    if (originalPrefixes !== undefined) process.env.SHEPAW_TEST_BIN = originalPrefixes;
+  });
+
+  it('resolveEngineAvailability marks missing CLI as unavailable', () => {
+    const avail = resolveEngineAvailability('cursor');
+    if (!avail.installed) {
+      expect(avail.available).toBe(false);
+      expect(avail.unavailableReason).toBeTruthy();
+    }
+  });
+
+  it('resolveEngineAvailability respects disabled flag', () => {
+    const avail = resolveEngineAvailability('codebuddy', { disabled: true });
+    expect(avail.available).toBe(false);
+    expect(avail.unavailableReason).toBe('引擎已禁用');
   });
 });

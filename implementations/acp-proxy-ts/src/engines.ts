@@ -13,10 +13,8 @@ import { parseShellCommand } from './command-line.js';
 
 export type BuiltinEngineId =
   | 'claude-code'
-  | 'tclaude'
   | 'codebuddy'
   | 'codex'
-  | 'tcodex'
   | 'opencode'
   | 'openclaw'
   | 'cursor'
@@ -50,13 +48,6 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     args: ['-y', '@agentclientprotocol/claude-agent-acp@latest'],
     defaultAgentName: 'Claude Code',
   },
-  tclaude: {
-    id: 'tclaude',
-    displayName: 'TClaude',
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/claude-agent-acp@latest'],
-    defaultAgentName: 'TClaude',
-  },
   codebuddy: {
     id: 'codebuddy',
     displayName: 'CodeBuddy Code',
@@ -70,13 +61,6 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     command: 'npx',
     args: ['-y', '@zed-industries/codex-acp@latest'],
     defaultAgentName: 'Codex',
-  },
-  tcodex: {
-    id: 'tcodex',
-    displayName: 'TCodex',
-    command: 'npx',
-    args: ['-y', '@zed-industries/codex-acp@latest'],
-    defaultAgentName: 'TCodex',
   },
   opencode: {
     id: 'opencode',

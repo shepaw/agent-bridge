@@ -31,6 +31,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { resolveEngineAvailability } from './engine-setup.js';
 import { hubConfigPath, validateInstanceId, normalizeCwd, hubRoot } from './paths.js';
 import { encryptEnvVars, encryptValue, decryptValue, decryptEnvVars } from './crypto.js';
 import {
@@ -650,6 +651,16 @@ export function addInstance(
       `Engine "${normalized.engine}" is disabled. Enable it in the dashboard settings before adding a instance that uses it.`,
     );
   }
+  const customEngine = findCustomEngine(config.customEngines, normalized.engine);
+  const availability = resolveEngineAvailability(normalized.engine, {
+    customCommand: customEngine?.command,
+  });
+  if (!availability.available) {
+    throw new Error(
+      `Engine "${normalized.engine}" is not available: ${availability.unavailableReason ?? 'environment not ready'}. ` +
+        'Install it under Settings → Engine Management in the dashboard.',
+    );
+  }
 
   const next = [...config.instances, normalized];
   persist(config.path, next, hubPersistMeta(config));
@@ -736,6 +747,18 @@ export function updateInstance(
     throw new Error(
       `Engine "${rest.engine}" is disabled. Enable it before switching a instance to it.`,
     );
+  }
+  if (rest.engine !== undefined) {
+    const customEngine = findCustomEngine(config.customEngines, rest.engine);
+    const availability = resolveEngineAvailability(rest.engine, {
+      customCommand: customEngine?.command,
+    });
+    if (!availability.available) {
+      throw new Error(
+        `Engine "${rest.engine}" is not available: ${availability.unavailableReason ?? 'environment not ready'}. ` +
+          'Install it under Settings → Engine Management in the dashboard.',
+      );
+    }
   }
   const next: InstanceConfig = {
     ...existing,
