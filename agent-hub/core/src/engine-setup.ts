@@ -37,6 +37,33 @@ export interface EngineSetupGuide {
   readonly checkPaths?: readonly string[];
   readonly requiredEnvVars?: readonly EngineEnvVarHint[];
   readonly installable: boolean;
+  /** Hub host OS this guide was generated for (install commands run on the Hub machine). */
+  readonly platform?: HubPlatform;
+  readonly platformLabel?: string;
+}
+
+/** Normalized OS for setup guides and install scripts (Hub server side). */
+export type HubPlatform = 'darwin' | 'linux' | 'win32';
+
+export function detectHubPlatform(platform: NodeJS.Platform = process.platform): HubPlatform {
+  if (platform === 'win32') return 'win32';
+  if (platform === 'darwin') return 'darwin';
+  return 'linux';
+}
+
+export function hubPlatformLabel(platform: HubPlatform): string {
+  switch (platform) {
+    case 'darwin':
+      return 'macOS';
+    case 'win32':
+      return 'Windows';
+    case 'linux':
+      return 'Linux';
+  }
+}
+
+function withPlatformMeta(guide: EngineSetupGuide, platform: HubPlatform): EngineSetupGuide {
+  return { ...guide, platform, platformLabel: hubPlatformLabel(platform) };
 }
 
 export interface EngineInstallStatus {
@@ -74,10 +101,21 @@ const LOCAL_BIN = join(homedir(), '.local', 'bin');
 /** Cursor CLI may be installed as `agent` or `cursor-agent` (Homebrew cask). */
 export const CURSOR_CLI_BINARIES = ['agent', 'cursor-agent'] as const;
 
-export function cursorCliSearchPaths(): string[] {
+export function cursorCliSearchPaths(platform: HubPlatform = detectHubPlatform()): string[] {
   const paths = [LOCAL_BIN, join(homedir(), '.codebuddy', 'bin')];
-  if (process.platform === 'darwin') {
+  if (platform === 'darwin') {
     paths.push('/opt/homebrew/bin', '/usr/local/bin');
+  }
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      paths.push(join(localAppData, 'cursor-agent'));
+      paths.push(join(localAppData, 'Programs', 'cursor-agent'));
+    }
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) {
+      paths.push(join(userProfile, '.local', 'bin'));
+    }
   }
   return paths;
 }
@@ -98,7 +136,7 @@ export function detectLocalDirPermissionIssue(): string | null {
     if (st.uid !== uid) {
       return (
         `~/.local 目录属主异常（当前用户无法写入），官方 curl 安装会失败。` +
-        ` macOS 请改用：brew install --cask cursor-cli`
+        ` 请检查目录权限，或按当前系统文档使用其他安装方式。`
       );
     }
   } catch {
@@ -226,172 +264,268 @@ function resolveCursorAuthAvailability(
   return null;
 }
 
-const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
-  'claude-code': {
-    engineId: 'claude-code',
-    summary: '通过 npx 拉取 Claude Code 官方 ACP 适配器；需要 Node.js 与 Anthropic 凭据。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['claude-code'],
-    docsUrl: 'https://agentclientprotocol.com',
-    checkBinary: 'npx',
-    installable: true,
-    installCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
-    requiredEnvVars: [
-      { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API Key（或在下方凭据区配置）' },
-    ],
-    steps: [
-      {
-        title: '安装 Node.js',
-        description: '需要 Node.js 18+ 与 npm/npx。可从 https://nodejs.org 安装，或使用 nvm。',
-        command: 'node --version && npx --version',
-      },
-      {
-        title: '配置 Anthropic 凭据',
-        description: '在下方「默认凭据」添加 ANTHROPIC_API_KEY，或在实例环境变量中覆盖。',
-      },
-      {
-        title: '预热 ACP 包（可选）',
-        description: '首次启动也会自动下载；一键安装会预先拉取适配器包。',
-        command: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
-      },
-    ],
-  },
-  codebuddy: {
-    engineId: 'codebuddy',
-    summary: 'CodeBuddy Code 原生支持 ACP，需单独安装 codebuddy CLI。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codebuddy,
-    docsUrl: 'https://www.codebuddy.ai',
-    checkBinary: 'codebuddy',
-    checkPaths: [join(homedir(), '.codebuddy', 'bin')],
-    installable: false,
-    requiredEnvVars: [
-      { key: 'CODEBUDDY_AUTH_TOKEN', description: 'CodeBuddy 认证 Token' },
-    ],
-    steps: [
-      {
-        title: '安装 CodeBuddy CLI',
-        description: '按 CodeBuddy 官方文档安装 CLI，并确保 codebuddy 在 PATH 中。',
-        command: 'codebuddy --version',
-      },
-      {
-        title: '验证 ACP 模式',
-        description: 'Gateway 会执行 codebuddy --acp 作为上游子进程。',
-        command: 'codebuddy --acp',
-      },
-      {
-        title: '配置凭据',
-        description: '在默认凭据区添加 CODEBUDDY_AUTH_TOKEN。',
-      },
-    ],
-  },
-  codex: {
-    engineId: 'codex',
-    summary: '通过 npx 运行 Codex ACP 适配器；需要 Node.js 与 OpenAI 凭据。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codex,
-    checkBinary: 'npx',
-    installable: true,
-    installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
-    requiredEnvVars: [
-      { key: 'OPENAI_API_KEY', description: 'OpenAI API Key' },
-    ],
-    steps: [
-      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
-      { title: '配置 OPENAI_API_KEY', description: '在默认凭据区或实例环境变量中设置。' },
-      {
-        title: '预热适配器',
-        command: 'npx -y @zed-industries/codex-acp@latest --version',
-        description: '一键安装会预先下载 Codex ACP 包。',
-      },
-    ],
-  },
-  opencode: {
-    engineId: 'opencode',
-    summary: '通过 npx 运行 OpenCode ACP 子命令。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.opencode,
-    checkBinary: 'npx',
-    installable: true,
-    installCommand: 'npx -y opencode-ai@latest --version',
-    steps: [
-      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
-      {
-        title: '预热 OpenCode',
-        command: 'npx -y opencode-ai@latest acp',
-        description: '首次对话时也会自动拉取；一键安装预先下载 CLI 包。',
-      },
-    ],
-  },
-  openclaw: {
-    engineId: 'openclaw',
-    summary: '通过 npx 运行 OpenClaw ACP 模式。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.openclaw,
-    checkBinary: 'npx',
-    installable: true,
-    installCommand: 'npx -y openclaw --version',
-    steps: [
-      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
-      {
-        title: '预热 OpenClaw',
-        command: 'npx -y openclaw acp',
-        description: '一键安装预先下载 openclaw 包。',
-      },
-    ],
-  },
-  cursor: {
+function nodeInstallStep(platform: HubPlatform): EngineSetupStep {
+  if (platform === 'win32') {
+    return {
+      title: '安装 Node.js',
+      description:
+        '需要 Node.js 18+ 与 npm/npx。可从 https://nodejs.org 下载 Windows 安装包，或使用 winget：winget install OpenJS.NodeJS.LTS。',
+      command: 'node --version && npx --version',
+    };
+  }
+  if (platform === 'darwin') {
+    return {
+      title: '安装 Node.js',
+      description:
+        '需要 Node.js 18+ 与 npm/npx。可用 Homebrew（brew install node）、nvm，或从 https://nodejs.org 安装。',
+      command: 'node --version && npx --version',
+    };
+  }
+  return {
+    title: '安装 Node.js',
+    description:
+      '需要 Node.js 18+ 与 npm/npx。可用发行版包管理器、nvm，或从 https://nodejs.org 安装。',
+    command: 'node --version && npx --version',
+  };
+}
+
+const CURSOR_INSTALL_WIN32 =
+  "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm 'https://cursor.com/install?win32=true' | iex\"";
+const CURSOR_INSTALL_UNIX = 'curl https://cursor.com/install -fsS | bash';
+
+function buildCursorGuide(platform: HubPlatform): EngineSetupGuide {
+  const checkPaths =
+    platform === 'darwin'
+      ? [LOCAL_BIN, '/opt/homebrew/bin']
+      : platform === 'win32'
+        ? [
+            join(process.env.LOCALAPPDATA ?? '', 'cursor-agent'),
+            join(process.env.USERPROFILE ?? '', '.local', 'bin'),
+          ].filter((p) => p.length > 0)
+        : [LOCAL_BIN];
+
+  if (platform === 'win32') {
+    return {
+      engineId: 'cursor',
+      summary:
+        'Cursor CLI（agent）提供 ACP 服务；需单独安装，与 Cursor 桌面版不同。以下步骤适用于 Windows（Hub 所在机器）。',
+      acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.cursor,
+      docsUrl: 'https://cursor.com/docs/cli/acp',
+      checkBinary: 'agent',
+      checkPaths,
+      installable: true,
+      installCommand: CURSOR_INSTALL_WIN32,
+      requiredEnvVars: [
+        {
+          key: 'CURSOR_API_KEY',
+          description: 'User API Key（Cursor → Integrations）；ACP 需要有效 Key 或 agent login',
+          optional: true,
+        },
+      ],
+      steps: [
+        {
+          title: '安装 Cursor CLI',
+          description: '在 PowerShell 中运行官方安装脚本（安装 agent 到用户目录）。',
+          command: "irm 'https://cursor.com/install?win32=true' | iex",
+        },
+        {
+          title: '确保 CLI 在 PATH 中',
+          description:
+            '安装后重新打开终端，或把 agent 所在目录加入用户 PATH。Hub 启动 gateway 时会追加常见安装路径。',
+        },
+        {
+          title: '完成认证',
+          description: '运行 agent login，或在默认凭据区配置 CURSOR_API_KEY。',
+          command: 'agent login',
+        },
+        {
+          title: '验证 ACP 模式',
+          description:
+            '进程应保持运行（Ctrl+C 退出）。若立即退出，请检查 API Key 或重新 login。',
+          command: '$env:NO_OPEN_BROWSER=1; agent acp',
+        },
+      ],
+    };
+  }
+
+  const unixInstallNote =
+    platform === 'darwin'
+      ? '推荐官方 curl 安装（~/.local/bin/agent）。Homebrew 的 cursor-agent 在部分版本上无法正常启动 ACP。'
+      : '推荐官方 curl 安装（~/.local/bin/agent）。';
+
+  return {
     engineId: 'cursor',
-    summary: 'Cursor CLI（agent / cursor-agent）提供 ACP 服务；需单独安装，与 Cursor 桌面版不同。',
+    summary:
+      `Cursor CLI（agent / cursor-agent）提供 ACP 服务；需单独安装，与 Cursor 桌面版不同。以下步骤适用于 ${hubPlatformLabel(platform)}（Hub 所在机器）。`,
     acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.cursor,
     docsUrl: 'https://cursor.com/docs/cli/acp',
     checkBinary: 'agent',
-    checkPaths: [LOCAL_BIN, '/opt/homebrew/bin'],
+    checkPaths,
     installable: true,
-    installCommand: 'curl https://cursor.com/install -fsS | bash',
+    installCommand: CURSOR_INSTALL_UNIX,
     requiredEnvVars: [
-      { key: 'CURSOR_API_KEY', description: 'User API Key（Cursor → Integrations）；ACP 模式需要有效 Key 或 agent login', optional: true },
+      {
+        key: 'CURSOR_API_KEY',
+        description: 'User API Key（Cursor → Integrations）；ACP 需要有效 Key 或 agent login',
+        optional: true,
+      },
     ],
     steps: [
       {
         title: '安装 Cursor CLI',
-        description:
-          '推荐官方 curl 安装（~/.local/bin/agent）。Homebrew 的 cursor-agent 在部分版本上无法正常启动 ACP，若已安装 brew 版请改用 curl 安装。',
-        command: 'curl https://cursor.com/install -fsS | bash',
+        description: unixInstallNote,
+        command: CURSOR_INSTALL_UNIX,
       },
       {
         title: '确保 CLI 在 PATH 中',
         description:
-          'Homebrew 通常在 /opt/homebrew/bin；curl 安装需 export PATH="$HOME/.local/bin:$PATH"。Hub 启动 gateway 时会自动追加这些路径。',
+          platform === 'darwin'
+            ? 'curl 安装通常在 ~/.local/bin；Homebrew 在 /opt/homebrew/bin。可执行 export PATH="$HOME/.local/bin:$PATH"。Hub 启动时会自动追加这些路径。'
+            : 'curl 安装通常在 ~/.local/bin。可执行 export PATH="$HOME/.local/bin:$PATH"。Hub 启动时会自动追加该路径。',
       },
       {
         title: '完成认证',
-        description: '运行 agent login / cursor-agent login，或在默认凭据区配置 CURSOR_API_KEY。',
-        command: 'cursor-agent login',
+        description: '运行 agent login，或在默认凭据区配置 CURSOR_API_KEY。',
+        command: 'agent login',
       },
       {
         title: '验证 ACP 模式',
         description:
-          '能启动即表示 CLI 可用（Ctrl+C 退出）。若立即退出并出现 HTML 乱码，通常是 API Key 无效或未登录——请重新 login 或在 Cursor 设置 > Integrations 生成新的 User API Key。',
-        command: 'NO_OPEN_BROWSER=1 cursor-agent acp',
+          '能启动即表示 CLI 可用（Ctrl+C 退出）。若立即退出，请检查 API Key 或重新 login。',
+        command: 'NO_OPEN_BROWSER=1 agent acp',
       },
     ],
-  },
-  hermes: {
-    engineId: 'hermes',
-    summary: 'Hermes 提供原生 ACP 接口，需按上游文档自行安装 hermes CLI。',
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.hermes,
-    checkBinary: 'hermes',
-    installable: false,
-    steps: [
-      {
-        title: '安装 Hermes CLI',
-        description: '按 Hermes 项目文档安装，并确保 hermes 在 PATH 中。',
-        command: 'hermes --version',
-      },
-      {
-        title: '验证 ACP',
-        command: 'hermes acp',
-        description: 'Gateway 通过 hermes acp 子进程接入。',
-      },
-    ],
-  },
-};
+  };
+}
+
+function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatform): EngineSetupGuide {
+  switch (engineId) {
+    case 'claude-code':
+      return {
+        engineId: 'claude-code',
+        summary: `通过 npx 拉取 Claude Code 官方 ACP 适配器（${hubPlatformLabel(platform)}）。需要 Node.js 与 Anthropic 凭据。`,
+        acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['claude-code'],
+        docsUrl: 'https://agentclientprotocol.com',
+        checkBinary: 'npx',
+        installable: true,
+        installCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
+        requiredEnvVars: [
+          { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API Key（或在下方凭据区配置）' },
+        ],
+        steps: [
+          nodeInstallStep(platform),
+          {
+            title: '配置 Anthropic 凭据',
+            description: '在下方「默认凭据」添加 ANTHROPIC_API_KEY，或在实例环境变量中覆盖。',
+          },
+          {
+            title: '预热 ACP 包（可选）',
+            description: '首次启动也会自动下载；一键安装会预先拉取适配器包。',
+            command: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
+          },
+        ],
+      };
+    case 'codebuddy':
+      return {
+        engineId: 'codebuddy',
+        summary: `CodeBuddy Code 原生支持 ACP，需单独安装 codebuddy CLI（${hubPlatformLabel(platform)}）。`,
+        acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codebuddy,
+        docsUrl: 'https://www.codebuddy.ai',
+        checkBinary: 'codebuddy',
+        checkPaths: [join(homedir(), '.codebuddy', 'bin')],
+        installable: false,
+        requiredEnvVars: [{ key: 'CODEBUDDY_AUTH_TOKEN', description: 'CodeBuddy 认证 Token' }],
+        steps: [
+          {
+            title: '安装 CodeBuddy CLI',
+            description: `按 CodeBuddy 官方文档在 ${hubPlatformLabel(platform)} 上安装 CLI，并确保 codebuddy 在 PATH 中。`,
+            command: 'codebuddy --version',
+          },
+          {
+            title: '验证 ACP 模式',
+            description: 'Gateway 会执行 codebuddy --acp 作为上游子进程。',
+            command: 'codebuddy --acp',
+          },
+          { title: '配置凭据', description: '在默认凭据区添加 CODEBUDDY_AUTH_TOKEN。' },
+        ],
+      };
+    case 'codex':
+      return {
+        engineId: 'codex',
+        summary: `通过 npx 运行 Codex ACP 适配器（${hubPlatformLabel(platform)}）；需要 Node.js 与 OpenAI 凭据。`,
+        acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codex,
+        checkBinary: 'npx',
+        installable: true,
+        installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
+        requiredEnvVars: [{ key: 'OPENAI_API_KEY', description: 'OpenAI API Key' }],
+        steps: [
+          nodeInstallStep(platform),
+          { title: '配置 OPENAI_API_KEY', description: '在默认凭据区或实例环境变量中设置。' },
+          {
+            title: '预热适配器',
+            command: 'npx -y @zed-industries/codex-acp@latest --version',
+            description: '一键安装会预先下载 Codex ACP 包。',
+          },
+        ],
+      };
+    case 'opencode':
+      return {
+        engineId: 'opencode',
+        summary: `通过 npx 运行 OpenCode ACP 子命令（${hubPlatformLabel(platform)}）。`,
+        acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.opencode,
+        checkBinary: 'npx',
+        installable: true,
+        installCommand: 'npx -y opencode-ai@latest --version',
+        steps: [
+          nodeInstallStep(platform),
+          {
+            title: '预热 OpenCode',
+            command: 'npx -y opencode-ai@latest acp',
+            description: '首次对话时也会自动拉取；一键安装预先下载 CLI 包。',
+          },
+        ],
+      };
+    case 'openclaw':
+      return {
+        engineId: 'openclaw',
+        summary: `通过 npx 运行 OpenClaw ACP 模式（${hubPlatformLabel(platform)}）。`,
+        acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.openclaw,
+        checkBinary: 'npx',
+        installable: true,
+        installCommand: 'npx -y openclaw --version',
+        steps: [
+          nodeInstallStep(platform),
+          {
+            title: '预热 OpenClaw',
+            command: 'npx -y openclaw acp',
+            description: '一键安装预先下载 openclaw 包。',
+          },
+        ],
+      };
+    case 'cursor':
+      return buildCursorGuide(platform);
+    case 'hermes':
+      return {
+        engineId: 'hermes',
+        summary: `Hermes 提供原生 ACP 接口，需按上游文档在 ${hubPlatformLabel(platform)} 上自行安装 hermes CLI。`,
+        acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.hermes,
+        checkBinary: 'hermes',
+        installable: false,
+        steps: [
+          {
+            title: '安装 Hermes CLI',
+            description: '按 Hermes 项目文档安装，并确保 hermes 在 PATH 中。',
+            command: 'hermes --version',
+          },
+          {
+            title: '验证 ACP',
+            command: 'hermes acp',
+            description: 'Gateway 通过 hermes acp 子进程接入。',
+          },
+        ],
+      };
+  }
+}
 
 const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {
   engineId: 'custom',
@@ -416,28 +550,47 @@ const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {
 };
 
 /** Directories commonly holding agent CLIs; prepended to PATH at gateway spawn. */
-export const SPAWN_PATH_PREFIXES: readonly string[] = [
-  LOCAL_BIN,
-  join(homedir(), '.codebuddy', 'bin'),
-  ...(process.platform === 'darwin' ? ['/opt/homebrew/bin', '/usr/local/bin'] : []),
-];
+export function spawnPathPrefixes(platform: HubPlatform = detectHubPlatform()): readonly string[] {
+  const prefixes: string[] = [LOCAL_BIN, join(homedir(), '.codebuddy', 'bin')];
+  if (platform === 'darwin') {
+    prefixes.push('/opt/homebrew/bin', '/usr/local/bin');
+  }
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      prefixes.push(join(localAppData, 'cursor-agent'));
+      prefixes.push(join(localAppData, 'Programs', 'cursor-agent'));
+    }
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) {
+      prefixes.push(join(userProfile, '.local', 'bin'));
+    }
+  }
+  return prefixes;
+}
+
+/** @deprecated Use spawnPathPrefixes() — kept for importers expecting a constant. */
+export const SPAWN_PATH_PREFIXES: readonly string[] = spawnPathPrefixes();
 
 export function augmentSpawnPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
   const current = env[pathKey] ?? env.PATH ?? '';
   const sep = process.platform === 'win32' ? ';' : ':';
-  const extras = SPAWN_PATH_PREFIXES.filter((d) => existsSync(d));
+  const extras = spawnPathPrefixes().filter((d) => existsSync(d));
   if (extras.length === 0) return env;
   const prefix = extras.join(sep);
   if (current.split(sep).some((p) => extras.includes(p))) return env;
   return { ...env, [pathKey]: `${prefix}${sep}${current}` };
 }
 
-export function getEngineSetupGuide(engineId: string): EngineSetupGuide {
+export function getEngineSetupGuide(
+  engineId: string,
+  platform: HubPlatform = detectHubPlatform(),
+): EngineSetupGuide {
   if (isBuiltinEngine(engineId)) {
-    return SETUP_GUIDES[engineId];
+    return withPlatformMeta(buildBuiltinSetupGuide(engineId, platform), platform);
   }
-  return { ...CUSTOM_ENGINE_SETUP, engineId, acpCommand: '' };
+  return withPlatformMeta({ ...CUSTOM_ENGINE_SETUP, engineId, acpCommand: '' }, platform);
 }
 
 export function resolveBinaryPath(
@@ -542,12 +695,15 @@ export function enrichEngineInfo(
   };
 }
 
-export function checkEngineInstallStatus(engineId: string): EngineInstallStatus {
+export function checkEngineInstallStatus(
+  engineId: string,
+  platform: HubPlatform = detectHubPlatform(),
+): EngineInstallStatus {
   if (engineId === 'cursor') {
     return checkCursorInstallStatus();
   }
 
-  const guide = getEngineSetupGuide(engineId);
+  const guide = getEngineSetupGuide(engineId, platform);
   if (guide.checkBinary.length === 0) {
     return { installed: false, binaryPath: null, version: null, checkError: null };
   }
@@ -575,8 +731,11 @@ export function checkEngineInstallStatus(engineId: string): EngineInstallStatus 
   };
 }
 
-export function runEngineInstall(engineId: string): EngineInstallResult {
-  const guide = getEngineSetupGuide(engineId);
+export function runEngineInstall(
+  engineId: string,
+  platform: HubPlatform = detectHubPlatform(),
+): EngineInstallResult {
+  const guide = getEngineSetupGuide(engineId, platform);
   if (!guide.installable || guide.installCommand === undefined) {
     throw new Error(`引擎 "${engineId}" 不支持一键安装，请按文档手动配置。`);
   }
@@ -602,7 +761,7 @@ export function runEngineInstall(engineId: string): EngineInstallResult {
     stderr = err instanceof Error ? err.message : String(err);
   }
 
-  const status = checkEngineInstallStatus(engineId);
+  const status = checkEngineInstallStatus(engineId, platform);
   let combinedStderr = stderr;
   if (engineId === 'cursor' && !status.installed) {
     const hint = detectLocalDirPermissionIssue();

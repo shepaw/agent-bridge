@@ -24,9 +24,11 @@ import {
   checkEngineInstallStatus,
   deleteEngineEnvVar,
   decryptValue,
+  detectHubPlatform,
   engineEnvVarKeys,
   enrichEngineInfo,
   getEngineSetupGuide,
+  hubPlatformLabel,
   isKnownEngineForOverrides,
   listEngineInfos,
   loadOrCreateHubConfig,
@@ -108,7 +110,8 @@ enginesRouter.get('/:id/setup', (req: Request, res: Response) => {
     requireKnownEngine(req.params.id!);
     const cfg = loadOrCreateHubConfig();
     const engineId = req.params.id!;
-    let guide = getEngineSetupGuide(engineId);
+    const platform = detectHubPlatform();
+    let guide = getEngineSetupGuide(engineId, platform);
     const custom = findCustomEngine(cfg.customEngines, engineId);
     if (custom !== undefined) {
       const acpCommand = formatShellCommand(custom.command, custom.args);
@@ -124,7 +127,7 @@ enginesRouter.get('/:id/setup', (req: Request, res: Response) => {
       ? checkCustomEngineInstallStatus(custom.command)
       : checkEngineInstallStatus(engineId);
     const disabled = cfg.engineOverrides?.[engineId]?.disabled === true;
-    res.json({ guide, status, disabled });
+    res.json({ guide, status, disabled, platform, platformLabel: hubPlatformLabel(platform) });
   } catch (err) {
     if (err instanceof CustomEngineNotFoundError) {
       res.status(404).json({ error: err.message });

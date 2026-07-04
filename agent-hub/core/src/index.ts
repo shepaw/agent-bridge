@@ -153,6 +153,9 @@ export {
   checkCursorInstallStatus,
   checkEngineInstallStatus,
   enrichEngineInfo,
+  detectHubPlatform,
+  hubPlatformLabel,
+  spawnPathPrefixes,
   getEngineSetupGuide,
   resolveBinaryPath,
   resolveEngineAvailability,
@@ -165,6 +168,7 @@ export type {
   EngineInstallStatus,
   EngineSetupGuide,
   EngineSetupStep,
+  HubPlatform,
 } from './engine-setup.js';
 
 export {

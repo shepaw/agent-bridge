@@ -13,6 +13,8 @@ import {
   checkCursorInstallStatus,
   checkEngineInstallStatus,
   getEngineSetupGuide,
+  detectHubPlatform,
+  hubPlatformLabel,
   resolveBinaryPath,
   resolveCursorCliBinary,
   resolveEngineAvailability,
@@ -26,12 +28,33 @@ describe('engine-setup', () => {
     if (fakeBin) rmSync(fakeBin, { recursive: true, force: true });
   });
 
-  it('returns builtin guide with acp command for cursor', () => {
-    const guide = getEngineSetupGuide('cursor');
+  it('returns builtin guide with acp command for cursor on macOS', () => {
+    const guide = getEngineSetupGuide('cursor', 'darwin');
     expect(guide.acpCommand).toBe('agent acp');
     expect(guide.installable).toBe(true);
+    expect(guide.installCommand).toContain('curl');
+    expect(guide.platformLabel).toBe('macOS');
     expect(guide.steps.length).toBeGreaterThan(0);
     expect(guide.docsUrl).toContain('cursor.com');
+  });
+
+  it('cursor guide uses PowerShell install on Windows', () => {
+    const guide = getEngineSetupGuide('cursor', 'win32');
+    expect(guide.installCommand).toContain('win32=true');
+    expect(guide.platformLabel).toBe('Windows');
+    expect(guide.steps[0]?.command).toContain('irm');
+  });
+
+  it('claude-code guide mentions platform in summary', () => {
+    const guide = getEngineSetupGuide('claude-code', 'linux');
+    expect(guide.summary).toContain('Linux');
+    expect(guide.steps[0]?.title).toBe('安装 Node.js');
+  });
+
+  it('detectHubPlatform normalizes node platform', () => {
+    expect(detectHubPlatform('darwin')).toBe('darwin');
+    expect(detectHubPlatform('win32')).toBe('win32');
+    expect(detectHubPlatform('freebsd')).toBe('linux');
   });
 
   it('resolveCursorCliBinary prefers healthy official agent over Homebrew', () => {

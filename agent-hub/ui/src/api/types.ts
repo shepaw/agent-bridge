@@ -149,6 +149,8 @@ export interface EngineSetupGuide {
   checkBinary: string;
   requiredEnvVars?: EngineEnvVarHint[];
   installable: boolean;
+  platform?: 'darwin' | 'linux' | 'win32';
+  platformLabel?: string;
 }
 
 export interface EngineInstallStatus {
@@ -162,6 +164,8 @@ export interface EngineSetupResponse {
   guide: EngineSetupGuide;
   status: EngineInstallStatus;
   disabled: boolean;
+  platform: 'darwin' | 'linux' | 'win32';
+  platformLabel: string;
 }
 
 export interface EngineInstallResponse {

@@ -178,8 +178,14 @@ function isHealthyCursorCli(binaryPath: string): boolean {
 function resolveCursorCliBinary(): string | null {
   const dirs = [
     join(homedir(), '.local', 'bin'),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
+    ...(process.platform === 'darwin' ? ['/opt/homebrew/bin', '/usr/local/bin'] : []),
+    ...(process.platform === 'win32'
+      ? [
+          join(process.env.LOCALAPPDATA ?? '', 'cursor-agent'),
+          join(process.env.LOCALAPPDATA ?? '', 'Programs', 'cursor-agent'),
+          join(process.env.USERPROFILE ?? '', '.local', 'bin'),
+        ].filter((p) => p.length > 0)
+      : []),
   ];
   const candidates: string[] = [];
   for (const name of ['agent', 'cursor-agent']) {

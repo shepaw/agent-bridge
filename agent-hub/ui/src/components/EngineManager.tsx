@@ -362,6 +362,7 @@ function EngineSetupSection({
 }) {
   const [guide, setGuide] = useState<EngineSetupGuide | null>(null);
   const [status, setStatus] = useState<EngineInstallStatus | null>(null);
+  const [platformLabel, setPlatformLabel] = useState<string | null>(null);
   const [disabled, setDisabled] = useState(engine.disabled === true);
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState(false);
@@ -375,6 +376,7 @@ function EngineSetupSection({
       setGuide(data.guide);
       setStatus(data.status);
       setDisabled(data.disabled);
+      setPlatformLabel(data.platformLabel);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -445,18 +447,32 @@ function EngineSetupSection({
     <div style={setupBlock}>
       <div style={setupHead}>
         <h5 style={{ ...subTitle, margin: 0 }}>环境与安装</h5>
-        <span style={{
-          ...tag,
-          background: status.installed ? '#3a4a2a' : '#452632',
-          color: status.installed ? '#a6e3a1' : '#f38ba8',
-        }}>
-          {status.installed
-            ? `已安装${status.version ? ` · ${status.version}` : ''}`
-            : '未安装'}
-        </span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {platformLabel && (
+            <span style={{ ...tag, background: '#313244', color: '#89b4fa' }}>
+              Hub 系统：{platformLabel}
+            </span>
+          )}
+          <span style={{
+            ...tag,
+            background: status.installed ? '#3a4a2a' : '#452632',
+            color: status.installed ? '#a6e3a1' : '#f38ba8',
+          }}>
+            {status.installed
+              ? `已安装${status.version ? ` · ${status.version}` : ''}`
+              : '未安装'}
+          </span>
+        </div>
       </div>
 
-      <p style={{ ...hint, marginTop: 8 }}>{guide.summary}</p>
+      <p style={{ ...hint, marginTop: 8 }}>
+        {guide.summary}
+        {platformLabel && (
+          <span style={{ display: 'block', marginTop: 4, color: '#6c7086' }}>
+            安装命令与检测均在运行 Hub 的机器上执行（当前为 {platformLabel}）。
+          </span>
+        )}
+      </p>
 
       {guide.acpCommand && (
         <div style={cmdBlock}>
