@@ -180,6 +180,9 @@ export class PeerAcpClient {
       if (frame.t !== 'data') return;
       const obj = JSON.parse(Buffer.from(this.session.decrypt(frame.payload)).toString('utf-8')) as Record<string, unknown>;
       const method = obj.method as string | undefined;
+      if (process.env.SHEPAW_PEER_DEBUG === '1') {
+        this.log(`acp notify: method=${method ?? '?'} id=${obj.id ?? '-'} task=${(obj.params as Record<string, unknown> | undefined)?.task_id ?? '-'}`);
+      }
       if (obj.id !== undefined) return; // ack response
       const params = (obj.params as Record<string, unknown> | undefined) ?? {};
       const taskId = params.task_id as string | undefined;
@@ -244,8 +247,10 @@ export class PeerAcpClient {
         turn.resolve();
         return;
       }
-    } catch {
-      /* drop malformed frame */
+    } catch (err) {
+      // Decrypt/parse failure — often a Noise counter desync or a malformed
+      // frame. Log so silent drops don't hide approval-stream bugs.
+      this.log(`acp frame drop: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
