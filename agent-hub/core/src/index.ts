@@ -145,7 +145,10 @@ export type { InstanceSessionEntry } from './sessions.js';
 export {
   BUILTIN_ENGINE_ACP_COMMANDS,
   augmentSpawnPath,
+  resolveCursorCliBinary,
+  getCursorAcpCommand,
   checkCustomEngineInstallStatus,
+  checkCursorInstallStatus,
   checkEngineInstallStatus,
   enrichEngineInfo,
   getEngineSetupGuide,

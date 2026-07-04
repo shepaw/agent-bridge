@@ -46,7 +46,7 @@ import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
 import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
-import { augmentSpawnPath } from './engine-setup.js';
+import { augmentSpawnPath, getCursorAcpCommand, resolveCursorCliBinary } from './engine-setup.js';
 import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
@@ -169,6 +169,15 @@ export async function startInstance(instance: InstanceConfig): Promise<{
     if (customEngine !== undefined) {
       args.push('--engine-display-name', customEngine.displayName);
       args.push('--acp-command', formatShellCommand(customEngine.command, customEngine.args));
+    } else if (instance.engine === 'cursor') {
+      const cursorBin = resolveCursorCliBinary();
+      if (cursorBin === null) {
+        throw new Error(
+          `Cursor CLI not found (agent / cursor-agent). ` +
+            `Install via "brew install --cask cursor-cli" or see Hub engine settings.`,
+        );
+      }
+      args.push('--acp-command', getCursorAcpCommand());
     }
 
     const child = nodeSpawn(process.execPath, args, {

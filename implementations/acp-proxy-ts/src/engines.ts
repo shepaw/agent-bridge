@@ -10,6 +10,10 @@
  */
 
 import { parseShellCommand } from './command-line.js';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 export type BuiltinEngineId =
   | 'claude-code'
@@ -154,10 +158,62 @@ export function resolveEngineSpec(engineId: string, opts: ResolveEngineSpecOptio
   );
 }
 
-/** Resolve npx on Windows (.cmd shim). */
-export function spawnCommand(spec: AcpEngineSpec): { command: string; args: string[] } {
-  if (spec.command === 'npx' && process.platform === 'win32') {
-    return { command: 'npx.cmd', args: [...spec.args] };
+function resolveCursorCliBinary(): string | null {
+  const dirs = [
+    join(homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  for (const name of ['agent', 'cursor-agent']) {
+    for (const dir of dirs) {
+      const full = join(dir, name);
+      if (existsSync(full)) return full;
+    }
+    const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], {
+      encoding: 'utf8',
+    });
+    if (which.status === 0) {
+      const line = which.stdout.trim().split(/\r?\n/)[0]?.trim();
+      if (line) return line;
+    }
   }
-  return { command: spec.command, args: [...spec.args] };
+  return null;
+}
+
+/** Resolve npx on Windows (.cmd shim); resolve Cursor CLI binary at spawn time. */
+export function spawnCommand(
+  spec: AcpEngineSpec,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; args: string[] } {
+  let command = spec.command;
+  let args = [...spec.args];
+  if (spec.id === 'cursor') {
+    const resolved = resolveCursorCliBinary();
+    if (resolved !== null) command = resolved;
+    const apiKey = env.CURSOR_API_KEY;
+    if (typeof apiKey === 'string' && apiKey.length > 0 && !args.includes('--api-key')) {
+      args = ['--api-key', apiKey, ...args];
+    }
+  }
+  if (command === 'npx' && process.platform === 'win32') {
+    return { command: 'npx.cmd', args };
+  }
+  return { command, args };
+}
+
+/** Log-safe spawn line (redacts --api-key values). */
+export function formatSpawnCommandLine(
+  command: string,
+  args: readonly string[],
+): string {
+  const redacted: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--api-key' && i + 1 < args.length) {
+      redacted.push('--api-key', '<redacted>');
+      i++;
+      continue;
+    }
+    redacted.push(args[i]!);
+  }
+  return `${command} ${redacted.join(' ')}`;
 }

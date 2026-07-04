@@ -4,7 +4,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,6 +70,68 @@ export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = {
 };
 
 const LOCAL_BIN = join(homedir(), '.local', 'bin');
+
+/** Cursor CLI may be installed as `agent` or `cursor-agent` (Homebrew cask). */
+export const CURSOR_CLI_BINARIES = ['agent', 'cursor-agent'] as const;
+
+export function cursorCliSearchPaths(): string[] {
+  const paths = [LOCAL_BIN, join(homedir(), '.codebuddy', 'bin')];
+  if (process.platform === 'darwin') {
+    paths.push('/opt/homebrew/bin', '/usr/local/bin');
+  }
+  return paths;
+}
+
+export function resolveCursorCliBinary(): string | null {
+  for (const name of CURSOR_CLI_BINARIES) {
+    const path = resolveBinaryPath(name, cursorCliSearchPaths());
+    if (path !== null) return path;
+  }
+  return null;
+}
+
+export function getCursorAcpCommand(): string {
+  const bin = resolveCursorCliBinary();
+  return bin !== null ? `${bin} acp` : BUILTIN_ENGINE_ACP_COMMANDS.cursor;
+}
+
+/** Warn when ~/.local is not writable (blocks the official curl installer). */
+export function detectLocalDirPermissionIssue(): string | null {
+  const local = join(homedir(), '.local');
+  if (!existsSync(local)) return null;
+  try {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (uid === undefined) return null;
+    const st = statSync(local);
+    if (st.uid !== uid) {
+      return (
+        `~/.local 目录属主异常（当前用户无法写入），官方 curl 安装会失败。` +
+        ` macOS 请改用：brew install --cask cursor-cli`
+      );
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function checkCursorInstallStatus(): EngineInstallStatus {
+  const binaryPath = resolveCursorCliBinary();
+  if (binaryPath === null) {
+    return {
+      installed: false,
+      binaryPath: null,
+      version: null,
+      checkError: detectLocalDirPermissionIssue() ?? '未找到 agent 或 cursor-agent 命令',
+    };
+  }
+  return {
+    installed: true,
+    binaryPath,
+    version: null,
+    checkError: null,
+  };
+}
 
 const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
   'claude-code': {
@@ -182,36 +244,44 @@ const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
   },
   cursor: {
     engineId: 'cursor',
-    summary: 'Cursor CLI（agent 命令）提供 ACP 服务；需单独安装，与 Cursor 桌面版不同。',
+    summary: 'Cursor CLI（agent / cursor-agent）提供 ACP 服务；需单独安装，与 Cursor 桌面版不同。',
     acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.cursor,
     docsUrl: 'https://cursor.com/docs/cli/acp',
     checkBinary: 'agent',
-    checkPaths: [LOCAL_BIN],
+    checkPaths: [LOCAL_BIN, '/opt/homebrew/bin'],
     installable: true,
-    installCommand: 'curl https://cursor.com/install -fsS | bash',
+    installCommand:
+      process.platform === 'darwin'
+        ? 'brew install --cask cursor-cli || curl https://cursor.com/install -fsS | bash'
+        : 'curl https://cursor.com/install -fsS | bash',
     requiredEnvVars: [
       { key: 'CURSOR_API_KEY', description: 'Cursor API Key（可选，若已 agent login 可省略）', optional: true },
     ],
     steps: [
       {
         title: '安装 Cursor CLI',
-        description: '官方脚本将 agent 安装到 ~/.local/bin。安装 Cursor 桌面版不会自动包含此 CLI。',
-        command: 'curl https://cursor.com/install -fsS | bash',
+        description:
+          'macOS 推荐 Homebrew（安装为 cursor-agent）；官方 curl 脚本安装为 agent 到 ~/.local/bin。桌面版 Cursor 不包含此 CLI。',
+        command:
+          process.platform === 'darwin'
+            ? 'brew install --cask cursor-cli'
+            : 'curl https://cursor.com/install -fsS | bash',
       },
       {
-        title: '确保 PATH 包含 ~/.local/bin',
-        description: '在 shell 配置中加入 export PATH="$HOME/.local/bin:$PATH"。Hub 启动 gateway 时会自动追加此路径。',
-        command: 'export PATH="$HOME/.local/bin:$PATH"',
+        title: '确保 CLI 在 PATH 中',
+        description:
+          'Homebrew 通常在 /opt/homebrew/bin；curl 安装需 export PATH="$HOME/.local/bin:$PATH"。Hub 启动 gateway 时会自动追加这些路径。',
       },
       {
         title: '完成认证',
-        description: '运行 agent login，或在默认凭据区配置 CURSOR_API_KEY。',
-        command: 'agent login',
+        description: '运行 agent login / cursor-agent login，或在默认凭据区配置 CURSOR_API_KEY。',
+        command: 'cursor-agent login',
       },
       {
         title: '验证 ACP 模式',
-        description: '能启动即表示 CLI 可用（Ctrl+C 退出）。',
-        command: 'agent acp',
+        description:
+          '能启动即表示 CLI 可用（Ctrl+C 退出）。若立即退出并出现 HTML 乱码，通常是 API Key 无效或未登录——请重新 login 或在 Cursor 设置 > Integrations 生成新的 User API Key。',
+        command: 'NO_OPEN_BROWSER=1 cursor-agent acp',
       },
     ],
   },
@@ -262,6 +332,7 @@ const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {
 export const SPAWN_PATH_PREFIXES: readonly string[] = [
   LOCAL_BIN,
   join(homedir(), '.codebuddy', 'bin'),
+  ...(process.platform === 'darwin' ? ['/opt/homebrew/bin', '/usr/local/bin'] : []),
 ];
 
 export function augmentSpawnPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -379,6 +450,10 @@ export function enrichEngineInfo(
 }
 
 export function checkEngineInstallStatus(engineId: string): EngineInstallStatus {
+  if (engineId === 'cursor') {
+    return checkCursorInstallStatus();
+  }
+
   const guide = getEngineSetupGuide(engineId);
   if (guide.checkBinary.length === 0) {
     return { installed: false, binaryPath: null, version: null, checkError: null };
@@ -435,10 +510,15 @@ export function runEngineInstall(engineId: string): EngineInstallResult {
   }
 
   const status = checkEngineInstallStatus(engineId);
+  let combinedStderr = stderr;
+  if (engineId === 'cursor' && !status.installed) {
+    const hint = detectLocalDirPermissionIssue();
+    if (hint) combinedStderr = [combinedStderr, hint].filter(Boolean).join('\n');
+  }
   return {
     ok: ok && status.installed,
     stdout,
-    stderr,
+    stderr: combinedStderr,
     status,
   };
 }

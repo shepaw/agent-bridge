@@ -2,7 +2,7 @@
  * Built-in and custom ACP engine definitions for Agent Hub.
  */
 
-import { BUILTIN_ENGINE_ACP_COMMANDS } from './engine-setup.js';
+import { BUILTIN_ENGINE_ACP_COMMANDS, getCursorAcpCommand } from './engine-setup.js';
 import { validateInstanceId } from './paths.js';
 
 export const BUILTIN_ENGINE_IDS = [
@@ -177,7 +177,7 @@ export function listEngineInfos(
     return {
       id,
       displayName: ov?.displayName ?? BUILTIN_ENGINE_LABELS[id],
-      acpCommand: BUILTIN_ENGINE_ACP_COMMANDS[id],
+      acpCommand: id === 'cursor' ? getCursorAcpCommand() : BUILTIN_ENGINE_ACP_COMMANDS[id],
       builtin: true,
       ...(ov?.disabled && { disabled: true }),
     };

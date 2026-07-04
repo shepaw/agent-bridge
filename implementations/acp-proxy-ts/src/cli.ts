@@ -24,6 +24,8 @@ import {
   getBuiltinEngineSpec,
   listBuiltinEngineIds,
   resolveEngineSpec,
+  spawnCommand,
+  formatSpawnCommandLine,
 } from './engines.js';
 import { formatShellCommand } from './command-line.js';
 import { listUpstreamAcpSessions, readStoredSessions } from './sessions-list.js';
@@ -124,7 +126,8 @@ cli
     });
 
     console.log(`\nUpstream ACP agent: ${spec.displayName}`);
-    console.log(`  spawn: ${spec.command} ${spec.args.join(' ')}\n`);
+    const resolved = spawnCommand(spec, process.env);
+    console.log(`  spawn: ${formatSpawnCommandLine(resolved.command, resolved.args)}\n`);
 
     await agent.init();
     await agent.run({ host: opts.host, port });

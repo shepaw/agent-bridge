@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { existsSync } from 'node:fs';
 
 import {
   ACP_ENGINES,
@@ -30,6 +31,14 @@ describe('engines', () => {
     });
     expect(spec.id).toBe('tclaude');
     expect(spec.command).toBe('npx');
+  });
+
+  it('spawnCommand resolves cursor-agent when agent is missing', () => {
+    const spec = getBuiltinEngineSpec('cursor');
+    const { command } = spawnCommand(spec);
+    if (existsSync('/opt/homebrew/bin/cursor-agent')) {
+      expect(command).toBe('/opt/homebrew/bin/cursor-agent');
+    }
   });
 
   it('validates engine ids', () => {

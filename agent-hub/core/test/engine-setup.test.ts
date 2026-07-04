@@ -10,9 +10,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   augmentSpawnPath,
+  checkCursorInstallStatus,
   checkEngineInstallStatus,
   getEngineSetupGuide,
   resolveBinaryPath,
+  resolveCursorCliBinary,
   resolveEngineAvailability,
 } from '../src/engine-setup.js';
 
@@ -29,6 +31,21 @@ describe('engine-setup', () => {
     expect(guide.installable).toBe(true);
     expect(guide.steps.length).toBeGreaterThan(0);
     expect(guide.docsUrl).toContain('cursor.com');
+  });
+
+  it('resolveCursorCliBinary finds cursor-agent from Homebrew', () => {
+    const brewAgent = '/opt/homebrew/bin/cursor-agent';
+    if (existsSync(brewAgent)) {
+      expect(resolveCursorCliBinary()).toBe(brewAgent);
+    }
+  });
+
+  it('checkCursorInstallStatus detects cursor-agent when present', () => {
+    const status = checkCursorInstallStatus();
+    if (existsSync('/opt/homebrew/bin/cursor-agent')) {
+      expect(status.installed).toBe(true);
+      expect(status.binaryPath).toContain('cursor-agent');
+    }
   });
 
   it('returns custom guide for unknown engines', () => {

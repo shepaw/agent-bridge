@@ -3,8 +3,10 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
@@ -111,16 +113,28 @@ export class AcpSubprocess {
   }
 
   private async doStart(): Promise<void> {
-    const { command, args } = spawnCommand(this.spec);
+    const { command, args } = spawnCommand(this.spec, {
+      ...process.env,
+      ...this.extraEnv,
+    });
     log('spawning ACP agent: %s %s (cwd=%s)', command, args.join(' '), this.cwd);
 
     const child = spawn(command, args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
+      env: augmentAgentEnv({
         ...process.env,
         ...this.extraEnv,
-      },
+      }),
+    });
+
+    child.on('error', (err) => {
+      log('ACP agent spawn failed: %s', err.message);
+      this.connection?.close(err);
+      this.connection = undefined;
+      this.child = undefined;
+      this.initPromise = undefined;
+      this.disposeSessions();
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -546,4 +560,24 @@ export class AcpSubprocess {
     await writeFile(params.path, params.content, 'utf-8');
     return {};
   }
+}
+
+function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+  const current = env[pathKey] ?? env.PATH ?? '';
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const extras = [
+    join(homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ].filter((d) => existsSync(d));
+  const withPath =
+    extras.length === 0 || current.split(sep).some((p) => extras.includes(p))
+      ? env
+      : { ...env, [pathKey]: `${extras.join(sep)}${sep}${current}` };
+  // Hub runs headless; avoid cursor-agent trying to open a browser for login.
+  if (withPath.NO_OPEN_BROWSER === undefined) {
+    return { ...withPath, NO_OPEN_BROWSER: '1' };
+  }
+  return withPath;
 }
