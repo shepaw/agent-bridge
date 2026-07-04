@@ -13,8 +13,6 @@ agent-bridge/
 │
 ├── implementations/
 │   ├── acp-proxy-ts/                 # Unified ACP proxy gateway (recommended)
-│   ├── _archived/                    # Legacy vendor-SDK gateways (deprecated)
-│   ├── claude-code-py/               # Claude Code as a Shepaw agent (Python, older)
 │   └── paw-agent-py/                 # Multi-platform OS control agent (Python, unmaintained)
 │
 ├── agent-hub/                        # Multi-project supervisor (CLI + Web UI)
@@ -67,9 +65,6 @@ node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
 Supported `--engine` values: `claude-code`, `tclaude`, `codebuddy`, `codex`, `tcodex`,
 `opencode`, `openclaw`, `cursor`, `hermes`. See
 [`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
-
-Legacy vendor-SDK gateways (`claude-code-ts`, `codebuddy-code`, …) are
-archived — see [`implementations/_archived/README.md`](implementations/_archived/README.md).
 
 ### Run multiple agents from one CLI (`shepaw-hub`)
 

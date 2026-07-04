@@ -1,8 +1,0 @@
-# ========== Node ==========
-node_modules/
-dist/
-.tsbuildinfo
-*.tsbuildinfo
-coverage/
-.turbo/
-.DS_Store
