@@ -102,7 +102,10 @@ export async function drivePeerConnection(opts: {
     }
     const state: InflightChat = { shouldCancel: false };
     inflight.set(requestId, state);
-    log(`agent_chat req=${requestId} agent=${agentId}`);
+    const sessionHint = typeof params.session_id === 'string' && params.session_id.length > 0
+      ? params.session_id.slice(0, 8)
+      : '(default)';
+    log(`agent_chat req=${requestId} agent=${agentId} session=${sessionHint}`);
     let client: PeerAcpClient;
     try {
       client = getAcpClient(agentId);
