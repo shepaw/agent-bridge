@@ -92,6 +92,19 @@ export async function drivePeerConnection(opts: {
     });
   };
 
+  /** App requests the slash-command palette for an agent. */
+  const handleAgentCommandsReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    if (typeof agentId !== 'string') return;
+    let commands: unknown[] = [];
+    try {
+      commands = await getAcpClient(agentId).commands();
+    } catch (err) {
+      log(`agent_commands req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({ type: 'agent_commands_resp', agent_id: agentId, commands });
+  };
+
   const handleAgentChat = async (params: Record<string, unknown>): Promise<void> => {
     const requestId = params.request_id as string | undefined;
     const agentId = params.agent_id as string | undefined;
@@ -153,6 +166,9 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_list_req':
           send({ type: 'agent_list_resp', agents: listAgents() });
+          break;
+        case 'agent_commands_req':
+          void handleAgentCommandsReq(obj);
           break;
         case 'agent_chat':
           void handleAgentChat(obj as Record<string, unknown>);

@@ -56,6 +56,8 @@ export class PeerAcpClient {
   private session: NoiseSession | undefined;
   private connecting: Promise<void> | undefined;
   private readonly inflight = new Map<string, InflightTurn>();
+  /** Pending JSON-RPC requests (id → resolver) for agent.commands.list etc. */
+  private readonly pendingRequests = new Map<number, (result: Record<string, unknown> | undefined) => void>();
   private rpcId = 1;
   private closed = false;
   /** Stable session id for this (peer, agent) pair — preserves multi-turn context. */
@@ -113,9 +115,32 @@ export class PeerAcpClient {
   close(): void {
     this.closed = true;
     this.failAll('peer connection closed');
+    for (const r of this.pendingRequests.values()) r(undefined);
+    this.pendingRequests.clear();
     try { this.ws?.close(); } catch { /* ignore */ }
     this.ws = undefined;
     this.session = undefined;
+  }
+
+  /**
+   * Fetch the agent's slash commands via `agent.commands.list` on the
+   * persistent WS. Resolves with the commands array (empty on failure/timeout).
+   */
+  async commands(): Promise<unknown[]> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise<unknown[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve([]);
+      }, 5_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        const commands = result?.commands;
+        resolve(Array.isArray(commands) ? commands : []);
+      });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.commands.list', params: {} });
+    });
   }
 
   // ── internals ────────────────────────────────────────────────────
@@ -183,7 +208,19 @@ export class PeerAcpClient {
       if (process.env.SHEPAW_PEER_DEBUG === '1') {
         this.log(`acp notify: method=${method ?? '?'} id=${obj.id ?? '-'} task=${(obj.params as Record<string, unknown> | undefined)?.task_id ?? '-'}`);
       }
-      if (obj.id !== undefined) return; // ack response
+      if (obj.id !== undefined) {
+        // Response to one of our requests (agent.chat ack, agent.commands.list,
+        // etc.). Route to the pending resolver; agent.chat acks have no
+        // registered resolver and are dropped (the turn is tracked by task_id).
+        if (method === undefined) {
+          const resolver = this.pendingRequests.get(obj.id as number);
+          if (resolver !== undefined) {
+            this.pendingRequests.delete(obj.id as number);
+            resolver(obj.result as Record<string, unknown> | undefined);
+          }
+        }
+        return;
+      }
       const params = (obj.params as Record<string, unknown> | undefined) ?? {};
       const taskId = params.task_id as string | undefined;
       // Every notification we route is task-scoped; ignore anything without one.
