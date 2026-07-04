@@ -102,14 +102,17 @@ export async function chatWithInstance(
   let taskId = randomUUID();
   let rpcId = 1;
   let resolved = false;
+  let wsClosed = false;
   let accumulated = '';
   let metadata: Record<string, unknown> | undefined;
 
+  // Always close the WS — independent of `resolved` (which only guards the
+  // user-facing handlers from firing twice). Gating close on `resolved` let
+  // the WS leak: `finish()` sets `resolved=true` before calling close().
   const close = (code?: number): void => {
-    if (!resolved) {
-      resolved = true;
-      try { ws.close(code); } catch { /* ignore */ }
-    }
+    if (wsClosed) return;
+    wsClosed = true;
+    try { ws.close(code); } catch { /* ignore */ }
   };
 
   const send = (obj: Record<string, unknown>): void => {
