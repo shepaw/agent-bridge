@@ -130,16 +130,128 @@ export class PeerAcpClient {
     await this.ensureConnected();
     const id = this.rpcId++;
     return new Promise<unknown[]>((resolve) => {
+      // Generous timeout: on a cold subprocess this now warms the command
+      // cache via a throwaway session/new (spawn + handshake + a short
+      // notification wait), which can take longer than a simple RPC round trip.
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
         resolve([]);
-      }, 5_000);
+      }, 15_000);
       this.pendingRequests.set(id, (result) => {
         clearTimeout(timer);
         const commands = result?.commands;
         resolve(Array.isArray(commands) ? commands : []);
       });
       this.send({ jsonrpc: '2.0', id, method: 'agent.commands.list', params: {} });
+    });
+  }
+
+  /**
+   * Fetch the agent's known sessions via `agent.sessions.list` on the
+   * persistent WS. Resolves with the sessions array (empty on failure/timeout
+   * or when the underlying agent can't enumerate sessions).
+   */
+  async sessions(): Promise<unknown[]> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise<unknown[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve([]);
+      }, 8_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        const sessions = result?.sessions;
+        resolve(Array.isArray(sessions) ? sessions : []);
+      });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.sessions.list', params: {} });
+    });
+  }
+
+  /**
+   * Fetch a session's replayed transcript via `agent.sessions.history`.
+   * Resolves with the messages array (empty on failure/timeout or when the
+   * agent can't replay). History replay can be slow, hence the longer timeout.
+   */
+  async sessionHistory(sessionId: string): Promise<unknown[]> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise<unknown[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve([]);
+      }, 40_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        const messages = result?.messages;
+        resolve(Array.isArray(messages) ? messages : []);
+      });
+      this.send({
+        jsonrpc: '2.0',
+        id,
+        method: 'agent.sessions.history',
+        params: { session_id: sessionId },
+      });
+    });
+  }
+
+  /**
+   * Fetch upstream model options via `agent.models.list`.
+   * Resolves with `{ models, current }` (empty on failure/timeout).
+   */
+  async modelsList(sessionId?: string): Promise<{ models: unknown[]; current?: string }> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve({ models: [] });
+      }, 15_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        const models = result?.models;
+        const current = result?.current;
+        resolve({
+          models: Array.isArray(models) ? models : [],
+          current: typeof current === 'string' ? current : undefined,
+        });
+      });
+      const params: Record<string, unknown> = {};
+      if (sessionId !== undefined && sessionId.length > 0) params.session_id = sessionId;
+      this.send({ jsonrpc: '2.0', id, method: 'agent.models.list', params });
+    });
+  }
+
+  /**
+   * Switch the upstream model via `agent.models.setCurrent`.
+   * Returns the result object on success, or `null` on failure/timeout.
+   */
+  async modelsSetCurrent(
+    model: string,
+    sessionId?: string,
+  ): Promise<{ model: string; display_name?: string } | null> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(null);
+      }, 15_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        if (result === undefined) {
+          resolve(null);
+          return;
+        }
+        const m = result.model;
+        resolve({
+          model: typeof m === 'string' ? m : model,
+          display_name: typeof result.display_name === 'string' ? result.display_name : undefined,
+        });
+      });
+      const params: Record<string, unknown> = { model };
+      if (sessionId !== undefined && sessionId.length > 0) params.session_id = sessionId;
+      this.send({ jsonrpc: '2.0', id, method: 'agent.models.setCurrent', params });
     });
   }
 

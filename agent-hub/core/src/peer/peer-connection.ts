@@ -105,6 +105,79 @@ export async function drivePeerConnection(opts: {
     send({ type: 'agent_commands_resp', agent_id: agentId, commands });
   };
 
+  /** App requests the agent's known sessions so it can mirror them locally. */
+  const handleAgentSessionsReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    if (typeof agentId !== 'string') return;
+    let sessions: unknown[] = [];
+    try {
+      sessions = await getAcpClient(agentId).sessions();
+    } catch (err) {
+      log(`agent_sessions req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({ type: 'agent_sessions_resp', agent_id: agentId, sessions });
+  };
+
+  /** App requests a session's transcript so it can backfill local history. */
+  const handleAgentSessionHistoryReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    const sessionId = params.session_id as string | undefined;
+    if (typeof agentId !== 'string' || typeof sessionId !== 'string') return;
+    let messages: unknown[] = [];
+    try {
+      messages = await getAcpClient(agentId).sessionHistory(sessionId);
+    } catch (err) {
+      log(`agent_session_history req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({ type: 'agent_session_history_resp', agent_id: agentId, session_id: sessionId, messages });
+  };
+
+  /** App requests upstream model list (agent.models.list relay). */
+  const handleAgentModelsReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    if (typeof agentId !== 'string') return;
+    const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+    let models: unknown[] = [];
+    let current: string | undefined;
+    try {
+      const result = await getAcpClient(agentId).modelsList(sessionId);
+      models = result.models;
+      current = result.current;
+    } catch (err) {
+      log(`agent_models req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({
+      type: 'agent_models_resp',
+      agent_id: agentId,
+      models,
+      ...(current !== undefined ? { current } : {}),
+    });
+  };
+
+  /** App switches upstream model (agent.models.setCurrent relay). */
+  const handleAgentModelsSetReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    const model = params.model as string | undefined;
+    if (typeof agentId !== 'string' || typeof model !== 'string' || model.length === 0) return;
+    const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+    let ok = false;
+    let displayName: string | undefined;
+    try {
+      const result = await getAcpClient(agentId).modelsSetCurrent(model, sessionId);
+      ok = result !== null;
+      displayName = result?.display_name;
+    } catch (err) {
+      log(`agent_models_set req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({
+      type: 'agent_models_set_resp',
+      agent_id: agentId,
+      model,
+      ok,
+      ...(displayName !== undefined ? { display_name: displayName } : {}),
+    });
+  };
+
   const handleAgentChat = async (params: Record<string, unknown>): Promise<void> => {
     const requestId = params.request_id as string | undefined;
     const agentId = params.agent_id as string | undefined;
@@ -169,6 +242,18 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_commands_req':
           void handleAgentCommandsReq(obj);
+          break;
+        case 'agent_sessions_req':
+          void handleAgentSessionsReq(obj);
+          break;
+        case 'agent_session_history_req':
+          void handleAgentSessionHistoryReq(obj);
+          break;
+        case 'agent_models_req':
+          void handleAgentModelsReq(obj);
+          break;
+        case 'agent_models_set_req':
+          void handleAgentModelsSetReq(obj);
           break;
         case 'agent_chat':
           void handleAgentChat(obj as Record<string, unknown>);

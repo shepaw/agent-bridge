@@ -67,6 +67,18 @@ export class SessionStore {
     return this.mapping.get(shepawSessionId);
   }
 
+  /**
+   * Reverse lookup: find the shepaw session id that maps to a given upstream
+   * agent-sdk session id. Used when listing sessions so an already-known
+   * session is surfaced under the app's own id instead of the raw upstream id.
+   */
+  findShepawIdBySdkId(sdkSessionId: string): string | undefined {
+    for (const [shepawId, sdkId] of this.mapping) {
+      if (sdkId === sdkSessionId) return shepawId;
+    }
+    return undefined;
+  }
+
   set(shepawSessionId: string, sdkSessionId: string): void {
     if (this.mapping.get(shepawSessionId) === sdkSessionId) return;
     this.mapping.set(shepawSessionId, sdkSessionId);

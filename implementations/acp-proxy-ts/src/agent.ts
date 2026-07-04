@@ -20,6 +20,11 @@ import {
   type ModelsListResult,
   type ModelsSetCurrentParams,
   type ModelsSetCurrentResult,
+  type SessionHistoryParams,
+  type SessionHistoryResult,
+  type SessionInfo,
+  type SessionsListParams,
+  type SessionsListResult,
   type SessionStoreOptions,
   type SlashCommandInfo,
   type TaskContext,
@@ -116,6 +121,7 @@ export class AcpProxyAgent extends ACPAgentServer {
   }
 
   override async onCommandsList(_params: CommandsListParams): Promise<CommandsListResult> {
+    await this.subprocess.ensureCommandsWarm();
     const commands: SlashCommandInfo[] = this.subprocess.availableCommands.map((cmd) => ({
       name: cmd.name.startsWith('/') ? cmd.name.slice(1) : cmd.name,
       description: cmd.description ?? '',
@@ -125,12 +131,51 @@ export class AcpProxyAgent extends ACPAgentServer {
     return { commands };
   }
 
-  override async onModelsList(_params: ModelsListParams): Promise<ModelsListResult> {
-    return this.subprocess.modelsList();
+  override async onSessionsList(params: SessionsListParams): Promise<SessionsListResult> {
+    const upstream = await this.subprocess.listSessions(params.cwd);
+    const sessions: SessionInfo[] = upstream.map((s) => {
+      // If the app already has a mapping to this upstream session, surface it
+      // under the app's own session id so it reuses the existing local channel
+      // instead of adopting a second (crossing) one.
+      const knownShepawId = this.sessionStore.findShepawIdBySdkId(s.sessionId);
+      const sessionId = knownShepawId ?? s.sessionId;
+      // For a not-yet-known session the app adopts the upstream id verbatim.
+      // Pre-seed the mapping (id → same upstream id) so the first chat on this
+      // adopted id goes through getOrCreateSession → tryRestoreSession and
+      // RESUMES the real upstream session (rather than spawning an empty one),
+      // which is exactly what prevents "session crossing".
+      if (knownShepawId === undefined) {
+        this.sessionStore.set(sessionId, s.sessionId);
+      }
+      return {
+        session_id: sessionId,
+        title: s.title ?? undefined,
+        updated_at: s.updatedAt ?? undefined,
+        cwd: s.cwd,
+      };
+    });
+    return { sessions };
+  }
+
+  override async onSessionHistory(params: SessionHistoryParams): Promise<SessionHistoryResult> {
+    const sessionId = params.session_id;
+    if (sessionId.length === 0) return { messages: [] };
+    // The app sends the same id it chats with; map it to the upstream agent
+    // session id (pre-seeded / recorded in the SessionStore). Falls back to the
+    // id itself for adopted-verbatim sessions.
+    const upstreamId = this.sessionStore.get(sessionId) ?? sessionId;
+    const messages = await this.subprocess.loadSessionTranscript(upstreamId);
+    return { messages };
+  }
+
+  override async onModelsList(params: ModelsListParams): Promise<ModelsListResult> {
+    await this.subprocess.ensureCommandsWarm();
+    return this.subprocess.modelsList(params.session_id);
   }
 
   override async onModelsSetCurrent(params: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
-    return this.subprocess.setModel(params.model, this.lastShepawSessionId);
+    const sessionId = params.session_id ?? this.lastShepawSessionId;
+    return this.subprocess.setModel(params.model, sessionId);
   }
 
   override getRuntimeStatus(): AgentRuntimeStatus {

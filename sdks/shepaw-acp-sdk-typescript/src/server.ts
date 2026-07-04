@@ -73,6 +73,10 @@ import type {
   ModelsListResult,
   ModelsSetCurrentParams,
   ModelsSetCurrentResult,
+  SessionHistoryParams,
+  SessionHistoryResult,
+  SessionsListParams,
+  SessionsListResult,
   SlashCommandInfo,
 } from './types.js';
 import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS, deriveBusyLevel } from './types.js';
@@ -370,6 +374,31 @@ export class ACPAgentServer {
         source: 'sdk',
       })),
     };
+  }
+
+  /**
+   * Return the conversation sessions this agent knows about so the app can
+   * mirror the agent's real session list (and avoid "session crossing").
+   *
+   * Default behavior: `{ sessions: [] }` — the base SDK has no notion of
+   * enumerable sessions. Proxy/agent implementations that CAN enumerate
+   * sessions (e.g. an ACP proxy over an agent that supports `session/list`)
+   * override this to return the real list. Agents that can't enumerate
+   * should keep returning `[]` (the app degrades gracefully).
+   */
+  async onSessionsList(_params: SessionsListParams): Promise<SessionsListResult> {
+    return { sessions: [] };
+  }
+
+  /**
+   * Return a session's replayed transcript (oldest → newest) so the app can
+   * lazily backfill chat history when opening a synced remote session.
+   *
+   * Default: `{ messages: [] }`. Proxy implementations over an agent that can
+   * `session/load`-replay override this to return the real transcript.
+   */
+  async onSessionHistory(_params: SessionHistoryParams): Promise<SessionHistoryResult> {
+    return { messages: [] };
   }
 
   /**
@@ -1069,6 +1098,12 @@ export class ACPAgentServer {
         case 'agent.commands.list':
           await this.handleCommandsList(ws, msgId, params);
           return;
+        case 'agent.sessions.list':
+          await this.handleSessionsList(ws, msgId, params);
+          return;
+        case 'agent.sessions.history':
+          await this.handleSessionHistory(ws, msgId, params);
+          return;
         case 'agent.models.list':
           await this.handleModelsList(ws, msgId, params);
           return;
@@ -1399,6 +1434,51 @@ export class ACPAgentServer {
     }
   }
 
+  private async handleSessionsList(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const listParams = (params ?? {}) as SessionsListParams;
+      const result = await this.onSessionsList(listParams);
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'sessions.list failed',
+          },
+        }),
+      );
+    }
+  }
+
+  private async handleSessionHistory(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const raw = (params ?? {}) as Record<string, unknown>;
+      const sessionId = typeof raw.session_id === 'string' ? raw.session_id : '';
+      const result = await this.onSessionHistory({ session_id: sessionId });
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'sessions.history failed',
+          },
+        }),
+      );
+    }
+  }
+
   private async handleModelsList(
     ws: WebSocket,
     msgId: string | number,
@@ -1438,7 +1518,10 @@ export class ACPAgentServer {
       return;
     }
     try {
-      const result = await this.onModelsSetCurrent({ model });
+      const result = await this.onModelsSetCurrent({
+        model,
+        session_id: typeof raw.session_id === 'string' ? raw.session_id : undefined,
+      });
       await wsSend(ws, jsonrpcResponse(msgId, { result }));
     } catch (err) {
       await wsSend(

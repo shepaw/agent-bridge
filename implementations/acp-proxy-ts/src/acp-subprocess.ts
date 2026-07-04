@@ -11,10 +11,11 @@ import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
 import { TaskCancelledError } from 'shepaw-acp-sdk';
-import type { ModelsListResult, ModelsSetCurrentResult, TaskContext } from 'shepaw-acp-sdk';
+import type { ModelsListResult, ModelsSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
 import { spawnCommand } from './engines.js';
+import { loadUpstreamSessionTranscript } from './session-history.js';
 import {
   buildSetModelResult,
   configOptionsToModelsList,
@@ -26,6 +27,7 @@ import { mapSessionUpdate } from './session-mapper.js';
 import {
   attachActiveSession,
   discardLoadReplayUpdates,
+  supportsSessionList,
   supportsSessionLoad,
   supportsSessionResume,
 } from './session-lifecycle.js';
@@ -86,6 +88,8 @@ export class AcpSubprocess {
 
   /** Cached slash commands from the latest available_commands_update. */
   private cachedCommands: acp.AvailableCommand[] = [];
+  /** Config options captured by a throwaway warmup session (before any chat). */
+  private warmConfigOptions: acp.SessionConfigOption[] | undefined;
 
   constructor(opts: AcpSubprocessOptions) {
     this.spec = opts.spec;
@@ -101,6 +105,107 @@ export class AcpSubprocess {
 
   get availableCommands(): ReadonlyArray<acp.AvailableCommand> {
     return this.cachedCommands;
+  }
+
+  /**
+   * Warm `cachedCommands` even before any chat turn has happened.
+   *
+   * Normally `cachedCommands` is only populated by the `available_commands_update`
+   * notification observed while draining a live prompt turn — so right after a
+   * (re)start, `agent.commands.list` returns `[]` until the user sends a first
+   * message (this is what made the peer slash-command palette disappear right
+   * after restarting an agent-bridge instance). Claude Code proactively emits
+   * `available_commands_update` a moment after `session/new`, with no prompt
+   * required, so we create a disposable session on the live connection just to
+   * capture it. Verified empirically that such a prompt-less session is never
+   * persisted to the agent's own session store, so this can't pollute the
+   * session list synced into the app.
+   */
+  async ensureCommandsWarm(): Promise<void> {
+    if (this.cachedCommands.length > 0) return;
+    await this.start();
+    if (this.connection === undefined) return;
+
+    let session: acp.ActiveSession | undefined;
+    try {
+      session = await this.connection.agent.buildSession(this.cwd).start();
+      this.warmConfigOptions = mergeConfigOptions(
+        this.warmConfigOptions,
+        session.newSessionResponse.configOptions,
+      );
+      const idleMs = 400;
+      const maxMs = 4_000;
+      const startedAt = Date.now();
+      let lastAt = startedAt;
+      while (Date.now() - startedAt < maxMs) {
+        const pending = await Promise.race([
+          session.nextUpdate(),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 100)),
+        ]);
+        if (pending === undefined) {
+          if (Date.now() - lastAt >= idleMs) break;
+          continue;
+        }
+        lastAt = Date.now();
+        if (pending.kind === 'stop') break;
+        if (pending.update.sessionUpdate === 'available_commands_update') {
+          this.cachedCommands = pending.update.availableCommands ?? [];
+        } else if (pending.update.sessionUpdate === 'config_option_update') {
+          this.warmConfigOptions = mergeConfigOptions(
+            this.warmConfigOptions,
+            pending.update.configOptions,
+          );
+        }
+        if (this.cachedCommands.length > 0 && findModelConfigOption(this.warmConfigOptions) !== undefined) {
+          break;
+        }
+      }
+    } catch (err) {
+      log('ensureCommandsWarm failed: %s', err instanceof Error ? err.message : String(err));
+    } finally {
+      session?.dispose();
+    }
+  }
+
+  /** Whether the upstream agent can enumerate sessions (`session/list`). */
+  get supportsList(): boolean {
+    return supportsSessionList(this.agentCaps);
+  }
+
+  /** Whether the upstream agent can `session/load`-replay a transcript. */
+  get supportsLoad(): boolean {
+    return supportsSessionLoad(this.agentCaps);
+  }
+
+  /**
+   * Replay a session's transcript via an ephemeral `session/load` connection
+   * (keeps the live serving subprocess untouched). Returns `[]` if the agent
+   * can't load sessions. `upstreamSessionId` must be the agent-side id.
+   */
+  async loadSessionTranscript(upstreamSessionId: string): Promise<SessionHistoryMessage[]> {
+    await this.start();
+    if (!supportsSessionLoad(this.agentCaps)) return [];
+    return loadUpstreamSessionTranscript(this.spec, this.cwd, upstreamSessionId, this.extraEnv);
+  }
+
+  /**
+   * List the upstream agent's sessions via `session/list` on the persistent
+   * connection. Returns `[]` if the agent doesn't advertise the capability
+   * (e.g. codebuddy) so callers degrade gracefully.
+   */
+  async listSessions(cwd?: string): Promise<acp.SessionInfo[]> {
+    await this.start();
+    if (this.connection === undefined) return [];
+    if (!supportsSessionList(this.agentCaps)) return [];
+    try {
+      const response = (await this.connection.agent.request(acp.methods.agent.session.list, {
+        cwd: cwd ?? this.cwd,
+      })) as acp.ListSessionsResponse;
+      return response.sessions ?? [];
+    } catch (err) {
+      log('session/list failed: %s', err instanceof Error ? err.message : String(err));
+      return [];
+    }
   }
 
   /** Start the subprocess and initialize the ACP connection. */
@@ -241,10 +346,18 @@ export class AcpSubprocess {
     };
   }
 
-  modelsList(): ModelsListResult {
+  modelsList(shepawSessionId?: string): ModelsListResult {
+    if (shepawSessionId !== undefined && shepawSessionId.length > 0) {
+      const scoped = configOptionsToModelsList(this.configByShepawSession.get(shepawSessionId));
+      if (scoped.models.length > 0) return scoped;
+    }
     for (const opts of this.configByShepawSession.values()) {
       const list = configOptionsToModelsList(opts);
       if (list.models.length > 0) return list;
+    }
+    if (this.warmConfigOptions !== undefined) {
+      const warm = configOptionsToModelsList(this.warmConfigOptions);
+      if (warm.models.length > 0) return warm;
     }
     return { models: [], current: undefined };
   }

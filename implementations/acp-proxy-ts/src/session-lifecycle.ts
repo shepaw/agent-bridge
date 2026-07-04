@@ -28,6 +28,11 @@ export function supportsSessionLoad(caps: acp.InitializeResponse | undefined): b
   return caps?.agentCapabilities?.loadSession === true;
 }
 
+export function supportsSessionList(caps: acp.InitializeResponse | undefined): boolean {
+  return caps?.agentCapabilities?.sessionCapabilities?.list !== undefined
+    && caps?.agentCapabilities?.sessionCapabilities?.list !== null;
+}
+
 export interface DiscardReplayOptions {
   /** Stop after this many ms without a replay update. Default 400. */
   idleMs?: number;

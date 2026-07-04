@@ -185,6 +185,56 @@ export interface CommandsChangedParams {
   commands: SlashCommandInfo[];
 }
 
+// ── Session listing (agent.sessions.list) ──────────────────────────
+
+/**
+ * A remote conversation session the agent knows about, surfaced to the app so
+ * it can mirror the agent's real session list (avoiding "session crossing").
+ *
+ * Wire names stay snake_case. `session_id` is the id the app must send back as
+ * `agent.chat`'s `session_id` to continue THIS exact session — for already
+ * app-known sessions this is the app's own session id; for sessions the app has
+ * never seen it is the upstream agent session id (which the app then adopts).
+ */
+export interface SessionInfo {
+  session_id: string;
+  title?: string;
+  /** ISO-8601 last-updated timestamp, if the agent tracks it. */
+  updated_at?: string;
+  /** Working directory the session is scoped to, if any. */
+  cwd?: string;
+}
+
+/** `agent.sessions.list` request params (reserved for future filters). */
+export interface SessionsListParams {
+  // Reserved: cwd filter, cursor for pagination.
+  cwd?: string;
+}
+
+/** `agent.sessions.list` response. */
+export interface SessionsListResult {
+  sessions: SessionInfo[];
+}
+
+/** One replayed conversation turn from a session's transcript. */
+export interface SessionHistoryMessage {
+  /** `user` or `agent` — matches the app's sender types. */
+  role: 'user' | 'agent';
+  content: string;
+  /** Upstream message id, when available (used for de-dup on the app side). */
+  message_id?: string;
+}
+
+/** `agent.sessions.history` request params. */
+export interface SessionHistoryParams {
+  session_id: string;
+}
+
+/** `agent.sessions.history` response — ordered oldest → newest. */
+export interface SessionHistoryResult {
+  messages: SessionHistoryMessage[];
+}
+
 // ── Model selection (agent.models.list / agent.models.setCurrent) ──
 
 /**
@@ -201,8 +251,11 @@ export interface ModelInfo {
   description: string;
 }
 
-/** `agent.models.list` request params (reserved). */
-export interface ModelsListParams {}
+/** `agent.models.list` request params. */
+export interface ModelsListParams {
+  /** When set, return models/current for this Shepaw session (upstream config). */
+  session_id?: string;
+}
 
 /** `agent.models.list` response. */
 export interface ModelsListResult {
@@ -214,6 +267,8 @@ export interface ModelsListResult {
 /** `agent.models.setCurrent` request params. */
 export interface ModelsSetCurrentParams {
   model: string;
+  /** When set, apply to this Shepaw session's upstream ACP session. */
+  session_id?: string;
 }
 
 /** `agent.models.setCurrent` response. */
