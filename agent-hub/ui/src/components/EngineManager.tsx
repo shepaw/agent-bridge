@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
-import type { ApprovalPolicy, EngineInfo, MaskedEnvVar } from '../api/types.js';
+import type {
+  ApprovalPolicy,
+  EngineInfo,
+  EngineInstallStatus,
+  EngineSetupGuide,
+  MaskedEnvVar,
+} from '../api/types.js';
 import { ApprovalPolicyEditor, emptyApprovalPolicy } from './ApprovalPolicyEditor.js';
 
 /**
@@ -107,6 +113,12 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  const openConfig = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) void loadEnv();
   };
 
   const toggleDisabled = async () => {
@@ -222,7 +234,7 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
           <button style={smallBtn} disabled={busy} onClick={() => void toggleDisabled()}>
             {engine.disabled ? '启用' : '禁用'}
           </button>
-          <button style={smallBtn} onClick={() => { setOpen(!open); if (!open) void loadEnv(); }}>
+          <button style={smallBtn} onClick={openConfig}>
             {open ? '收起' : '配置'}
           </button>
         </div>
@@ -230,6 +242,13 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
 
       {open && (
         <div style={rowBody}>
+          <EngineSetupSection
+            engine={engine}
+            onChanged={onChanged}
+            onError={setErr}
+            onNotice={setNotice}
+          />
+
           {!engine.builtin && (
             <div style={subSection}>
               <h5 style={subTitle}>引擎命令（自定义）</h5>
@@ -282,6 +301,182 @@ function EngineRow({ engine, onChanged }: { engine: EngineInfo; onChanged: () =>
   );
 }
 
+function EngineSetupSection({
+  engine,
+  onChanged,
+  onError,
+  onNotice,
+}: {
+  engine: EngineInfo;
+  onChanged: () => void;
+  onError: (msg: string | null) => void;
+  onNotice: (msg: string | null) => void;
+}) {
+  const [guide, setGuide] = useState<EngineSetupGuide | null>(null);
+  const [status, setStatus] = useState<EngineInstallStatus | null>(null);
+  const [disabled, setDisabled] = useState(engine.disabled === true);
+  const [loading, setLoading] = useState(true);
+  const [installing, setInstalling] = useState(false);
+  const [installLog, setInstallLog] = useState<string | null>(null);
+
+  const loadSetup = async () => {
+    setLoading(true);
+    onError(null);
+    try {
+      const data = await api.engines.setup(engine.id);
+      setGuide(data.guide);
+      setStatus(data.status);
+      setDisabled(data.disabled);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadSetup();
+  }, [engine.id]);
+
+  const enableEngine = async () => {
+    setInstalling(true);
+    onError(null);
+    onNotice(null);
+    try {
+      await api.engines.setOverride(engine.id, { disabled: false });
+      setDisabled(false);
+      onNotice('引擎已启用。');
+      onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const installAndEnable = async () => {
+    setInstalling(true);
+    onError(null);
+    onNotice(null);
+    setInstallLog(null);
+    try {
+      const result = await api.engines.install(engine.id);
+      setStatus(result.status);
+      if (result.stdout || result.stderr) {
+        setInstallLog([result.stdout, result.stderr].filter(Boolean).join('\n').trim());
+      }
+      if (result.ok) {
+        setDisabled(false);
+        onNotice('安装完成，引擎已启用。');
+        onChanged();
+      } else {
+        onError(result.status.checkError ?? '安装未完成，请查看输出或按文档手动安装。');
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={subSection}>
+        <h5 style={subTitle}>环境与安装</h5>
+        <p style={hint}>正在检测环境…</p>
+      </div>
+    );
+  }
+
+  if (!guide || !status) return null;
+
+  const showInstallBtn = guide.installable && !status.installed;
+  const showEnableBtn = status.installed && disabled;
+
+  return (
+    <div style={setupBlock}>
+      <div style={setupHead}>
+        <h5 style={{ ...subTitle, margin: 0 }}>环境与安装</h5>
+        <span style={{
+          ...tag,
+          background: status.installed ? '#3a4a2a' : '#452632',
+          color: status.installed ? '#a6e3a1' : '#f38ba8',
+        }}>
+          {status.installed
+            ? `已安装${status.version ? ` · ${status.version}` : ''}`
+            : '未安装'}
+        </span>
+      </div>
+
+      <p style={{ ...hint, marginTop: 8 }}>{guide.summary}</p>
+
+      {guide.acpCommand && (
+        <div style={cmdBlock}>
+          <span style={{ color: '#6c7086', fontSize: 12 }}>ACP 上游命令</span>
+          <code style={cmdCode}>{guide.acpCommand}</code>
+        </div>
+      )}
+
+      {status.binaryPath && (
+        <p style={{ color: '#a6adc8', fontSize: 12, margin: '6px 0' }}>
+          检测到：<code style={{ color: '#f9e2af' }}>{status.binaryPath}</code>
+        </p>
+      )}
+
+      <ol style={stepsList}>
+        {guide.steps.map((step, i) => (
+          <li key={i} style={stepItem}>
+            <strong style={{ color: '#cdd6f4' }}>{step.title}</strong>
+            <p style={{ margin: '4px 0 0', color: '#a6adc8', fontSize: 13 }}>{step.description}</p>
+            {step.command && (
+              <pre style={stepCmd}>{step.command}</pre>
+            )}
+          </li>
+        ))}
+      </ol>
+
+      {guide.requiredEnvVars && guide.requiredEnvVars.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <span style={{ color: '#6c7086', fontSize: 12 }}>所需环境变量（可在下方「默认凭据」配置）</span>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: '#a6adc8', fontSize: 13 }}>
+            {guide.requiredEnvVars.map((v) => (
+              <li key={v.key}>
+                <code style={{ color: '#f9e2af' }}>{v.key}</code>
+                {v.optional ? '（可选）' : ''} — {v.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
+        {showInstallBtn && (
+          <button style={primaryBtn} disabled={installing} onClick={() => void installAndEnable()}>
+            {installing ? '安装中…' : '一键安装并启用'}
+          </button>
+        )}
+        {showEnableBtn && (
+          <button style={primaryBtn} disabled={installing} onClick={() => void enableEngine()}>
+            启用引擎
+          </button>
+        )}
+        <button style={secondaryBtn} disabled={installing} onClick={() => void loadSetup()}>
+          重新检测
+        </button>
+        {guide.docsUrl && (
+          <a href={guide.docsUrl} target="_blank" rel="noreferrer" style={docLink}>
+            查看官方文档 ↗
+          </a>
+        )}
+      </div>
+
+      {installLog && (
+        <pre style={installOutput}>{installLog}</pre>
+      )}
+    </div>
+  );
+}
+
 // ── styles ────────────────────────────────────────────────────────
 
 const addBlock: React.CSSProperties = { background: '#181825', border: '1px solid #313244', borderRadius: 8, padding: 14 };
@@ -322,4 +517,31 @@ const envList: React.CSSProperties = { display: 'flex', flexDirection: 'column',
 const envRow: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
   background: '#11111b', border: '1px solid #313244', borderRadius: 6, padding: '6px 10px',
+};
+const setupBlock: React.CSSProperties = {
+  marginBottom: 16, padding: 12, background: '#11111b',
+  border: '1px solid #313244', borderRadius: 8,
+};
+const setupHead: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+};
+const cmdBlock: React.CSSProperties = { marginTop: 8 };
+const cmdCode: React.CSSProperties = {
+  display: 'block', marginTop: 4, padding: '8px 10px', background: '#181825',
+  borderRadius: 6, color: '#a6e3a1', fontSize: 12, wordBreak: 'break-all',
+};
+const stepsList: React.CSSProperties = {
+  margin: '12px 0 0', paddingLeft: 20, color: '#a6adc8',
+};
+const stepItem: React.CSSProperties = { marginBottom: 10 };
+const stepCmd: React.CSSProperties = {
+  margin: '6px 0 0', padding: '8px 10px', background: '#181825',
+  borderRadius: 6, color: '#cdd6f4', fontSize: 12, overflow: 'auto',
+};
+const docLink: React.CSSProperties = {
+  color: '#89b4fa', fontSize: 13, textDecoration: 'none',
+};
+const installOutput: React.CSSProperties = {
+  marginTop: 10, padding: 10, background: '#181825', borderRadius: 6,
+  color: '#a6adc8', fontSize: 11, maxHeight: 160, overflow: 'auto', whiteSpace: 'pre-wrap',
 };

@@ -4,7 +4,9 @@ import type {
   CreateInstanceInput,
   EnrollToken,
   EngineInfo,
+  EngineInstallResponse,
   EngineOverridePatch,
+  EngineSetupResponse,
   GatewayInfo,
   GatewayRouterStatus,
   HubAgentCatalogEntry,
@@ -134,6 +136,12 @@ export const api = {
 
     clearApproval: (id: string): Promise<{ ok: boolean }> =>
       request(`/engines/${encodeURIComponent(id)}/approval`, { method: 'DELETE' }),
+
+    setup: (id: string): Promise<EngineSetupResponse> =>
+      request(`/engines/${encodeURIComponent(id)}/setup`),
+
+    install: (id: string): Promise<EngineInstallResponse> =>
+      request(`/engines/${encodeURIComponent(id)}/install`, { method: 'POST' }),
 
     envvars: {
       list: (id: string): Promise<MaskedEnvVar[]> =>

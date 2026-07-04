@@ -126,6 +126,51 @@ export interface MaskedEnvVar {
   value: string;
 }
 
+export interface EngineSetupStep {
+  title: string;
+  description: string;
+  command?: string;
+}
+
+export interface EngineEnvVarHint {
+  key: string;
+  description: string;
+  optional?: boolean;
+}
+
+export interface EngineSetupGuide {
+  engineId: string;
+  summary: string;
+  acpCommand: string;
+  docsUrl?: string;
+  steps: EngineSetupStep[];
+  installCommand?: string;
+  checkBinary: string;
+  requiredEnvVars?: EngineEnvVarHint[];
+  installable: boolean;
+}
+
+export interface EngineInstallStatus {
+  installed: boolean;
+  binaryPath: string | null;
+  version: string | null;
+  checkError: string | null;
+}
+
+export interface EngineSetupResponse {
+  guide: EngineSetupGuide;
+  status: EngineInstallStatus;
+  disabled: boolean;
+}
+
+export interface EngineInstallResponse {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  status: EngineInstallStatus;
+  enabled: boolean;
+}
+
 /** Runtime status of the device peer service. */
 export interface PeerServiceStatus {
   running: boolean;

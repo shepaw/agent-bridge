@@ -46,6 +46,7 @@ import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
 import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
+import { augmentSpawnPath } from './engine-setup.js';
 import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
@@ -179,7 +180,7 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       detached: true,
       windowsHide: true,
       stdio: ['ignore', logFd, logFd],
-      env: {
+      env: augmentSpawnPath({
         ...process.env,
         // Engine-default credentials (engineOverrides[engine].envVars). These
         // are the base layer: a instance can override individual keys via its
@@ -220,7 +221,7 @@ export async function startInstance(instance: InstanceConfig): Promise<{
         // (instance override → gateway default) and hand it to the ACP proxy as
         // PAW_ACP_APPROVAL_* env so it can auto-skip/deny without a round trip.
         ...approvalPolicyEnv(resolveApprovalPolicy(hubCfg, instance)),
-      },
+      }),
     });
 
     // unref() tells Node's event loop not to wait for this child. The hub

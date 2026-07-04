@@ -9,7 +9,8 @@
  * DELETE /api/engines/:id/approval          — clear per-engine approval (inherit)
  * GET    /api/engines/:id/envvars           — list engine-default env var keys (masked)
  * PUT    /api/engines/:id/envvars/:key      — set one engine-default env var
- * DELETE /api/engines/:id/envvars/:key      — delete one engine-default env var
+ * GET    /api/engines/:id/setup             — setup guide + install status
+ * POST   /api/engines/:id/install           — one-click install + enable
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -19,17 +20,22 @@ import {
   CustomEngineExistsError,
   CustomEngineInUseError,
   CustomEngineNotFoundError,
+  checkEngineInstallStatus,
   deleteEngineEnvVar,
   decryptValue,
   engineEnvVarKeys,
+  getEngineSetupGuide,
   isKnownEngineForOverrides,
   listEngineInfos,
   loadOrCreateHubConfig,
   removeCustomEngineFromHub,
+  runEngineInstall,
   setEngineEnvVar,
   setEngineOverride,
   updateCustomEngineInHub,
-  validateCustomEngineId,
+  findCustomEngine,
+  formatShellCommand,
+  resolveBinaryPath,
 } from '@shepaw/agent-hub-core';
 import { hubRoot } from '@shepaw/agent-hub-core';
 import { parseApprovalBody } from './approval.js';
@@ -83,6 +89,80 @@ enginesRouter.post('/', (req: Request, res: Response) => {
   } catch (err) {
     if (err instanceof CustomEngineExistsError) {
       res.status(409).json({ error: err.message });
+    } else {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+enginesRouter.get('/:id/setup', (req: Request, res: Response) => {
+  try {
+    requireKnownEngine(req.params.id!);
+    const cfg = loadOrCreateHubConfig();
+    const engineId = req.params.id!;
+    let guide = getEngineSetupGuide(engineId);
+    const custom = findCustomEngine(cfg.customEngines, engineId);
+    if (custom !== undefined) {
+      const acpCommand = formatShellCommand(custom.command, custom.args);
+      guide = {
+        ...guide,
+        engineId,
+        acpCommand,
+        summary: `自定义引擎「${custom.displayName}」，需确保 ${custom.command} 已安装并在 PATH 中。`,
+        checkBinary: custom.command,
+      };
+    }
+    const status = custom !== undefined
+      ? (() => {
+          const binaryPath = resolveBinaryPath(custom.command, []);
+          if (binaryPath === null) {
+            return {
+              installed: false,
+              binaryPath: null,
+              version: null,
+              checkError: `未找到 ${custom.command} 命令`,
+            };
+          }
+          return {
+            installed: true,
+            binaryPath,
+            version: null,
+            checkError: null,
+          };
+        })()
+      : checkEngineInstallStatus(engineId);
+    const disabled = cfg.engineOverrides?.[engineId]?.disabled === true;
+    res.json({ guide, status, disabled });
+  } catch (err) {
+    if (err instanceof CustomEngineNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+/**
+ * POST /api/engines/:id/install — run the engine's install script, then enable it.
+ */
+enginesRouter.post('/:id/install', (req: Request, res: Response) => {
+  try {
+    requireKnownEngine(req.params.id!);
+    const result = runEngineInstall(req.params.id!);
+    if (result.ok) {
+      const cfg = loadOrCreateHubConfig();
+      setEngineOverride(cfg, req.params.id!, { disabled: false });
+    }
+    res.json({
+      ok: result.ok,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      status: result.status,
+      enabled: result.ok,
+    });
+  } catch (err) {
+    if (err instanceof CustomEngineNotFoundError) {
+      res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }

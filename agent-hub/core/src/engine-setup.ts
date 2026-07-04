@@ -1,0 +1,435 @@
+/**
+ * Per-engine environment setup guides, prerequisite checks, and one-click
+ * install helpers for the Agent Hub dashboard.
+ */
+
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+import { isBuiltinEngine, type BuiltinAgentEngine } from './engines.js';
+
+export interface EngineSetupStep {
+  readonly title: string;
+  readonly description: string;
+  /** Optional shell command shown for copy/paste. */
+  readonly command?: string;
+}
+
+export interface EngineEnvVarHint {
+  readonly key: string;
+  readonly description: string;
+  readonly optional?: boolean;
+}
+
+export interface EngineSetupGuide {
+  readonly engineId: string;
+  readonly summary: string;
+  readonly acpCommand: string;
+  readonly docsUrl?: string;
+  readonly steps: readonly EngineSetupStep[];
+  /** Shell command run by POST /api/engines/:id/install. Omitted when manual-only. */
+  readonly installCommand?: string;
+  /** Binary name or path used for prerequisite detection. */
+  readonly checkBinary: string;
+  /** Extra directories searched before PATH (e.g. ~/.local/bin for Cursor CLI). */
+  readonly checkPaths?: readonly string[];
+  readonly requiredEnvVars?: readonly EngineEnvVarHint[];
+  readonly installable: boolean;
+}
+
+export interface EngineInstallStatus {
+  readonly installed: boolean;
+  readonly binaryPath: string | null;
+  readonly version: string | null;
+  readonly checkError: string | null;
+}
+
+export interface EngineInstallResult {
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly status: EngineInstallStatus;
+}
+
+/** Built-in upstream ACP spawn commands (mirrors acp-proxy-ts/src/engines.ts). */
+export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = {
+  'claude-code': 'npx -y @agentclientprotocol/claude-agent-acp@latest',
+  tclaude: 'npx -y @agentclientprotocol/claude-agent-acp@latest',
+  codebuddy: 'codebuddy --acp',
+  codex: 'npx -y @zed-industries/codex-acp@latest',
+  tcodex: 'npx -y @zed-industries/codex-acp@latest',
+  opencode: 'npx -y opencode-ai@latest acp',
+  openclaw: 'npx -y openclaw acp',
+  cursor: 'agent acp',
+  hermes: 'hermes acp',
+};
+
+const LOCAL_BIN = join(homedir(), '.local', 'bin');
+
+const SETUP_GUIDES: Record<BuiltinAgentEngine, EngineSetupGuide> = {
+  'claude-code': {
+    engineId: 'claude-code',
+    summary: '通过 npx 拉取 Claude Code 官方 ACP 适配器；需要 Node.js 与 Anthropic 凭据。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['claude-code'],
+    docsUrl: 'https://agentclientprotocol.com',
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
+    requiredEnvVars: [
+      { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API Key（或在下方凭据区配置）' },
+    ],
+    steps: [
+      {
+        title: '安装 Node.js',
+        description: '需要 Node.js 18+ 与 npm/npx。可从 https://nodejs.org 安装，或使用 nvm。',
+        command: 'node --version && npx --version',
+      },
+      {
+        title: '配置 Anthropic 凭据',
+        description: '在下方「默认凭据」添加 ANTHROPIC_API_KEY，或在实例环境变量中覆盖。',
+      },
+      {
+        title: '预热 ACP 包（可选）',
+        description: '首次启动也会自动下载；一键安装会预先拉取适配器包。',
+        command: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
+      },
+    ],
+  },
+  tclaude: {
+    engineId: 'tclaude',
+    summary: 'TClaude 与 Claude Code 共用同一 ACP 适配器，凭据与路由由 Hub 内部处理。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.tclaude,
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
+    requiredEnvVars: [
+      { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API Key' },
+    ],
+    steps: [
+      { title: '安装 Node.js', description: '需要 Node.js 18+ 与 npx。', command: 'node --version' },
+      { title: '配置凭据', description: '在默认凭据区设置 ANTHROPIC_API_KEY 等变量。' },
+    ],
+  },
+  codebuddy: {
+    engineId: 'codebuddy',
+    summary: 'CodeBuddy Code 原生支持 ACP，需单独安装 codebuddy CLI。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codebuddy,
+    docsUrl: 'https://www.codebuddy.ai',
+    checkBinary: 'codebuddy',
+    checkPaths: [join(homedir(), '.codebuddy', 'bin')],
+    installable: false,
+    requiredEnvVars: [
+      { key: 'CODEBUDDY_AUTH_TOKEN', description: 'CodeBuddy 认证 Token' },
+    ],
+    steps: [
+      {
+        title: '安装 CodeBuddy CLI',
+        description: '按 CodeBuddy 官方文档安装 CLI，并确保 codebuddy 在 PATH 中。',
+        command: 'codebuddy --version',
+      },
+      {
+        title: '验证 ACP 模式',
+        description: 'Gateway 会执行 codebuddy --acp 作为上游子进程。',
+        command: 'codebuddy --acp',
+      },
+      {
+        title: '配置凭据',
+        description: '在默认凭据区添加 CODEBUDDY_AUTH_TOKEN。',
+      },
+    ],
+  },
+  codex: {
+    engineId: 'codex',
+    summary: '通过 npx 运行 Codex ACP 适配器；需要 Node.js 与 OpenAI 凭据。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codex,
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
+    requiredEnvVars: [
+      { key: 'OPENAI_API_KEY', description: 'OpenAI API Key' },
+    ],
+    steps: [
+      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
+      { title: '配置 OPENAI_API_KEY', description: '在默认凭据区或实例环境变量中设置。' },
+      {
+        title: '预热适配器',
+        command: 'npx -y @zed-industries/codex-acp@latest --version',
+        description: '一键安装会预先下载 Codex ACP 包。',
+      },
+    ],
+  },
+  tcodex: {
+    engineId: 'tcodex',
+    summary: 'TCodex 与 Codex 共用 ACP 适配器。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.tcodex,
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
+    requiredEnvVars: [{ key: 'OPENAI_API_KEY', description: 'OpenAI API Key' }],
+    steps: [
+      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
+      { title: '配置凭据', description: '设置 OPENAI_API_KEY。' },
+    ],
+  },
+  opencode: {
+    engineId: 'opencode',
+    summary: '通过 npx 运行 OpenCode ACP 子命令。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.opencode,
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y opencode-ai@latest --version',
+    steps: [
+      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
+      {
+        title: '预热 OpenCode',
+        command: 'npx -y opencode-ai@latest acp',
+        description: '首次对话时也会自动拉取；一键安装预先下载 CLI 包。',
+      },
+    ],
+  },
+  openclaw: {
+    engineId: 'openclaw',
+    summary: '通过 npx 运行 OpenClaw ACP 模式。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.openclaw,
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y openclaw --version',
+    steps: [
+      { title: '安装 Node.js', description: '需要 Node.js 18+。', command: 'node --version' },
+      {
+        title: '预热 OpenClaw',
+        command: 'npx -y openclaw acp',
+        description: '一键安装预先下载 openclaw 包。',
+      },
+    ],
+  },
+  cursor: {
+    engineId: 'cursor',
+    summary: 'Cursor CLI（agent 命令）提供 ACP 服务；需单独安装，与 Cursor 桌面版不同。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.cursor,
+    docsUrl: 'https://cursor.com/docs/cli/acp',
+    checkBinary: 'agent',
+    checkPaths: [LOCAL_BIN],
+    installable: true,
+    installCommand: 'curl https://cursor.com/install -fsS | bash',
+    requiredEnvVars: [
+      { key: 'CURSOR_API_KEY', description: 'Cursor API Key（可选，若已 agent login 可省略）', optional: true },
+    ],
+    steps: [
+      {
+        title: '安装 Cursor CLI',
+        description: '官方脚本将 agent 安装到 ~/.local/bin。安装 Cursor 桌面版不会自动包含此 CLI。',
+        command: 'curl https://cursor.com/install -fsS | bash',
+      },
+      {
+        title: '确保 PATH 包含 ~/.local/bin',
+        description: '在 shell 配置中加入 export PATH="$HOME/.local/bin:$PATH"。Hub 启动 gateway 时会自动追加此路径。',
+        command: 'export PATH="$HOME/.local/bin:$PATH"',
+      },
+      {
+        title: '完成认证',
+        description: '运行 agent login，或在默认凭据区配置 CURSOR_API_KEY。',
+        command: 'agent login',
+      },
+      {
+        title: '验证 ACP 模式',
+        description: '能启动即表示 CLI 可用（Ctrl+C 退出）。',
+        command: 'agent acp',
+      },
+    ],
+  },
+  hermes: {
+    engineId: 'hermes',
+    summary: 'Hermes 提供原生 ACP 接口，需按上游文档自行安装 hermes CLI。',
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.hermes,
+    checkBinary: 'hermes',
+    installable: false,
+    steps: [
+      {
+        title: '安装 Hermes CLI',
+        description: '按 Hermes 项目文档安装，并确保 hermes 在 PATH 中。',
+        command: 'hermes --version',
+      },
+      {
+        title: '验证 ACP',
+        command: 'hermes acp',
+        description: 'Gateway 通过 hermes acp 子进程接入。',
+      },
+    ],
+  },
+};
+
+const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {
+  engineId: 'custom',
+  summary: '自定义引擎需手动安装上游 CLI，并在上方配置 ACP 启动命令。',
+  acpCommand: '',
+  installable: false,
+  checkBinary: '',
+  steps: [
+    {
+      title: '安装上游 CLI',
+      description: '按你的 agent 文档安装，并确保命令在 Hub 进程的 PATH 中可用。',
+    },
+    {
+      title: '配置 ACP 命令',
+      description: '在「引擎命令」中填写完整 spawn 命令，例如 /usr/local/bin/my-cli --acp。',
+    },
+    {
+      title: '配置凭据（如需要）',
+      description: '在下方默认凭据区添加该 CLI 所需的环境变量。',
+    },
+  ],
+};
+
+/** Directories commonly holding agent CLIs; prepended to PATH at gateway spawn. */
+export const SPAWN_PATH_PREFIXES: readonly string[] = [
+  LOCAL_BIN,
+  join(homedir(), '.codebuddy', 'bin'),
+];
+
+export function augmentSpawnPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+  const current = env[pathKey] ?? env.PATH ?? '';
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const extras = SPAWN_PATH_PREFIXES.filter((d) => existsSync(d));
+  if (extras.length === 0) return env;
+  const prefix = extras.join(sep);
+  if (current.split(sep).some((p) => extras.includes(p))) return env;
+  return { ...env, [pathKey]: `${prefix}${sep}${current}` };
+}
+
+export function getEngineSetupGuide(engineId: string): EngineSetupGuide {
+  if (isBuiltinEngine(engineId)) {
+    return SETUP_GUIDES[engineId];
+  }
+  return { ...CUSTOM_ENGINE_SETUP, engineId, acpCommand: '' };
+}
+
+export function resolveBinaryPath(
+  command: string,
+  extraPaths: readonly string[] = [],
+): string | null {
+  if (command.length === 0) return null;
+
+  const candidate = expandHome(command);
+  if (candidate.includes('/') || candidate.includes('\\')) {
+    return existsSync(candidate) ? candidate : null;
+  }
+
+  for (const dir of extraPaths) {
+    const full = join(expandHome(dir), command);
+    if (process.platform === 'win32') {
+      if (existsSync(`${full}.cmd`)) return `${full}.cmd`;
+      if (existsSync(`${full}.exe`)) return `${full}.exe`;
+    }
+    if (existsSync(full)) return full;
+  }
+
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(whichCmd, [command], { encoding: 'utf8' });
+  if (result.status === 0) {
+    const line = result.stdout.trim().split(/\r?\n/)[0]?.trim();
+    if (line) return line;
+  }
+  return null;
+}
+
+export function checkEngineInstallStatus(engineId: string): EngineInstallStatus {
+  const guide = getEngineSetupGuide(engineId);
+  if (guide.checkBinary.length === 0) {
+    return { installed: false, binaryPath: null, version: null, checkError: null };
+  }
+
+  const binaryPath = resolveBinaryPath(guide.checkBinary, [
+    ...SPAWN_PATH_PREFIXES,
+    ...(guide.checkPaths ?? []),
+  ]);
+
+  if (binaryPath === null) {
+    return {
+      installed: false,
+      binaryPath: null,
+      version: null,
+      checkError: `未找到 ${guide.checkBinary} 命令`,
+    };
+  }
+
+  const version = probeVersion(binaryPath, guide.checkBinary);
+  return {
+    installed: true,
+    binaryPath,
+    version,
+    checkError: null,
+  };
+}
+
+export function runEngineInstall(engineId: string): EngineInstallResult {
+  const guide = getEngineSetupGuide(engineId);
+  if (!guide.installable || guide.installCommand === undefined) {
+    throw new Error(`引擎 "${engineId}" 不支持一键安装，请按文档手动配置。`);
+  }
+
+  let stdout = '';
+  let stderr = '';
+  let ok = false;
+
+  try {
+    const result = spawnSync(guide.installCommand, {
+      shell: true,
+      encoding: 'utf8',
+      timeout: 5 * 60 * 1000,
+      env: augmentSpawnPath(process.env),
+    });
+    stdout = result.stdout ?? '';
+    stderr = result.stderr ?? '';
+    ok = result.status === 0;
+    if (!ok && result.error) {
+      stderr = `${stderr}\n${result.error.message}`.trim();
+    }
+  } catch (err) {
+    stderr = err instanceof Error ? err.message : String(err);
+  }
+
+  const status = checkEngineInstallStatus(engineId);
+  return {
+    ok: ok && status.installed,
+    stdout,
+    stderr,
+    status,
+  };
+}
+
+function expandHome(p: string): string {
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  if (p === '~') return homedir();
+  return p;
+}
+
+function probeVersion(binaryPath: string, binaryName: string): string | null {
+  for (const args of [['--version'], ['version'], ['-V']]) {
+    try {
+      const out = execFileSync(binaryPath, args, {
+        encoding: 'utf8',
+        timeout: 15_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      if (out.length > 0) return out.split(/\r?\n/)[0] ?? out;
+    } catch {
+      // try next flag
+    }
+  }
+
+  if (binaryName === 'npx') {
+    try {
+      const node = resolveBinaryPath('node', SPAWN_PATH_PREFIXES);
+      if (node) {
+        return execFileSync(node, ['--version'], { encoding: 'utf8' }).trim();
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}

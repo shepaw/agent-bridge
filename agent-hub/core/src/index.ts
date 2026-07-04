@@ -143,6 +143,22 @@ export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {
+  BUILTIN_ENGINE_ACP_COMMANDS,
+  augmentSpawnPath,
+  checkEngineInstallStatus,
+  getEngineSetupGuide,
+  resolveBinaryPath,
+  runEngineInstall,
+} from './engine-setup.js';
+export type {
+  EngineEnvVarHint,
+  EngineInstallResult,
+  EngineInstallStatus,
+  EngineSetupGuide,
+  EngineSetupStep,
+} from './engine-setup.js';
+
+export {
   BUILTIN_ENGINE_IDS,
   BUILTIN_ENGINE_LABELS,
   CustomEngineExistsError,
