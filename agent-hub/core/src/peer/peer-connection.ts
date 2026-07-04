@@ -8,9 +8,12 @@
  */
 
 import { WebSocket } from 'ws';
-import { decodeFrame, encodeFrame, NoiseSession } from 'shepaw-acp-sdk';
+import { decodeFrame, encodeFrame, NoiseSession, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
-import { chatWithInstance, listAgents } from './peer-agent-host.js';
+import { getInstance, loadOrCreateHubConfig } from '../config.js';
+import { instancePaths } from '../paths.js';
+import { listAgents } from './peer-agent-host.js';
+import { PeerAcpClient } from './peer-acp-client.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
@@ -32,6 +35,10 @@ export async function drivePeerConnection(opts: {
 }): Promise<void> {
   const { ws, session, peerIdentity, peerId, log } = opts;
   const inflight = new Map<string, InflightChat>();
+  // Persistent ACP clients per agent id — one WS + session per (peer, agent),
+  // reused across chat turns so connectedClients / acpSessionCount stay flat
+  // and multi-turn context is preserved.
+  const acpClients = new Map<string, PeerAcpClient>();
   // Pending tool-call approvals: confirmationId → resolver. The phone replies
   // with agent_approval_resp; on disconnect/timeout we resolve '' (deny).
   const pendingApprovals = new Map<string, (selected: string) => void>();
@@ -42,6 +49,18 @@ export async function drivePeerConnection(opts: {
     if (closed || ws.readyState !== ws.OPEN) return;
     const ct = session.encrypt(Buffer.from(JSON.stringify(obj), 'utf-8'));
     ws.send(encodeFrame({ t: 'data', payload: ct }));
+  };
+
+  /** Get or create the persistent ACP client for an agent. */
+  const getAcpClient = (agentId: string): PeerAcpClient => {
+    let client = acpClients.get(agentId);
+    if (client !== undefined) return client;
+    const cfg = loadOrCreateHubConfig();
+    const instance = getInstance(cfg, agentId);
+    const instanceIdentity = loadOrCreateIdentity({ path: instancePaths(instance.id).identityPath });
+    client = new PeerAcpClient(peerIdentity, instance, instanceIdentity, log);
+    acpClients.set(agentId, client);
+    return client;
   };
 
   /** Relay a tool-call approval to the phone and await its decision. */
@@ -84,10 +103,18 @@ export async function drivePeerConnection(opts: {
     const state: InflightChat = { shouldCancel: false };
     inflight.set(requestId, state);
     log(`agent_chat req=${requestId} agent=${agentId}`);
+    let client: PeerAcpClient;
     try {
-      await chatWithInstance(
-        peerIdentity,
-        { agentId, message, sessionId: params.session_id as string | undefined, shouldCancel: () => state.shouldCancel },
+      client = getAcpClient(agentId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      send({ type: 'agent_error', request_id: requestId, message: msg });
+      inflight.delete(requestId);
+      return;
+    }
+    try {
+      await client.chat(
+        { message, sessionId: params.session_id as string | undefined, shouldCancel: () => state.shouldCancel },
         {
           onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
           onDone: (content, metadata) => { log(`agent_done req=${requestId}`); send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }); },
@@ -98,6 +125,9 @@ export async function drivePeerConnection(opts: {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`agent_chat req=${requestId} threw: ${msg}`);
+      // Connection/handshake failure — drop the client so the next chat retries.
+      acpClients.delete(agentId);
+      try { client.close(); } catch { /* ignore */ }
       send({ type: 'agent_error', request_id: requestId, message: msg });
     } finally {
       inflight.delete(requestId);
@@ -182,6 +212,11 @@ export async function drivePeerConnection(opts: {
       // Fail-closed any pending approvals so local agents don't hang.
       for (const resolver of pendingApprovals.values()) resolver('');
       pendingApprovals.clear();
+      // Close all persistent ACP clients for this peer.
+      for (const c of acpClients.values()) {
+        try { c.close(); } catch { /* ignore */ }
+      }
+      acpClients.clear();
       resolve();
     };
     ws.once('close', () => { log(`peer ${peerId} disconnected`); teardown(); });

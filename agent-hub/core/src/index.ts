@@ -63,7 +63,8 @@ export {
 export { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
 export type { MintPairingResult } from './peer/peer-process.js';
 export { loadPairedPeers, removePairedPeer, type PairedPeer } from './peer/peer-store.js';
-export { chatWithInstance, listAgents } from './peer/peer-agent-host.js';
+export { listAgents } from './peer/peer-agent-host.js';
+export { PeerAcpClient } from './peer/peer-acp-client.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
