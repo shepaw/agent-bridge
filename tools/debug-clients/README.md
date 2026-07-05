@@ -11,6 +11,7 @@ traffic so you can eyeball the wire format.
 | `test_integrated.py` | Spawns an agent in-process and sends a chat message; avoids subprocess hassle when reproducing a hang. |
 | `test_no_hub_response.py` | Reproduces the deadlock when the "Shepaw Hub" side never answers `hub.getUIComponentTemplates`. |
 | `test_shepaw_style.py` | Mimics how the Shepaw Flutter app talks — Bearer auth via the `Authorization` header, no `auth.authenticate` roundtrip. |
+| `probe-wire-sessions.mjs` | Node probe: `PeerAcpClient.sessions()` against a **running** Hub instance (same path the peer daemon uses when a phone lists sessions). |
 
 ## How to use
 
@@ -38,6 +39,19 @@ python test_agent.py          # or any of the others
 
 The scripts hard-code the URL / token for quick iteration — edit them
 before reaching for env vars.
+
+### Probe peer sessions (Node)
+
+Requires a built monorepo, a registered instance, and that instance running
+(`shepaw-hub instance start <id>`). Peer service does not need to be up —
+this script talks to the agent loopback port the same way `PeerAcpClient` does.
+
+```sh
+# From repo root
+npm run build
+node tools/debug-clients/probe-wire-sessions.mjs           # default instance id: shepaw
+node tools/debug-clients/probe-wire-sessions.mjs my-agent  # explicit instance id
+```
 
 ## These are historical
 
