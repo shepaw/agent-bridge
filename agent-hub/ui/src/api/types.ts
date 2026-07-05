@@ -220,6 +220,21 @@ export interface StoredSession {
   acpSessionId: string;
 }
 
+/** Live session from agent.sessions.list on the instance gateway. */
+export interface LiveSession {
+  session_id: string;
+  title?: string;
+  updated_at?: string;
+  cwd?: string;
+}
+
+/** One message from agent.sessions.history. */
+export interface SessionHistoryMessage {
+  role: 'user' | 'agent';
+  content: string;
+  message_id?: string;
+}
+
 /** Hub-level agent catalog entry (GET /api/pair/agents). */
 export interface HubAgentCatalogEntry {
   instanceId: string;

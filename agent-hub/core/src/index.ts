@@ -148,6 +148,12 @@ export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {
+  getInstanceConversationHistory,
+  InstanceGatewayOfflineError,
+  listInstanceConversations,
+} from './instance-acp-rpc.js';
+
+export {
   BUILTIN_ENGINE_ACP_COMMANDS,
   augmentSpawnPath,
   resolveCursorCliBinary,

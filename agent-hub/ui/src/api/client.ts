@@ -20,6 +20,8 @@ import type {
   PeerServiceStatus,
   Instance,
   StoredSession,
+  LiveSession,
+  SessionHistoryMessage,
   UpdateCustomEngineInput,
   UpdateInstanceInput,
 } from './types.js';
@@ -117,6 +119,19 @@ export const api = {
       request(`/instances/${instanceId}/sessions/${encodeURIComponent(shepawSessionId)}`, {
         method: 'DELETE',
       }),
+  },
+
+  conversations: {
+    list: (instanceId: string): Promise<{ sessions: LiveSession[] }> =>
+      request(`/instances/${instanceId}/conversations`),
+
+    history: (
+      instanceId: string,
+      sessionId: string,
+    ): Promise<{ session_id: string; messages: SessionHistoryMessage[] }> =>
+      request(
+        `/instances/${instanceId}/conversations/${encodeURIComponent(sessionId)}/history`,
+      ),
   },
 
   engines: {

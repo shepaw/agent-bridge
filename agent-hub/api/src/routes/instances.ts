@@ -15,6 +15,8 @@
  * POST   /api/instances/:id/enroll    — mint a new pairing code { label?, ttlMinutes? }
  * GET    /api/instances/:id/enroll    — list outstanding pairing codes
  * DELETE /api/instances/:id/enroll/:code — revoke a pairing code
+ * GET    /api/instances/:id/conversations — live session list (agent.sessions.list)
+ * GET    /api/instances/:id/conversations/:sessionId/history — session transcript
  * GET    /api/instances/:id/sessions   — list persisted Shepaw→ACP session mappings
  * DELETE /api/instances/:id/sessions/:shepawSessionId — remove a stale mapping
  * GET    /api/instances/:id/envvars   — list env var keys (values masked)
@@ -43,6 +45,9 @@ import {
   hubRoot,
   listInstanceSessions,
   deleteInstanceSession,
+  listInstanceConversations,
+  getInstanceConversationHistory,
+  InstanceGatewayOfflineError,
   loadOrCreateHubConfig,
   nextFreePort,
   probeInstanceRuntime,
@@ -730,7 +735,43 @@ instancesRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
   }
 });
 
-// ── sessions ─────────────────────────────────────────────────────
+// ── conversations (live gateway sessions) ────────────────────────
+
+instancesRouter.get('/:id/conversations', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const sessions = await listInstanceConversations(req.params.id!);
+    res.json({ sessions });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InstanceGatewayOfflineError) {
+      res.status(503).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+instancesRouter.get('/:id/conversations/:sessionId/history', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const messages = await getInstanceConversationHistory(req.params.id!, req.params.sessionId!);
+    res.json({ session_id: req.params.sessionId, messages });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InstanceGatewayOfflineError) {
+      res.status(503).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+// ── sessions (persisted ID mappings) ─────────────────────────────
 
 instancesRouter.get('/:id/sessions', (req: Request, res: Response) => {
   try {

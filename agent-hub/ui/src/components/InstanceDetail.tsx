@@ -5,6 +5,7 @@ import type { Instance, Peer, EnrollToken } from '../api/types.js';
 import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
+import { SessionsPanel } from './SessionsPanel.js';
 import { InstanceApprovalSection } from './InstanceApprovalSection.js';
 import { maskSecret } from '../utils/maskSecret.js';
 import {
@@ -16,11 +17,19 @@ import {
 
 interface InstanceDetailProps {
   instanceId: string;
+  initialSessionId?: string | null;
+  onSessionChange?: (sessionId: string | null) => void;
   onBack: () => void;
   onReload: () => void;
 }
 
-export function InstanceDetail({ instanceId, onBack, onReload }: InstanceDetailProps) {
+export function InstanceDetail({
+  instanceId,
+  initialSessionId = null,
+  onSessionChange,
+  onBack,
+  onReload,
+}: InstanceDetailProps) {
   const [instance, setInstance] = useState<Instance | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   // key -> masked display value, populated from GET /envvars
@@ -30,6 +39,7 @@ export function InstanceDetail({ instanceId, onBack, onReload }: InstanceDetailP
   const [err, setErr] = useState<string | null>(null);
   const [showEnroll, setShowEnroll] = useState(false);
   const [showResume, setShowResume] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialSessionId ?? null);
   // Inline QR code section
   const [showQr, setShowQr] = useState(false);
   const [qrToken, setQrToken] = useState<EnrollToken | null>(null);
@@ -84,6 +94,15 @@ export function InstanceDetail({ instanceId, onBack, onReload }: InstanceDetailP
   };
 
   useEffect(() => { void load(); }, [instanceId]);
+
+  useEffect(() => {
+    setSelectedSessionId(initialSessionId ?? null);
+  }, [initialSessionId, instanceId]);
+
+  const handleSessionSelect = (sessionId: string | null) => {
+    setSelectedSessionId(sessionId);
+    onSessionChange?.(sessionId);
+  };
 
   useEffect(() => {
     const id = setInterval(() => { void load(); }, 3000);
@@ -612,6 +631,20 @@ export function InstanceDetail({ instanceId, onBack, onReload }: InstanceDetailP
       {/* Per-instance tool-call approval override */}
       {instance && (
         <InstanceApprovalSection instance={instance} onChanged={load} />
+      )}
+
+      {/* Sessions */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h4 style={{ ...sectionTitle, margin: 0, border: 'none', padding: 0 }}>Sessions</h4>
+      </div>
+      {instance && (
+        <SessionsPanel
+          instanceId={instanceId}
+          status={instance.status}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={handleSessionSelect}
+          onManageMappings={() => setShowResume(true)}
+        />
       )}
 
       {/* Logs */}

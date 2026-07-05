@@ -7,21 +7,20 @@ import { SettingsPage } from './components/SettingsPage.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
 import { filterInstances, uniqueEngines } from './utils/instanceFilters.js';
 import { buildSettingsHash, parseSettingsHash, type SettingsTab } from './utils/settingsRoute.js';
+import { buildInstanceHash, parseInstanceHash } from './utils/instanceRoute.js';
 
-/** Read instance id from URL hash, e.g. "#instance/my-instance" → "my-instance" */
-function getHashInstanceId(): string | null {
-  const match = location.hash.match(/^#instance\/(.+)$/);
-  return match ? decodeURIComponent(match[1]!) : null;
-}
-
-function getInitialSettingsRoute() {
-  return parseSettingsHash(location.hash);
+function getInitialInstanceRoute() {
+  return parseInstanceHash(location.hash);
 }
 
 export function App() {
   const { instances, loading, error, reload } = useInstances();
-  const initialSettings = getInitialSettingsRoute();
-  const [selected, setSelected] = useState<string | null>(getHashInstanceId);
+  const initialRoute = getInitialInstanceRoute();
+  const initialSettings = parseSettingsHash(location.hash);
+  const [selected, setSelected] = useState<string | null>(initialRoute?.instanceId ?? null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    initialRoute?.sessionId ?? null,
+  );
   const [showSettings, setShowSettings] = useState(initialSettings.active);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
@@ -50,22 +49,24 @@ export function App() {
   // Keep URL hash in sync with the active view
   useEffect(() => {
     if (selected) {
-      location.hash = `instance/${encodeURIComponent(selected)}`;
+      location.hash = buildInstanceHash(selected, selectedSessionId);
     } else if (showSettings) {
       location.hash = buildSettingsHash(settingsTab, focusEngineId ?? undefined);
     } else {
       history.replaceState(null, '', location.pathname + location.search);
     }
-  }, [selected, showSettings, settingsTab, focusEngineId]);
+  }, [selected, selectedSessionId, showSettings, settingsTab, focusEngineId]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
     const onHashChange = () => {
-      setSelected(getHashInstanceId());
-      const route = parseSettingsHash(location.hash);
-      setShowSettings(route.active);
-      setSettingsTab(route.tab);
-      setFocusEngineId(route.focusEngineId);
+      const route = parseInstanceHash(location.hash);
+      setSelected(route?.instanceId ?? null);
+      setSelectedSessionId(route?.sessionId ?? null);
+      const settingsRoute = parseSettingsHash(location.hash);
+      setShowSettings(settingsRoute.active);
+      setSettingsTab(settingsRoute.tab);
+      setFocusEngineId(settingsRoute.focusEngineId);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -76,7 +77,12 @@ export function App() {
       <Layout>
         <InstanceDetail
           instanceId={selected}
-          onBack={() => setSelected(null)}
+          initialSessionId={selectedSessionId}
+          onSessionChange={setSelectedSessionId}
+          onBack={() => {
+            setSelected(null);
+            setSelectedSessionId(null);
+          }}
           onReload={reload}
         />
       </Layout>
