@@ -7,7 +7,11 @@ import { SettingsPage } from './components/SettingsPage.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
 import { filterInstances, uniqueEngines } from './utils/instanceFilters.js';
 import { buildSettingsHash, parseSettingsHash, type SettingsTab } from './utils/settingsRoute.js';
-import { buildInstanceHash, parseInstanceHash } from './utils/instanceRoute.js';
+import {
+  buildInstanceHash,
+  parseInstanceHash,
+  type InstanceDetailTab,
+} from './utils/instanceRoute.js';
 
 function getInitialInstanceRoute() {
   return parseInstanceHash(location.hash);
@@ -20,6 +24,9 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(initialRoute?.instanceId ?? null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     initialRoute?.sessionId ?? null,
+  );
+  const [selectedTab, setSelectedTab] = useState<InstanceDetailTab>(
+    initialRoute?.tab ?? 'overview',
   );
   const [showSettings, setShowSettings] = useState(initialSettings.active);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
@@ -49,13 +56,16 @@ export function App() {
   // Keep URL hash in sync with the active view
   useEffect(() => {
     if (selected) {
-      location.hash = buildInstanceHash(selected, selectedSessionId);
+      location.hash = buildInstanceHash(selected, {
+        sessionId: selectedSessionId,
+        tab: selectedTab,
+      });
     } else if (showSettings) {
       location.hash = buildSettingsHash(settingsTab, focusEngineId ?? undefined);
     } else {
       history.replaceState(null, '', location.pathname + location.search);
     }
-  }, [selected, selectedSessionId, showSettings, settingsTab, focusEngineId]);
+  }, [selected, selectedSessionId, selectedTab, showSettings, settingsTab, focusEngineId]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
@@ -63,6 +73,7 @@ export function App() {
       const route = parseInstanceHash(location.hash);
       setSelected(route?.instanceId ?? null);
       setSelectedSessionId(route?.sessionId ?? null);
+      setSelectedTab(route?.tab ?? 'overview');
       const settingsRoute = parseSettingsHash(location.hash);
       setShowSettings(settingsRoute.active);
       setSettingsTab(settingsRoute.tab);
@@ -74,14 +85,17 @@ export function App() {
 
   if (selected) {
     return (
-      <Layout>
+      <Layout wide>
         <InstanceDetail
           instanceId={selected}
+          activeTab={selectedTab}
+          onTabChange={setSelectedTab}
           initialSessionId={selectedSessionId}
           onSessionChange={setSelectedSessionId}
           onBack={() => {
             setSelected(null);
             setSelectedSessionId(null);
+            setSelectedTab('overview');
           }}
           onReload={reload}
         />
@@ -203,10 +217,10 @@ export function App() {
   );
 }
 
-function Layout({ children }: { children: React.ReactNode }) {
+function Layout({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
   return (
     <div style={layoutStyle}>
-      <div style={container}>{children}</div>
+      <div style={{ ...container, ...(wide ? { maxWidth: 1280 } : {}) }}>{children}</div>
     </div>
   );
 }

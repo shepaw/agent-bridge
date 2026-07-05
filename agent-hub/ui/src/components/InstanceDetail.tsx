@@ -14,17 +14,30 @@ import {
   busyLabel,
   formatRuntimeSummary,
 } from '../utils/runtimeStatus.js';
+import type { InstanceDetailTab } from '../utils/instanceRoute.js';
 
 interface InstanceDetailProps {
   instanceId: string;
+  activeTab: InstanceDetailTab;
+  onTabChange: (tab: InstanceDetailTab) => void;
   initialSessionId?: string | null;
   onSessionChange?: (sessionId: string | null) => void;
   onBack: () => void;
   onReload: () => void;
 }
 
+const NAV_ITEMS: { id: InstanceDetailTab; label: string }[] = [
+  { id: 'overview', label: '概览' },
+  { id: 'sessions', label: '会话' },
+  { id: 'logs', label: '日志' },
+  { id: 'devices', label: '设备' },
+  { id: 'config', label: '配置' },
+];
+
 export function InstanceDetail({
   instanceId,
+  activeTab,
+  onTabChange,
   initialSessionId = null,
   onSessionChange,
   onBack,
@@ -97,11 +110,13 @@ export function InstanceDetail({
 
   useEffect(() => {
     setSelectedSessionId(initialSessionId ?? null);
+    if (initialSessionId) onTabChange('sessions');
   }, [initialSessionId, instanceId]);
 
   const handleSessionSelect = (sessionId: string | null) => {
     setSelectedSessionId(sessionId);
     onSessionChange?.(sessionId);
+    if (sessionId) onTabChange('sessions');
   };
 
   useEffect(() => {
@@ -142,6 +157,7 @@ export function InstanceDetail({
   };
 
   const openQr = () => {
+    onTabChange('devices');
     setShowQr(true);
     if (!qrToken) void mintQr();
   };
@@ -223,6 +239,7 @@ export function InstanceDetail({
 
   const openEdit = (p: typeof instance) => {
     if (!p) return;
+    onTabChange('config');
     setEditLabel(p.label);
     setEditCwd(p.cwd);
     setEditHost(p.host);
@@ -320,12 +337,10 @@ export function InstanceDetail({
 
   return (
     <div>
-      {/* Back */}
-      <button style={backBtn} onClick={onBack}>← Back</button>
-
       {/* Header */}
       <div style={header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <button style={backBtn} onClick={onBack}>← 返回</button>
           <span style={dot(instance.status)} />
           <h2 style={{ margin: 0, color: '#cdd6f4' }}>{instance.label}</h2>
           {instance.status.busyLevel !== null && instance.status.availability === 'online' && (
@@ -336,390 +351,461 @@ export function InstanceDetail({
           <code style={badge}>{instance.id}</code>
           <code style={{ ...badge, background: '#313244' }}>{instance.engine}</code>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            style={actionBtn(instance.status.running ? '#c0392b' : '#27ae60')}
-            disabled={busy}
-            onClick={() => void toggle()}
-          >
-            {busy ? '...' : instance.status.running ? 'Stop' : 'Start'}
-          </button>
-          <button style={actionBtn('#89dceb')} onClick={openQr}>
-            📷 Scan to Connect
-          </button>
-          <button style={actionBtn('#8e44ad')} onClick={() => setShowEnroll(true)}>
-            Pair Device
-          </button>
-          <button style={actionBtn('#94e2d5')} onClick={() => setShowResume(true)}>
-            Resume Session
-          </button>
-          <button style={actionBtn('#f9e2af')} onClick={() => openEdit(instance)}>
-            Edit
-          </button>
-          <button style={actionBtn('#e74c3c')} onClick={() => void removeInstance()}>
-            Remove
-          </button>
-        </div>
+        <button
+          style={actionBtn(instance.status.running ? '#c0392b' : '#27ae60')}
+          disabled={busy}
+          onClick={() => void toggle()}
+        >
+          {busy ? '...' : instance.status.running ? '停止' : '启动'}
+        </button>
       </div>
 
       {err && <p style={{ color: '#f38ba8', margin: '8px 0' }}>{err}</p>}
 
-      {/* Inline QR Code Section */}
-      {showQr && (
-        <div style={qrSection}>
-          <div style={qrSectionHeader}>
-            <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 14 }}>📷 连接二维码</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {qrToken && qrSecondsLeft > 0 && (
-                <span style={{ color: qrSecondsLeft <= 60 ? '#f38ba8' : '#a6adc8', fontSize: 12 }}>
-                  {Math.floor(qrSecondsLeft / 60)}:{String(qrSecondsLeft % 60).padStart(2, '0')} 后过期
-                </span>
-              )}
-              <button style={qrRefreshBtn} disabled={qrLoading} onClick={() => void mintQr()}>
-                {qrLoading ? '生成中...' : '↻ 刷新'}
-              </button>
-              <button style={qrCloseBtn} onClick={() => { setShowQr(false); setQrToken(null); setQrErr(null); }}>✕</button>
-            </div>
-          </div>
-          <div style={qrBody}>
-            {qrErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{qrErr}</p>}
-            {qrLoading && <p style={{ color: '#a6adc8', margin: 0 }}>正在生成二维码...</p>}
-            {!qrLoading && qrToken?.qrPayload && (
-              <div style={qrContentWrap}>
-                <div style={qrCodeWrap}>
-                  <QRCodeSVG
-                    value={qrToken.qrPayload}
-                    size={200}
-                    bgColor="#1e1e2e"
-                    fgColor="#cdd6f4"
-                    level="M"
-                  />
+      <div style={pageLayout}>
+        <nav style={sidebar}>
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              style={navBtn(activeTab === item.id)}
+              onClick={() => onTabChange(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <main style={contentPanel}>
+          {activeTab === 'overview' && (
+            <section>
+              <h3 style={panelTitle}>运行概览</h3>
+              <p style={panelHint}>实例状态、绑定地址与运行时指标。</p>
+              <div style={infoGrid}>
+                <InfoItem label="Bind" value={`${instance.host}:${instance.port}`} />
+                <InfoItem label="CWD" value={instance.cwd} />
+                {instance.baseUrl && <InfoItem label="Base URL" value={instance.baseUrl} />}
+                <InfoItem label="Runtime" value={formatRuntimeSummary(instance.status)} />
+                {instance.status.activeTasks !== null && (
+                  <InfoItem label="Active tasks" value={String(instance.status.activeTasks)} />
+                )}
+                {instance.status.connectedClients !== null && (
+                  <InfoItem label="Connected clients" value={String(instance.status.connectedClients)} />
+                )}
+                {instance.status.acpSessionCount !== null && (
+                  <InfoItem label="ACP sessions" value={String(instance.status.acpSessionCount)} />
+                )}
+                {instance.status.uptimeMs !== null && instance.status.uptimeMs > 0 && (
+                  <InfoItem label="Uptime" value={formatUptime(instance.status.uptimeMs)} />
+                )}
+                {instance.status.probeError && (
+                  <InfoItem label="Probe error" value={instance.status.probeError} />
+                )}
+                <InfoItem label="Last probe" value={new Date(instance.status.probedAt).toLocaleTimeString()} />
+                {instance.status.startedAt && (
+                  <InfoItem label="Started" value={new Date(instance.status.startedAt).toLocaleString()} />
+                )}
+                {instance.status.stoppedAt && (
+                  <InfoItem label="Stopped" value={new Date(instance.status.stoppedAt).toLocaleString()} />
+                )}
+                <InfoItem label="Created" value={new Date(instance.createdAt).toLocaleString()} />
+              </div>
+            </section>
+          )}
+
+          {activeTab === 'sessions' && (
+            <section>
+              <div style={panelHeaderRow}>
+                <div>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>会话</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>查看与管理 ACP 会话及对话记录。</p>
                 </div>
-                <div style={qrInfoBlock}>
-                  <p style={qrInfoRow}>
-                    <span style={qrInfoLabel}>配对码</span>
-                    <code style={qrCodeBox}>{qrToken.display ?? qrToken.code}</code>
-                  </p>
-                  {qrToken.pairUrl && (
-                    <p style={qrInfoRow}>
-                      <span style={qrInfoLabel}>配对地址</span>
-                      <code style={{ ...qrCodeBox, fontSize: 11, wordBreak: 'break-all' }}>{qrToken.pairUrl}</code>
-                    </p>
-                  )}
-                  <p style={{ color: '#6c7086', fontSize: 12, marginTop: 12, lineHeight: 1.5 }}>
-                    使用 Shepaw 移动端扫描二维码，或手动输入配对码和地址。
-                    二维码为一次性使用，首次握手后自动失效。
-                  </p>
+                <button style={actionBtn('#94e2d5')} onClick={() => setShowResume(true)}>
+                  恢复会话
+                </button>
+              </div>
+              <SessionsPanel
+                instanceId={instanceId}
+                status={instance.status}
+                selectedSessionId={selectedSessionId}
+                onSelectSession={handleSessionSelect}
+                onManageMappings={() => setShowResume(true)}
+              />
+            </section>
+          )}
+
+          {activeTab === 'logs' && (
+            <section>
+              <h3 style={panelTitle}>日志</h3>
+              <p style={panelHint}>实例进程实时输出。</p>
+              <LogViewer instanceId={instanceId} />
+            </section>
+          )}
+
+          {activeTab === 'devices' && (
+            <section>
+              <div style={panelHeaderRow}>
+                <div>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>设备与配对</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>扫码连接、配对设备与管理已授权终端。</p>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button style={actionBtn('#89dceb')} onClick={openQr}>
+                    扫码连接
+                  </button>
+                  <button style={actionBtn('#8e44ad')} onClick={() => setShowEnroll(true)}>
+                    配对设备
+                  </button>
                 </div>
               </div>
-            )}
-            {!qrLoading && !qrToken && !qrErr && (
-              <p style={{ color: '#a6adc8', margin: 0, fontSize: 13 }}>点击"刷新"生成新的二维码。</p>
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* Edit form */}
-      {showEdit && (
-        <form onSubmit={(e) => void submitEdit(e)} style={editForm}>
-          <div style={editGrid}>
-            <div style={editField}>
-              <label style={editLbl}>Label</label>
-              <input style={editInp} value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder={instanceId} />
-            </div>
-            <div style={editField}>
-              <label style={editLbl}>Working Directory <span style={{ color: '#f38ba8' }}>*</span></label>
-              <input style={editInp} value={editCwd} onChange={(e) => setEditCwd(e.target.value)} placeholder="/path/to/instance" required />
-            </div>
-            <div style={editField}>
-              <label style={editLbl}>Bind Host</label>
-              <select style={editInp} value={editHost} onChange={(e) => setEditHost(e.target.value)}>
-                <option value="127.0.0.1">127.0.0.1 (loopback only)</option>
-                <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
-              </select>
-            </div>
-            <div style={editField}>
-              <label style={editLbl}>Base URL</label>
-              <input style={editInp} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://... (optional)" />
-            </div>
-            <div style={{ ...editField, gridColumn: '1 / -1' }}>
-              <label style={editLbl}>Extra Args <span style={{ color: '#6c7086', fontSize: 11 }}>(space-separated)</span></label>
-              <input style={editInp} value={editExtraArgs} onChange={(e) => setEditExtraArgs(e.target.value)} placeholder="--model claude-opus-4-7 --max-turns 20" />
-            </div>
-          </div>
-
-          <div style={editTunnelSection}>
-            <button
-              type="button"
-              style={tunnelAdvancedToggle}
-              onClick={() => setShowTunnelAdvanced((v) => !v)}
-            >
-              {showTunnelAdvanced ? '▼' : '▶'} 高级:单独的外网 channel (per-instance tunnel)
-              {instance.tunnel && (
-                <span style={{ color: '#f9e2af', fontSize: 11, marginLeft: 8 }}>· 已配置</span>
-              )}
-            </button>
-            <p style={{ color: '#6c7086', fontSize: 12, margin: '6px 0 0' }}>
-              可选。通常在「设置 → 全局」配置共享 channel 即可，无需在此填写。仅当该 agent 需要独立 channel 时才配置。
-            </p>
-
-            {showTunnelAdvanced && (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
-                  <span style={{ color: '#a6adc8', fontSize: 13, fontWeight: 600 }}>Tunnel (Shepaw Channel Service)</span>
-                  {instance.tunnel && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f38ba8', fontSize: 12, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={editClearTunnel} onChange={(e) => setEditClearTunnel(e.target.checked)} />
-                      Remove tunnel
-                    </label>
-                  )}
-                </div>
-                {!editClearTunnel && (
-                  <div style={editGrid}>
-                    <div style={editField}>
-                      <label style={editLbl}>Server URL</label>
-                      <input style={editInp} value={editTunnelServer} onChange={(e) => setEditTunnelServer(e.target.value)} placeholder="https://channel.example.com" />
-                    </div>
-                    <div style={editField}>
-                      <label style={editLbl}>Channel ID</label>
-                      <input style={editInp} value={editTunnelChannelId} onChange={(e) => setEditTunnelChannelId(e.target.value)} placeholder="ch_abc123" />
-                    </div>
-                    <div style={editField}>
-                      <label style={editLbl}>Secret</label>
-                      <input
-                        style={editInp}
-                        type={editTunnelSecret === TUNNEL_SECRET_UNCHANGED ? 'text' : 'password'}
-                        value={editTunnelSecret === TUNNEL_SECRET_UNCHANGED
-                          ? (instance?.tunnel ? maskSecret(instance.tunnel.secret) : '')
-                          : editTunnelSecret}
-                        onChange={(e) => setEditTunnelSecret(e.target.value)}
-                        onFocus={() => {
-                          if (editTunnelSecret === TUNNEL_SECRET_UNCHANGED) setEditTunnelSecret('');
-                        }}
-                        placeholder="Enter new secret to change"
-                      />
+              {showQr && (
+                <div style={qrSection}>
+                  <div style={qrSectionHeader}>
+                    <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 14 }}>连接二维码</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {qrToken && qrSecondsLeft > 0 && (
+                        <span style={{ color: qrSecondsLeft <= 60 ? '#f38ba8' : '#a6adc8', fontSize: 12 }}>
+                          {Math.floor(qrSecondsLeft / 60)}:{String(qrSecondsLeft % 60).padStart(2, '0')} 后过期
+                        </span>
+                      )}
+                      <button style={qrRefreshBtn} disabled={qrLoading} onClick={() => void mintQr()}>
+                        {qrLoading ? '生成中...' : '↻ 刷新'}
+                      </button>
+                      <button
+                        style={qrCloseBtn}
+                        onClick={() => { setShowQr(false); setQrToken(null); setQrErr(null); }}
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {editErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{editErr}</p>}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="submit" style={editSubmitBtn} disabled={editBusy}>{editBusy ? 'Saving...' : 'Save Changes'}</button>
-            <button type="button" style={editCancelBtn} onClick={() => setShowEdit(false)}>Cancel</button>
-          </div>
-        </form>
-      )}
-
-      {/* Info grid */}
-      <div style={infoGrid}>
-        <InfoItem label="Bind" value={`${instance.host}:${instance.port}`} />
-        <InfoItem label="CWD" value={instance.cwd} />
-        {instance.baseUrl && <InfoItem label="Base URL" value={instance.baseUrl} />}
-        <InfoItem label="Runtime" value={formatRuntimeSummary(instance.status)} />
-        {instance.status.activeTasks !== null && (
-          <InfoItem label="Active tasks" value={String(instance.status.activeTasks)} />
-        )}
-        {instance.status.connectedClients !== null && (
-          <InfoItem label="Connected clients" value={String(instance.status.connectedClients)} />
-        )}
-        {instance.status.acpSessionCount !== null && (
-          <InfoItem label="ACP sessions" value={String(instance.status.acpSessionCount)} />
-        )}
-        {instance.status.uptimeMs !== null && instance.status.uptimeMs > 0 && (
-          <InfoItem label="Uptime" value={formatUptime(instance.status.uptimeMs)} />
-        )}
-        {instance.status.probeError && (
-          <InfoItem label="Probe error" value={instance.status.probeError} />
-        )}
-        <InfoItem label="Last probe" value={new Date(instance.status.probedAt).toLocaleTimeString()} />
-        {instance.status.startedAt && <InfoItem label="Started" value={new Date(instance.status.startedAt).toLocaleString()} />}
-        {instance.status.stoppedAt && <InfoItem label="Stopped" value={new Date(instance.status.stoppedAt).toLocaleString()} />}
-        <InfoItem label="Created" value={new Date(instance.createdAt).toLocaleString()} />
-      </div>
-
-      {/* Legacy env vars (only shown when a instance already has stored keys) */}
-      {(instance.envVarKeys ?? []).length > 0 && (
-        <>
-          <h4 style={sectionTitle}>Environment Variables</h4>
-          <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-            Legacy per-instance env injection. New ACP deployments normally do not need these.
-          </p>
-          {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
-          <div style={credTable}>
-            {(instance.envVarKeys ?? []).map((key) => {
-              const isEditing = envEditing[key] !== undefined;
-              const isBusy = envBusy[key] === true;
-              return (
-                <div key={key} style={credRow}>
-                  <code style={{ fontSize: 11, color: '#6c7086' }}>{key}</code>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
-                    {isEditing ? (
-                      <>
-                        <input
-                          style={credInput}
-                          type="password"
-                          value={envEditing[key] === ENV_UNCHANGED
-                            ? (envMasked[key] ?? '••••••••')
-                            : envEditing[key]}
-                          onChange={(e) => setEnvEditing((prev) => ({ ...prev, [key]: e.target.value }))}
-                          onFocus={() => {
-                            if (envEditing[key] === ENV_UNCHANGED)
-                              setEnvEditing((prev) => ({ ...prev, [key]: '' }));
-                          }}
-                          placeholder="Enter new value"
-                          autoFocus
-                        />
-                        <button style={credSaveBtn} disabled={isBusy} onClick={() => void saveEnvVar(key)}>
-                          {isBusy ? '...' : 'Save'}
-                        </button>
-                        <button style={credCancelBtn} onClick={() => setEnvEditing((e) => { const n = { ...e }; delete n[key]; return n; })}>
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <code style={{ fontSize: 12, color: '#a6e3a1', fontFamily: 'monospace' }}>
-                          {envMasked[key] ?? '••••••••'}
-                        </code>
-                        <button
-                          style={credEditBtn}
-                          disabled={isBusy}
-                          onClick={() => setEnvEditing((e) => ({ ...e, [key]: ENV_UNCHANGED }))}
-                        >
-                          Update
-                        </button>
-                        <button style={credDeleteBtn} disabled={isBusy} onClick={() => void deleteEnvVar(key)}>
-                          {isBusy ? '...' : 'Clear'}
-                        </button>
-                      </>
+                  <div style={qrBody}>
+                    {qrErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{qrErr}</p>}
+                    {qrLoading && <p style={{ color: '#a6adc8', margin: 0 }}>正在生成二维码...</p>}
+                    {!qrLoading && qrToken?.qrPayload && (
+                      <div style={qrContentWrap}>
+                        <div style={qrCodeWrap}>
+                          <QRCodeSVG
+                            value={qrToken.qrPayload}
+                            size={200}
+                            bgColor="#1e1e2e"
+                            fgColor="#cdd6f4"
+                            level="M"
+                          />
+                        </div>
+                        <div style={qrInfoBlock}>
+                          <p style={qrInfoRow}>
+                            <span style={qrInfoLabel}>配对码</span>
+                            <code style={qrCodeBox}>{qrToken.display ?? qrToken.code}</code>
+                          </p>
+                          {qrToken.pairUrl && (
+                            <p style={qrInfoRow}>
+                              <span style={qrInfoLabel}>配对地址</span>
+                              <code style={{ ...qrCodeBox, fontSize: 11, wordBreak: 'break-all' }}>{qrToken.pairUrl}</code>
+                            </p>
+                          )}
+                          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 12, lineHeight: 1.5 }}>
+                            使用 Shepaw 移动端扫描二维码，或手动输入配对码和地址。
+                            二维码为一次性使用，首次握手后自动失效。
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {!qrLoading && !qrToken && !qrErr && (
+                      <p style={{ color: '#a6adc8', margin: 0, fontSize: 13 }}>点击「刷新」生成新的二维码。</p>
                     )}
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
-      )}
+              )}
 
-      {/* Per-instance tunnel info (advanced) */}
-      {instance.tunnel && (        <>
-          <h4 style={sectionTitle}>单独的外网 channel (per-instance tunnel) <span style={{ color: '#6c7086', fontSize: 11, fontWeight: 400 }}>· 高级</span></h4>
-          <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-            该 agent 使用独立 channel 外网可达，与全局共享 channel 互不冲突。如无需独立 channel，可在编辑里移除。
-          </p>
-          <div style={tunnelCard}>
-            <div style={tunnelRow}>
-              <span style={tunnelLabel}>Server</span>
-              <span style={tunnelValue}>{instance.tunnel.serverUrl}</span>
-            </div>
-            <div style={tunnelRow}>
-              <span style={tunnelLabel}>Channel ID</span>
-              <code style={tunnelCode}>{instance.tunnel.channelId}</code>
-            </div>
-            <div style={tunnelRow}>
-              <span style={tunnelLabel}>Secret</span>
-              <code style={{ ...tunnelCode, color: '#cdd6f4' }}>{maskSecret(instance.tunnel.secret)}</code>
-            </div>
-          </div>
-        </>
-      )}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <h4 style={{ ...sectionTitle, margin: 0, border: 'none', padding: 0 }}>
+                  已授权设备 ({peers.length})
+                </h4>
+                <button
+                  style={addPeerBtn}
+                  onClick={() => { setShowAddPeer((v) => !v); setAddPeerErr(null); }}
+                >
+                  {showAddPeer ? '✕ 取消' : '+ 添加设备'}
+                </button>
+              </div>
 
-      {/* Per-instance tool-call approval override */}
-      {instance && (
-        <InstanceApprovalSection instance={instance} onChanged={load} />
-      )}
+              {showAddPeer && (
+                <form onSubmit={(e) => void addPeer(e)} style={addPeerForm}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ color: '#a6adc8', fontSize: 12 }}>Public Key <span style={{ color: '#f38ba8' }}>*</span></label>
+                    <input
+                      style={addPeerInput}
+                      value={addPeerPubkey}
+                      onChange={(e) => setAddPeerPubkey(e.target.value)}
+                      placeholder="Base64 X25519 public key"
+                      required
+                      autoFocus
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ color: '#a6adc8', fontSize: 12 }}>Label</label>
+                    <input
+                      style={addPeerInput}
+                      value={addPeerLabel}
+                      onChange={(e) => setAddPeerLabel(e.target.value)}
+                      placeholder="My device (optional)"
+                    />
+                  </div>
+                  {addPeerErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{addPeerErr}</p>}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="submit" style={addPeerSubmitBtn} disabled={addPeerBusy}>
+                      {addPeerBusy ? 'Adding...' : 'Add'}
+                    </button>
+                    <button
+                      type="button"
+                      style={addPeerCancelBtn}
+                      onClick={() => { setShowAddPeer(false); setAddPeerErr(null); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
 
-      {/* Sessions */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <h4 style={{ ...sectionTitle, margin: 0, border: 'none', padding: 0 }}>Sessions</h4>
+              {peers.length === 0 ? (
+                <p style={{ color: '#a6adc8', fontSize: 14 }}>
+                  暂无已授权设备。使用「配对设备」或「添加设备」进行配对。
+                </p>
+              ) : (
+                <div style={peerTable}>
+                  <div style={peerRow}>
+                    <span style={th}>FINGERPRINT</span>
+                    <span style={th}>LABEL</span>
+                    <span style={th}>ADDED</span>
+                    <span style={th} />
+                  </div>
+                  {peers.map((peer) => (
+                    <div key={peer.fingerprint} style={peerRow}>
+                      <code style={{ fontSize: 12, color: '#cdd6f4' }}>{peer.fingerprint}</code>
+                      <span style={{ fontSize: 13 }}>{peer.label || '—'}</span>
+                      <span style={{ fontSize: 12, color: '#a6adc8' }}>{new Date(peer.addedAt).toLocaleDateString()}</span>
+                      <button
+                        style={removeBtn}
+                        onClick={() => void removePeer(peer.fingerprint)}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeTab === 'config' && (
+            <section>
+              <div style={panelHeaderRow}>
+                <div>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>配置</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>编辑实例参数、审核策略与高级选项。</p>
+                </div>
+                {!showEdit && (
+                  <button style={actionBtn('#f9e2af')} onClick={() => openEdit(instance)}>
+                    编辑
+                  </button>
+                )}
+              </div>
+
+              {showEdit && (
+                <form onSubmit={(e) => void submitEdit(e)} style={editForm}>
+                  <div style={editGrid}>
+                    <div style={editField}>
+                      <label style={editLbl}>Label</label>
+                      <input style={editInp} value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder={instanceId} />
+                    </div>
+                    <div style={editField}>
+                      <label style={editLbl}>Working Directory <span style={{ color: '#f38ba8' }}>*</span></label>
+                      <input style={editInp} value={editCwd} onChange={(e) => setEditCwd(e.target.value)} placeholder="/path/to/instance" required />
+                    </div>
+                    <div style={editField}>
+                      <label style={editLbl}>Bind Host</label>
+                      <select style={editInp} value={editHost} onChange={(e) => setEditHost(e.target.value)}>
+                        <option value="127.0.0.1">127.0.0.1 (loopback only)</option>
+                        <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
+                      </select>
+                    </div>
+                    <div style={editField}>
+                      <label style={editLbl}>Base URL</label>
+                      <input style={editInp} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://... (optional)" />
+                    </div>
+                    <div style={{ ...editField, gridColumn: '1 / -1' }}>
+                      <label style={editLbl}>Extra Args <span style={{ color: '#6c7086', fontSize: 11 }}>(space-separated)</span></label>
+                      <input style={editInp} value={editExtraArgs} onChange={(e) => setEditExtraArgs(e.target.value)} placeholder="--model claude-opus-4-7 --max-turns 20" />
+                    </div>
+                  </div>
+
+                  <div style={editTunnelSection}>
+                    <button
+                      type="button"
+                      style={tunnelAdvancedToggle}
+                      onClick={() => setShowTunnelAdvanced((v) => !v)}
+                    >
+                      {showTunnelAdvanced ? '▼' : '▶'} 高级:单独的外网 channel (per-instance tunnel)
+                      {instance.tunnel && (
+                        <span style={{ color: '#f9e2af', fontSize: 11, marginLeft: 8 }}>· 已配置</span>
+                      )}
+                    </button>
+                    <p style={{ color: '#6c7086', fontSize: 12, margin: '6px 0 0' }}>
+                      可选。通常在「设置 → 全局」配置共享 channel 即可，无需在此填写。仅当该 agent 需要独立 channel 时才配置。
+                    </p>
+
+                    {showTunnelAdvanced && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                          <span style={{ color: '#a6adc8', fontSize: 13, fontWeight: 600 }}>Tunnel (Shepaw Channel Service)</span>
+                          {instance.tunnel && (
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f38ba8', fontSize: 12, cursor: 'pointer' }}>
+                              <input type="checkbox" checked={editClearTunnel} onChange={(e) => setEditClearTunnel(e.target.checked)} />
+                              Remove tunnel
+                            </label>
+                          )}
+                        </div>
+                        {!editClearTunnel && (
+                          <div style={editGrid}>
+                            <div style={editField}>
+                              <label style={editLbl}>Server URL</label>
+                              <input style={editInp} value={editTunnelServer} onChange={(e) => setEditTunnelServer(e.target.value)} placeholder="https://channel.example.com" />
+                            </div>
+                            <div style={editField}>
+                              <label style={editLbl}>Channel ID</label>
+                              <input style={editInp} value={editTunnelChannelId} onChange={(e) => setEditTunnelChannelId(e.target.value)} placeholder="ch_abc123" />
+                            </div>
+                            <div style={editField}>
+                              <label style={editLbl}>Secret</label>
+                              <input
+                                style={editInp}
+                                type={editTunnelSecret === TUNNEL_SECRET_UNCHANGED ? 'text' : 'password'}
+                                value={editTunnelSecret === TUNNEL_SECRET_UNCHANGED
+                                  ? (instance?.tunnel ? maskSecret(instance.tunnel.secret) : '')
+                                  : editTunnelSecret}
+                                onChange={(e) => setEditTunnelSecret(e.target.value)}
+                                onFocus={() => {
+                                  if (editTunnelSecret === TUNNEL_SECRET_UNCHANGED) setEditTunnelSecret('');
+                                }}
+                                placeholder="Enter new secret to change"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {editErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{editErr}</p>}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="submit" style={editSubmitBtn} disabled={editBusy}>{editBusy ? 'Saving...' : 'Save Changes'}</button>
+                    <button type="button" style={editCancelBtn} onClick={() => setShowEdit(false)}>Cancel</button>
+                  </div>
+                </form>
+              )}
+
+              {(instance.envVarKeys ?? []).length > 0 && (
+                <>
+                  <h4 style={sectionTitle}>Environment Variables</h4>
+                  <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
+                    Legacy per-instance env injection. New ACP deployments normally do not need these.
+                  </p>
+                  {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
+                  <div style={credTable}>
+                    {(instance.envVarKeys ?? []).map((key) => {
+                      const isEditing = envEditing[key] !== undefined;
+                      const isBusy = envBusy[key] === true;
+                      return (
+                        <div key={key} style={credRow}>
+                          <code style={{ fontSize: 11, color: '#6c7086' }}>{key}</code>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+                            {isEditing ? (
+                              <>
+                                <input
+                                  style={credInput}
+                                  type="password"
+                                  value={envEditing[key] === ENV_UNCHANGED
+                                    ? (envMasked[key] ?? '••••••••')
+                                    : envEditing[key]}
+                                  onChange={(e) => setEnvEditing((prev) => ({ ...prev, [key]: e.target.value }))}
+                                  onFocus={() => {
+                                    if (envEditing[key] === ENV_UNCHANGED)
+                                      setEnvEditing((prev) => ({ ...prev, [key]: '' }));
+                                  }}
+                                  placeholder="Enter new value"
+                                  autoFocus
+                                />
+                                <button style={credSaveBtn} disabled={isBusy} onClick={() => void saveEnvVar(key)}>
+                                  {isBusy ? '...' : 'Save'}
+                                </button>
+                                <button style={credCancelBtn} onClick={() => setEnvEditing((e) => { const n = { ...e }; delete n[key]; return n; })}>
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <code style={{ fontSize: 12, color: '#a6e3a1', fontFamily: 'monospace' }}>
+                                  {envMasked[key] ?? '••••••••'}
+                                </code>
+                                <button
+                                  style={credEditBtn}
+                                  disabled={isBusy}
+                                  onClick={() => setEnvEditing((e) => ({ ...e, [key]: ENV_UNCHANGED }))}
+                                >
+                                  Update
+                                </button>
+                                <button style={credDeleteBtn} disabled={isBusy} onClick={() => void deleteEnvVar(key)}>
+                                  {isBusy ? '...' : 'Clear'}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {instance.tunnel && (
+                <>
+                  <h4 style={sectionTitle}>
+                    单独的外网 channel (per-instance tunnel){' '}
+                    <span style={{ color: '#6c7086', fontSize: 11, fontWeight: 400 }}>· 高级</span>
+                  </h4>
+                  <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
+                    该 agent 使用独立 channel 外网可达，与全局共享 channel 互不冲突。如无需独立 channel，可在编辑里移除。
+                  </p>
+                  <div style={tunnelCard}>
+                    <div style={tunnelRow}>
+                      <span style={tunnelLabel}>Server</span>
+                      <span style={tunnelValue}>{instance.tunnel.serverUrl}</span>
+                    </div>
+                    <div style={tunnelRow}>
+                      <span style={tunnelLabel}>Channel ID</span>
+                      <code style={tunnelCode}>{instance.tunnel.channelId}</code>
+                    </div>
+                    <div style={tunnelRow}>
+                      <span style={tunnelLabel}>Secret</span>
+                      <code style={{ ...tunnelCode, color: '#cdd6f4' }}>{maskSecret(instance.tunnel.secret)}</code>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <InstanceApprovalSection instance={instance} onChanged={load} />
+
+              <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #313244' }}>
+                <button style={actionBtn('#e74c3c')} onClick={() => void removeInstance()}>
+                  删除实例
+                </button>
+              </div>
+            </section>
+          )}
+        </main>
       </div>
-      {instance && (
-        <SessionsPanel
-          instanceId={instanceId}
-          status={instance.status}
-          selectedSessionId={selectedSessionId}
-          onSelectSession={handleSessionSelect}
-          onManageMappings={() => setShowResume(true)}
-        />
-      )}
-
-      {/* Logs */}
-      <h4 style={sectionTitle}>Logs</h4>
-      <LogViewer instanceId={instanceId} />
-
-      {/* Peers */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, borderBottom: '1px solid #313244', paddingBottom: 6 }}>
-        <h4 style={{ ...sectionTitle, margin: 0, border: 'none', padding: 0 }}>Authorized Devices ({peers.length})</h4>
-        <button style={addPeerBtn} onClick={() => { setShowAddPeer((v) => !v); setAddPeerErr(null); }}>
-          {showAddPeer ? '✕ Cancel' : '+ Add Device'}
-        </button>
-      </div>
-
-      {showAddPeer && (
-        <form onSubmit={(e) => void addPeer(e)} style={addPeerForm}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <label style={{ color: '#a6adc8', fontSize: 12 }}>Public Key <span style={{ color: '#f38ba8' }}>*</span></label>
-            <input
-              style={addPeerInput}
-              value={addPeerPubkey}
-              onChange={(e) => setAddPeerPubkey(e.target.value)}
-              placeholder="Base64 X25519 public key"
-              required
-              autoFocus
-            />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <label style={{ color: '#a6adc8', fontSize: 12 }}>Label</label>
-            <input
-              style={addPeerInput}
-              value={addPeerLabel}
-              onChange={(e) => setAddPeerLabel(e.target.value)}
-              placeholder="My device (optional)"
-            />
-          </div>
-          {addPeerErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{addPeerErr}</p>}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="submit" style={addPeerSubmitBtn} disabled={addPeerBusy}>
-              {addPeerBusy ? 'Adding...' : 'Add'}
-            </button>
-            <button type="button" style={addPeerCancelBtn} onClick={() => { setShowAddPeer(false); setAddPeerErr(null); }}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-
-      {peers.length === 0 ? (
-        <p style={{ color: '#a6adc8', fontSize: 14 }}>
-          No authorized peers. Use "Pair Device" or "Add Device" to add one.
-        </p>
-      ) : (
-        <div style={peerTable}>
-          <div style={peerRow}>
-            <span style={th}>FINGERPRINT</span>
-            <span style={th}>LABEL</span>
-            <span style={th}>ADDED</span>
-            <span style={th} />
-          </div>
-          {peers.map((peer) => (
-            <div key={peer.fingerprint} style={peerRow}>
-              <code style={{ fontSize: 12, color: '#cdd6f4' }}>{peer.fingerprint}</code>
-              <span style={{ fontSize: 13 }}>{peer.label || '—'}</span>
-              <span style={{ fontSize: 12, color: '#a6adc8' }}>{new Date(peer.addedAt).toLocaleDateString()}</span>
-              <button
-                style={removeBtn}
-                onClick={() => void removePeer(peer.fingerprint)}
-              >
-                Revoke
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
 
       {showEnroll && (
         <EnrollModal instanceId={instanceId} onClose={() => setShowEnroll(false)} baseUrl={instance?.baseUrl} />
@@ -745,12 +831,53 @@ function InfoItem({ label, value }: { label: string; value: string }) {
 
 const backBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: '#89b4fa',
-  cursor: 'pointer', fontSize: 14, padding: 0, marginBottom: 16,
+  cursor: 'pointer', fontSize: 14, padding: 0,
+};
+
+const pageLayout: React.CSSProperties = {
+  display: 'flex', gap: 0, alignItems: 'stretch', minHeight: 480,
+};
+
+const sidebar: React.CSSProperties = {
+  width: 168, flexShrink: 0,
+  display: 'flex', flexDirection: 'column', gap: 4,
+  padding: '4px 12px 4px 0',
+  borderRight: '1px solid #313244',
+};
+
+const navBtn = (active: boolean): React.CSSProperties => ({
+  background: active ? '#313244' : 'transparent',
+  color: active ? '#89b4fa' : '#cdd6f4',
+  border: 'none',
+  borderRadius: 6,
+  padding: '10px 14px',
+  cursor: 'pointer',
+  fontWeight: active ? 600 : 400,
+  fontSize: 14,
+  textAlign: 'left',
+});
+
+const contentPanel: React.CSSProperties = {
+  flex: 1, minWidth: 0, padding: '4px 0 4px 24px',
+};
+
+const panelTitle: React.CSSProperties = {
+  margin: '0 0 4px', color: '#cdd6f4', fontSize: 16, fontWeight: 600,
+};
+
+const panelHint: React.CSSProperties = {
+  margin: '0 0 16px', color: '#a6adc8', fontSize: 13,
+};
+
+const panelHeaderRow: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+  gap: 12, marginBottom: 16, flexWrap: 'wrap',
 };
 
 const header: React.CSSProperties = {
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   marginBottom: 16, flexWrap: 'wrap', gap: 12,
+  paddingBottom: 16, borderBottom: '1px solid #313244',
 };
 
 const badge: React.CSSProperties = {
