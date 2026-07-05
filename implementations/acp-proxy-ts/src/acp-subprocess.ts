@@ -3,6 +3,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -766,9 +767,17 @@ export class AcpSubprocess {
       return { outcome: { outcome: 'cancelled' } };
     }
 
-    // 2. Remote review — send a rich confirmation the app can render and wait.
+    // 2. Remote review — register the waiter BEFORE emitting the confirmation.
+    // On the peer path the phone can relay submitResponse over loopback almost
+    // immediately; if we send first and register second, the reply is dropped
+    // and Cursor sits on [pending] forever even after "Always allow".
     const prompt = formatPermissionPrompt(this.agentDisplayName, toolCall);
-    const confirmationId = await turn.taskCtx.sendActionConfirmation({
+    const confirmationId = `perm_${randomUUID()}`;
+    const responsePromise = turn.taskCtx.waitForResponse(confirmationId, {
+      timeoutMs: 20 * 60 * 1000,
+    });
+    await turn.taskCtx.sendActionConfirmation({
+      confirmationId,
       prompt,
       actions: buildActions(params.options),
       extra: {
@@ -784,9 +793,7 @@ export class AcpSubprocess {
     );
 
     try {
-      const response = await turn.taskCtx.waitForResponse(confirmationId, {
-        timeoutMs: 20 * 60 * 1000,
-      });
+      const response = await responsePromise;
 
       if (signal.aborted || turn.signal.aborted) {
         return { outcome: { outcome: 'cancelled' } };
@@ -794,8 +801,19 @@ export class AcpSubprocess {
 
       const optionId = resolveSelectedOption(params.options, response);
       if (optionId !== undefined) {
+        log(
+          'permission approved (%s) option=%s for %s',
+          confirmationId,
+          optionId,
+          toolCall.title ?? toolCall.toolCallId,
+        );
         return { outcome: { outcome: 'selected', optionId } };
       }
+      log(
+        'permission reply did not match any option (confirmation=%s raw=%j)',
+        confirmationId,
+        response,
+      );
       return { outcome: { outcome: 'cancelled' } };
     } catch {
       return { outcome: { outcome: 'cancelled' } };

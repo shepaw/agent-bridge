@@ -35,7 +35,7 @@ export interface AcpChatHandlers {
   onChunk: (content: string) => void;
   onDone: (fullContent: string, metadata?: Record<string, unknown>) => void;
   onError: (message: string) => void;
-  onApproval: (req: ApprovalRequest) => Promise<string>;
+  onApproval: (req: ApprovalRequest) => Promise<{ id: string; label?: string }>;
 }
 
 export interface AcpChatRequest {
@@ -350,6 +350,10 @@ export class PeerAcpClient {
       if (method === 'ui.actionConfirmation' && turn !== undefined) {
         const confirmationId = params.confirmation_id as string | undefined;
         if (confirmationId === undefined) return;
+        this.log(
+          `ui.actionConfirmation task=${taskId} confirmation=${confirmationId} ` +
+          `actions=${Array.isArray(params.actions) ? params.actions.length : 0}`,
+        );
         const actions = Array.isArray(params.actions)
           ? (params.actions as Array<Record<string, unknown>>).map((a) => ({
               id: String(a.id ?? ''),
@@ -368,9 +372,22 @@ export class PeerAcpClient {
             toolCallId: typeof extra.tool_call_id === 'string' ? extra.tool_call_id : undefined,
           })
           .then((selected) => {
+            this.log(
+              `ui.actionConfirmation resolved task=${taskId} confirmation=${confirmationId} ` +
+              `selected=${selected.id ?? ''} label=${selected.label ?? ''}`,
+            );
             this.send({
               jsonrpc: '2.0', id: this.rpcId++, method: 'agent.submitResponse',
-              params: { task_id: taskId, response_data: { confirmation_id: confirmationId, selected_action_id: selected ?? '' } },
+              params: {
+                task_id: taskId,
+                response_data: {
+                  confirmation_id: confirmationId,
+                  selected_action_id: selected.id ?? '',
+                  ...(selected.label !== undefined && selected.label.length > 0
+                    ? { selected_action_label: selected.label }
+                    : {}),
+                },
+              },
             });
           })
           .catch(() => {

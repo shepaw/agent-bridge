@@ -41,7 +41,7 @@ export async function drivePeerConnection(opts: {
   const acpClients = new Map<string, PeerAcpClient>();
   // Pending tool-call approvals: confirmationId → resolver. The phone replies
   // with agent_approval_resp; on disconnect/timeout we resolve '' (deny).
-  const pendingApprovals = new Map<string, (selected: string) => void>();
+  const pendingApprovals = new Map<string, (selected: { id: string; label?: string }) => void>();
   let lastActivity = Date.now();
   let closed = false;
 
@@ -68,7 +68,7 @@ export async function drivePeerConnection(opts: {
     confirmationId: string; taskId: string; prompt: string;
     actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
     toolKind?: string; toolCallId?: string;
-  }): Promise<string> => {
+  }): Promise<{ id: string; label?: string }> => {
     send({
       type: 'agent_approval_req',
       approval_id: req.confirmationId,
@@ -79,11 +79,15 @@ export async function drivePeerConnection(opts: {
       ...(req.toolKind !== undefined ? { tool_kind: req.toolKind } : {}),
       ...(req.toolCallId !== undefined ? { tool_call_id: req.toolCallId } : {}),
     });
-    return new Promise<string>((resolve) => {
+    log(
+      `approval_req sent confirmation=${req.confirmationId} chatReq=${chatRequestId} ` +
+      `task=${req.taskId} pending=${pendingApprovals.size + 1} actions=${req.actions.length}`,
+    );
+    return new Promise<{ id: string; label?: string }>((resolve) => {
       const timer = setTimeout(() => {
         pendingApprovals.delete(req.confirmationId);
         log(`approval ${req.confirmationId} timed out → deny`);
-        resolve(''); // fail closed
+        resolve({ id: '' }); // fail closed
       }, 5 * 60 * 1000);
       pendingApprovals.set(req.confirmationId, (selected) => {
         clearTimeout(timer);
@@ -270,12 +274,21 @@ export async function drivePeerConnection(opts: {
           // Phone user's tool-call decision; resolve the pending approval.
           const aid = obj.approval_id as string | undefined;
           const sel = obj.selected_action_id as string | undefined;
+          const label = obj.selected_action_label as string | undefined;
           if (aid !== undefined) {
             const resolver = pendingApprovals.get(aid);
             if (resolver !== undefined) {
               pendingApprovals.delete(aid);
-              log(`approval ${aid} → ${sel && sel.length > 0 ? 'allow' : 'deny'}`);
-              resolver(sel ?? '');
+              log(
+                `approval_resp confirmation=${aid} → ${sel && sel.length > 0 ? 'allow' : 'deny'} ` +
+                `action=${sel ?? ''} label=${label ?? ''} remaining=${pendingApprovals.size}`,
+              );
+              resolver({ id: sel ?? '', label });
+            } else {
+              log(
+                `approval_resp NO MATCH confirmation=${aid} action=${sel ?? ''} ` +
+                `pendingKeys=[${[...pendingApprovals.keys()].join(', ')}]`,
+              );
             }
           }
           break;
@@ -314,7 +327,7 @@ export async function drivePeerConnection(opts: {
       closed = true;
       clearInterval(heartbeat);
       // Fail-closed any pending approvals so local agents don't hang.
-      for (const resolver of pendingApprovals.values()) resolver('');
+      for (const resolver of pendingApprovals.values()) resolver({ id: '' });
       pendingApprovals.clear();
       // Close all persistent ACP clients for this peer.
       for (const c of acpClients.values()) {
