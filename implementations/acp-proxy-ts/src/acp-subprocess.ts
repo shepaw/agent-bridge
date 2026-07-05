@@ -27,10 +27,12 @@ import { mapSessionUpdate } from './session-mapper.js';
 import {
   attachActiveSession,
   discardLoadReplayUpdates,
+  supportsSessionDelete,
   supportsSessionList,
   supportsSessionLoad,
   supportsSessionResume,
 } from './session-lifecycle.js';
+import { filterListedSessions } from './sessions-filter.js';
 import { TerminalHost } from './terminal-host.js';
 import {
   buildActions,
@@ -91,6 +93,13 @@ export class AcpSubprocess {
   /** Config options captured by a throwaway warmup session (before any chat). */
   private warmConfigOptions: acp.SessionConfigOption[] | undefined;
 
+  /**
+   * Upstream session ids created only for slash-command / model-config warmup.
+   * Cursor persists these even without a prompt; we delete + filter them out of
+   * `session/list` so the app doesn't keep prompting to sync empty sessions.
+   */
+  private readonly disposableUpstreamSessionIds = new Set<string>();
+
   constructor(opts: AcpSubprocessOptions) {
     this.spec = opts.spec;
     this.cwd = opts.cwd;
@@ -117,9 +126,8 @@ export class AcpSubprocess {
    * after restarting an agent-bridge instance). Claude Code proactively emits
    * `available_commands_update` a moment after `session/new`, with no prompt
    * required, so we create a disposable session on the live connection just to
-   * capture it. Verified empirically that such a prompt-less session is never
-   * persisted to the agent's own session store, so this can't pollute the
-   * session list synced into the app.
+   * capture it. Claude Code does not persist such sessions; Cursor does — we
+   * delete them when supported and always exclude them from session/list.
    */
   async ensureCommandsWarm(): Promise<void> {
     if (this.cachedCommands.length > 0) return;
@@ -127,8 +135,11 @@ export class AcpSubprocess {
     if (this.connection === undefined) return;
 
     let session: acp.ActiveSession | undefined;
+    let disposableId: string | undefined;
     try {
       session = await this.connection.agent.buildSession(this.cwd).start();
+      disposableId = session.sessionId;
+      this.disposableUpstreamSessionIds.add(disposableId);
       this.warmConfigOptions = mergeConfigOptions(
         this.warmConfigOptions,
         session.newSessionResponse.configOptions,
@@ -163,7 +174,34 @@ export class AcpSubprocess {
     } catch (err) {
       log('ensureCommandsWarm failed: %s', err instanceof Error ? err.message : String(err));
     } finally {
+      if (disposableId !== undefined) {
+        await this.tryDeleteUpstreamSession(disposableId);
+      }
       session?.dispose();
+    }
+  }
+
+  /** Upstream ACP session ids currently held by this subprocess (real chat turns). */
+  getActiveUpstreamSessionIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const session of this.sessions.values()) {
+      ids.add(session.sessionId);
+    }
+    return ids;
+  }
+
+  private async tryDeleteUpstreamSession(sessionId: string): Promise<void> {
+    if (this.connection === undefined) return;
+    if (!supportsSessionDelete(this.agentCaps)) return;
+    try {
+      await this.connection.agent.request(acp.methods.agent.session.delete, { sessionId });
+      log('deleted disposable upstream session %s', sessionId);
+    } catch (err) {
+      log(
+        'session/delete failed for %s: %s',
+        sessionId,
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -193,7 +231,10 @@ export class AcpSubprocess {
    * connection. Returns `[]` if the agent doesn't advertise the capability
    * (e.g. codebuddy) so callers degrade gracefully.
    */
-  async listSessions(cwd?: string): Promise<acp.SessionInfo[]> {
+  async listSessions(
+    cwd?: string,
+    opts?: { preserveUpstreamIds?: Iterable<string> },
+  ): Promise<acp.SessionInfo[]> {
     await this.start();
     if (this.connection === undefined) return [];
     if (!supportsSessionList(this.agentCaps)) return [];
@@ -201,7 +242,15 @@ export class AcpSubprocess {
       const response = (await this.connection.agent.request(acp.methods.agent.session.list, {
         cwd: cwd ?? this.cwd,
       })) as acp.ListSessionsResponse;
-      return response.sessions ?? [];
+      const raw = response.sessions ?? [];
+      const preserveUpstreamIds = opts?.preserveUpstreamIds === undefined
+        ? new Set<string>()
+        : new Set(opts.preserveUpstreamIds);
+      return filterListedSessions(raw, {
+        disposableUpstreamIds: this.disposableUpstreamSessionIds,
+        preserveUpstreamIds,
+        activeUpstreamIds: this.getActiveUpstreamSessionIds(),
+      });
     } catch (err) {
       log('session/list failed: %s', err instanceof Error ? err.message : String(err));
       return [];

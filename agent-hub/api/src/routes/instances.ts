@@ -48,6 +48,7 @@ import {
   listInstanceConversations,
   getInstanceConversationHistory,
   InstanceGatewayOfflineError,
+  closeInstanceAcpRpcClient,
   loadOrCreateHubConfig,
   nextFreePort,
   probeInstanceRuntime,
@@ -355,6 +356,7 @@ instancesRouter.delete('/:id', async (req: Request, res: Response) => {
     if (state !== undefined && state.pid > 0 && isAlive(state.pid)) {
       await stopInstance(p);
     }
+    closeInstanceAcpRpcClient(p.id);
     removeInstance(cfg, p.id);
     res.json({ ok: true });
   } catch (err) {
@@ -504,6 +506,7 @@ instancesRouter.post('/:id/stop', async (req: Request, res: Response) => {
     const cfg = loadOrCreateHubConfig();
     const p = getInstance(cfg, req.params.id!);
     const result = await stopInstance(p);
+    closeInstanceAcpRpcClient(p.id);
     res.json({ result });
   } catch (err) {
     if (err instanceof InstanceNotFoundError) {

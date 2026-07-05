@@ -148,6 +148,7 @@ export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {
+  closeInstanceAcpRpcClient,
   getInstanceConversationHistory,
   InstanceGatewayOfflineError,
   listInstanceConversations,

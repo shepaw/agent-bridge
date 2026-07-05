@@ -1,19 +1,24 @@
 /**
- * One-shot ACP RPC calls to a running instance gateway (sessions list / history).
+ * ACP RPC calls to a running instance gateway (sessions list / history).
  *
- * Uses the hub peer-service identity (already on each instance's allowlist) via
- * PeerAcpClient. Intended for the Dashboard REST bridge — not for chat turns.
+ * Reuses one PeerAcpClient per instance across Dashboard REST requests and
+ * closes idle connections after a grace period, avoiding a full WS handshake
+ * on every poll.
  */
 
 import { loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { SessionHistoryMessage, SessionInfo } from 'shepaw-acp-sdk';
 
+import type { InstanceConfig } from './config.js';
 import { getInstance, loadOrCreateHubConfig } from './config.js';
 import { instancePaths } from './paths.js';
 import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
 import { PeerAcpClient } from './peer/peer-acp-client.js';
 import { probeInstanceRuntime } from './runtime-status.js';
+
+/** Close pooled WS when unused for this long (Dashboard polls every 30s). */
+const IDLE_CLOSE_MS = 120_000;
 
 export class InstanceGatewayOfflineError extends Error {
   constructor(
@@ -24,6 +29,15 @@ export class InstanceGatewayOfflineError extends Error {
     this.name = 'InstanceGatewayOfflineError';
   }
 }
+
+interface PoolEntry {
+  client: PeerAcpClient;
+  refs: number;
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
+}
+
+const pool = new Map<string, PoolEntry>();
+const creating = new Map<string, Promise<PoolEntry>>();
 
 function parseSessionInfo(raw: unknown): SessionInfo | null {
   if (raw === null || typeof raw !== 'object') return null;
@@ -51,30 +65,98 @@ function parseHistoryMessage(raw: unknown): SessionHistoryMessage | null {
   };
 }
 
+async function ensureGatewayOnline(instanceId: string, instance: InstanceConfig): Promise<void> {
+  const runtime = await probeInstanceRuntime(instance);
+  if (runtime.availability !== 'online' && runtime.availability !== 'degraded') {
+    closeInstanceAcpRpcClient(instanceId);
+    throw new InstanceGatewayOfflineError(
+      instanceId,
+      runtime.probeError ?? `Gateway is ${runtime.availability}. Start the instance to view sessions.`,
+    );
+  }
+}
+
+function scheduleIdleClose(instanceId: string, entry: PoolEntry): void {
+  if (entry.refs > 0) return;
+  entry.idleTimer = setTimeout(() => {
+    if (pool.get(instanceId) === entry) {
+      closeInstanceAcpRpcClient(instanceId);
+    }
+  }, IDLE_CLOSE_MS);
+}
+
+async function createPoolEntry(instanceId: string): Promise<PoolEntry> {
+  const cfg = loadOrCreateHubConfig();
+  const instance = getInstance(cfg, instanceId);
+  await ensureGatewayOnline(instanceId, instance);
+  authorizePeerServiceOnInstance(instanceId, cfg);
+
+  const peerIdentity = loadOrCreatePeerIdentity();
+  const instanceIdentity = loadOrCreateIdentity({ path: instancePaths(instance.id).identityPath });
+  const client = new PeerAcpClient(peerIdentity, instance, instanceIdentity, () => {});
+  const entry: PoolEntry = { client, refs: 0, idleTimer: undefined };
+  pool.set(instanceId, entry);
+  return entry;
+}
+
+async function acquirePoolEntry(instanceId: string): Promise<PoolEntry> {
+  const existing = pool.get(instanceId);
+  if (existing !== undefined) {
+    if (existing.idleTimer !== undefined) {
+      clearTimeout(existing.idleTimer);
+      existing.idleTimer = undefined;
+    }
+    return existing;
+  }
+
+  let pending = creating.get(instanceId);
+  if (pending === undefined) {
+    pending = createPoolEntry(instanceId).finally(() => {
+      creating.delete(instanceId);
+    });
+    creating.set(instanceId, pending);
+  }
+  return pending;
+}
+
+/** Drop a pooled client (e.g. when the instance stops). */
+export function closeInstanceAcpRpcClient(instanceId: string): void {
+  const entry = pool.get(instanceId);
+  if (entry === undefined) return;
+  if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
+  try {
+    entry.client.close();
+  } catch {
+    /* ignore */
+  }
+  pool.delete(instanceId);
+}
+
 async function withAcpClient<T>(
   instanceId: string,
   fn: (client: PeerAcpClient) => Promise<T>,
 ): Promise<T> {
   const cfg = loadOrCreateHubConfig();
   const instance = getInstance(cfg, instanceId);
-  const runtime = await probeInstanceRuntime(instance);
-  if (runtime.availability !== 'online' && runtime.availability !== 'degraded') {
-    throw new InstanceGatewayOfflineError(
-      instanceId,
-      runtime.probeError ?? `Gateway is ${runtime.availability}. Start the instance to view sessions.`,
-    );
+  await ensureGatewayOnline(instanceId, instance);
+
+  const entry = await acquirePoolEntry(instanceId);
+  entry.refs += 1;
+  if (entry.idleTimer !== undefined) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
   }
 
-  authorizePeerServiceOnInstance(instanceId, cfg);
-
-  const peerIdentity = loadOrCreatePeerIdentity();
-  const instanceIdentity = loadOrCreateIdentity({ path: instancePaths(instance.id).identityPath });
-  const client = new PeerAcpClient(peerIdentity, instance, instanceIdentity, () => {});
-
   try {
-    return await fn(client);
+    return await fn(entry.client);
+  } catch (err) {
+    closeInstanceAcpRpcClient(instanceId);
+    throw err;
   } finally {
-    client.close();
+    entry.refs -= 1;
+    if (entry.refs === 0 && pool.get(instanceId) === entry) {
+      scheduleIdleClose(instanceId, entry);
+    }
   }
 }
 

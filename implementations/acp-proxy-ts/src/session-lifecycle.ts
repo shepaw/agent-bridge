@@ -33,6 +33,11 @@ export function supportsSessionList(caps: acp.InitializeResponse | undefined): b
     && caps?.agentCapabilities?.sessionCapabilities?.list !== null;
 }
 
+export function supportsSessionDelete(caps: acp.InitializeResponse | undefined): boolean {
+  return caps?.agentCapabilities?.sessionCapabilities?.delete !== undefined
+    && caps?.agentCapabilities?.sessionCapabilities?.delete !== null;
+}
+
 export interface DiscardReplayOptions {
   /** Stop after this many ms without a replay update. Default 400. */
   idleMs?: number;

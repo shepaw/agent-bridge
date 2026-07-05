@@ -79,6 +79,11 @@ export class SessionStore {
     return undefined;
   }
 
+  /** All upstream agent-sdk session ids we have mapped (for session-list filtering). */
+  allSdkSessionIds(): ReadonlySet<string> {
+    return new Set(this.mapping.values());
+  }
+
   set(shepawSessionId: string, sdkSessionId: string): void {
     if (this.mapping.get(shepawSessionId) === sdkSessionId) return;
     this.mapping.set(shepawSessionId, sdkSessionId);

@@ -132,7 +132,9 @@ export class AcpProxyAgent extends ACPAgentServer {
   }
 
   override async onSessionsList(params: SessionsListParams): Promise<SessionsListResult> {
-    const upstream = await this.subprocess.listSessions(params.cwd);
+    const upstream = await this.subprocess.listSessions(params.cwd, {
+      preserveUpstreamIds: this.sessionStore.allSdkSessionIds(),
+    });
     const sessions: SessionInfo[] = upstream.map((s) => {
       // If the app already has a mapping to this upstream session, surface it
       // under the app's own session id so it reuses the existing local channel
