@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import type { InstanceStatus, LiveSession, SessionHistoryMessage } from '../api/types.js';
 
@@ -17,23 +17,35 @@ export function useConversations({
 }: UseConversationsOptions) {
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [listLoading, setListLoading] = useState(false);
+  const [listRefreshing, setListRefreshing] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<SessionHistoryMessage[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
+  const selectedSessionIdRef = useRef(selectedSessionId);
+  selectedSessionIdRef.current = selectedSessionId;
+  const onSelectSessionRef = useRef(onSelectSession);
+  onSelectSessionRef.current = onSelectSession;
+
   const gatewayReady =
     status?.availability === 'online' || status?.availability === 'degraded';
 
-  const loadSessions = useCallback(async () => {
+  const loadSessions = useCallback(async (mode: 'initial' | 'background' | 'manual' = 'initial') => {
     if (!gatewayReady) {
       setSessions([]);
       setListError(null);
+      setListLoading(false);
+      setListRefreshing(false);
       return;
     }
 
-    setListLoading(true);
+    if (mode === 'initial') {
+      setListLoading(true);
+    } else if (mode === 'manual') {
+      setListRefreshing(true);
+    }
     setListError(null);
     try {
       const { sessions: list } = await api.conversations.list(instanceId);
@@ -43,19 +55,21 @@ export function useConversations({
         return tb - ta;
       });
       setSessions(sorted);
+      const activeSessionId = selectedSessionIdRef.current;
       if (
-        selectedSessionId !== null &&
-        !sorted.some((session) => session.session_id === selectedSessionId)
+        activeSessionId !== null &&
+        !sorted.some((session) => session.session_id === activeSessionId)
       ) {
-        onSelectSession(null);
+        onSelectSessionRef.current(null);
       }
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
       setSessions([]);
     } finally {
       setListLoading(false);
+      setListRefreshing(false);
     }
-  }, [gatewayReady, instanceId, onSelectSession, selectedSessionId]);
+  }, [gatewayReady, instanceId]);
 
   const loadHistory = useCallback(async (sessionId: string) => {
     setHistoryLoading(true);
@@ -73,12 +87,12 @@ export function useConversations({
   }, [instanceId]);
 
   useEffect(() => {
-    void loadSessions();
+    void loadSessions('initial');
   }, [loadSessions]);
 
   useEffect(() => {
     if (!gatewayReady) return;
-    const timer = setInterval(() => { void loadSessions(); }, 30_000);
+    const timer = setInterval(() => { void loadSessions('background'); }, 30_000);
     return () => clearInterval(timer);
   }, [gatewayReady, loadSessions]);
 
@@ -95,6 +109,7 @@ export function useConversations({
   return {
     sessions,
     listLoading,
+    listRefreshing,
     listError,
     messages,
     historyLoading,

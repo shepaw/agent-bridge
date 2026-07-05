@@ -21,6 +21,7 @@ export function SessionsPanel({
   const {
     sessions,
     listLoading,
+    listRefreshing,
     listError,
     messages,
     historyLoading,
@@ -55,11 +56,14 @@ export function SessionsPanel({
           )}
           <button
             type="button"
-            style={refreshBtn}
+            style={{
+              ...refreshBtn,
+              opacity: listRefreshing ? 0.65 : 1,
+            }}
             disabled={!gatewayReady || listLoading}
-            onClick={() => void loadSessions()}
+            onClick={() => void loadSessions('manual')}
           >
-            {listLoading ? '…' : 'Refresh'}
+            Refresh
           </button>
         </div>
       </div>
@@ -156,6 +160,7 @@ const refreshBtn: React.CSSProperties = {
   color: '#a6adc8',
   borderRadius: 4,
   padding: '2px 10px',
+  minWidth: 64,
   cursor: 'pointer',
   fontSize: 12,
 };

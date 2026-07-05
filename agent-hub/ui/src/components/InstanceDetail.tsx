@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { Instance, Peer, EnrollToken } from '../api/types.js';
@@ -113,11 +113,15 @@ export function InstanceDetail({
     if (initialSessionId) onTabChange('sessions');
   }, [initialSessionId, instanceId]);
 
-  const handleSessionSelect = (sessionId: string | null) => {
+  const handleSessionSelect = useCallback((sessionId: string | null) => {
     setSelectedSessionId(sessionId);
     onSessionChange?.(sessionId);
     if (sessionId) onTabChange('sessions');
-  };
+  }, [onSessionChange, onTabChange]);
+
+  const openManageMappings = useCallback(() => {
+    setShowResume(true);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => { void load(); }, 3000);
@@ -429,7 +433,7 @@ export function InstanceDetail({
                 status={instance.status}
                 selectedSessionId={selectedSessionId}
                 onSelectSession={handleSessionSelect}
-                onManageMappings={() => setShowResume(true)}
+                onManageMappings={openManageMappings}
               />
             </section>
           )}
