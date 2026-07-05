@@ -16,6 +16,8 @@ agent-bridge/
 │
 ├── agent-hub/                        # Multi-project supervisor (CLI + Web UI)
 │
+├── docs/                             # Deployment and help guides
+│
 └── tools/
     └── debug-clients/                # One-off WS clients used during protocol bring-up
 ```
@@ -83,7 +85,8 @@ shepaw-hub pair work-api --label "My iPhone"   # prints QR + short code
 ```
 
 See [`agent-hub/README.md`](agent-hub/README.md) for the full command reference,
-Web UI, and Windows notes.
+Web UI, and Windows notes. For step-by-step deployment (Peer pairing, Channel,
+production checklist), see [`docs/deployment.md`](docs/deployment.md).
 
 ### Build a custom agent (Python)
 
@@ -120,6 +123,16 @@ class MyAgent extends ACPAgentServer {
 
 await new MyAgent({ name: 'My Agent' }).run({ port: 8080 });
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [`docs/deployment.md`](docs/deployment.md) | Deploy Shepaw Agent Hub (build, engines, instances, Peer / Channel) |
+| [`docs/README.md`](docs/README.md) | Help docs index |
+| [`agent-hub/README.md`](agent-hub/README.md) | CLI and REST API reference |
+| [`CHANNEL_PROXY_GUIDE.md`](CHANNEL_PROXY_GUIDE.md) | Channel tunnel protocol |
+| [`SECURITY.md`](SECURITY.md) | ACP v2.1 security and pairing |
 
 ## Development
 
