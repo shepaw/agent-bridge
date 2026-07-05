@@ -11,7 +11,8 @@
 
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,6 +80,87 @@ function checkNpmAuth() {
   }
 }
 
+function getNpmAuthToken() {
+  const fromEnv = process.env.NPM_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const rc = readFileSync(join(homedir(), '.npmrc'), 'utf8');
+    const match = rc.match(/^\/\/registry\.npmjs\.org\/:_authToken=(.+)$/m);
+    if (match) return match[1].trim();
+  } catch {
+    // ignore
+  }
+  try {
+    const token = runCapture('npm config get //registry.npmjs.org/:_authToken');
+    if (token && token !== 'undefined' && token !== 'null') return token;
+  } catch {
+    // npm may block reading protected _authToken
+  }
+  return '';
+}
+
+function hasGranularPublishToken() {
+  const token = process.env.NPM_TOKEN?.trim() || getNpmAuthToken();
+  return token.startsWith('npm_');
+}
+
+function usesBypassPublishToken() {
+  return hasGranularPublishToken();
+}
+
+function printGranularTokenSetup() {
+  const user = runCapture('npm whoami');
+  console.error(`
+✗ Cannot publish with \`npm login\` session token + OTP on npm 11 (auth-and-writes).
+  OTP works for \`npm profile get\` but registry rejects publish — this is an npm limitation.
+
+Create a Granular Access Token (one-time setup, ~2 minutes):
+
+  1. Open https://www.npmjs.com/settings/${user}/tokens
+  2. Generate New Token → Granular Access Token
+  3. Permissions: Read and Write
+  4. Bypass 2FA: enabled
+  5. Packages & scopes: All packages (or @shepaw/* + unscoped)
+  6. Expiration: 7 days (recommended for first publish)
+
+  7. Copy the npm_... token, then run:
+
+     npm config set //registry.npmjs.org/:_authToken npm_PASTE_TOKEN_HERE
+     make publish
+
+  Revoke the token on npmjs.com after publishing if you prefer.
+`);
+}
+
+function requireGranularPublishToken() {
+  if (hasGranularPublishToken()) {
+    ok('Granular publish token configured (npm_...)');
+    return;
+  }
+  if (!isTwoFactorEnabled()) return;
+  printGranularTokenSetup();
+  process.exit(1);
+}
+
+function checkPublishAuthMode() {
+  if (hasGranularPublishToken()) {
+    ok('Granular publish token (npm_...) — publish without OTP');
+    return;
+  }
+  if (isTwoFactorEnabled()) {
+    console.warn('⚠ No granular token — only npm login session in ~/.npmrc');
+    console.warn('  Publish with OTP will fail on npm 11. Run: make publish-auth');
+  } else {
+    checkTwoFactor();
+  }
+}
+
+function cmdPublishAuth() {
+  checkNpmAuth();
+  printGranularTokenSetup();
+  process.exit(0);
+}
+
 function checkTwoFactor() {
   try {
     const profile = runCapture('npm profile get');
@@ -88,10 +170,53 @@ function checkTwoFactor() {
       );
       console.warn('  https://docs.npmjs.com/requiring-two-factor-authentication');
     } else {
-      ok('npm 2FA enabled');
+      ok('npm 2FA enabled (publish needs --otp; make publish will prompt)');
+      console.warn(
+        '  Session login often fails publish+OTP. Prefer a granular token:',
+      );
+      console.warn('  https://www.npmjs.com/settings/~tokens → Generate New Token');
+      console.warn('  Permissions: Read and Write, Bypass 2FA → npm config set //registry.npmjs.org/:_authToken npm_...');
     }
   } catch {
     console.warn('⚠ Could not read npm profile (skipping 2FA check).');
+  }
+}
+
+function isTwoFactorEnabled() {
+  try {
+    const profile = runCapture('npm profile get');
+    return !profile.includes('two-factor auth: disabled');
+  } catch {
+    return true;
+  }
+}
+
+async function promptLine(message) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(message)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+function publishPackage(cwd, accessFlag, otp) {
+  const otpFlag = otp ? ` --otp=${otp}` : '';
+  const env = { ...process.env };
+  if (otp) env.npm_config_otp = otp;
+
+  // Pack then publish the .tgz — NOT `npm publish .`
+  // In a monorepo, `publish .` uses execWorkspaces and the session token often
+  // ignores --otp on the first registry PUT (npm 11). Tarball publish avoids that.
+  const tarball = runCapture('npm pack --ignore-scripts', { cwd });
+  if (!tarball.endsWith('.tgz')) {
+    fail(`npm pack did not return a tarball name in ${cwd}`);
+  }
+  const tgzPath = join(cwd, tarball);
+  try {
+    run(`npm publish ${tarball}${accessFlag}${otpFlag}`, { cwd, env });
+  } finally {
+    if (existsSync(tgzPath)) unlinkSync(tgzPath);
   }
 }
 
@@ -152,7 +277,7 @@ function checkRegistryAvailability(version) {
 function cmdCheck() {
   console.log('── npm publish preflight ──\n');
   checkNpmAuth();
-  checkTwoFactor();
+  checkPublishAuthMode();
   const version = checkVersions();
   checkInternalDeps();
   checkGitClean();
@@ -167,30 +292,30 @@ function cmdDryRun() {
     console.log(`\n▸ ${name}`);
     run(`npm pack --dry-run`, { cwd: join(ROOT, dir) });
   }
-  console.log('\n✓ Dry-run complete. Run: CONFIRM=1 make publish');
+  console.log('\n✓ Dry-run complete. Run: make publish-auth then make publish');
 }
 
 async function cmdPublish() {
   const version = checkVersions();
+  requireGranularPublishToken();
+
   if (process.env.CONFIRM !== '1') {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question(
+    const answer = await promptLine(
       `Publish ${PACKAGES.length} packages at v${version} to the public npm registry? [y/N] `,
     );
-    rl.close();
-    if (answer.trim().toLowerCase() !== 'y') {
+    if (answer.toLowerCase() !== 'y') {
       console.log('Aborted.');
       process.exit(1);
     }
   }
 
-  console.log('\n── publishing ──\n');
+  console.log('\n── publishing (granular token, no OTP) ──\n');
   for (const { dir, name } of PACKAGES) {
     console.log(`\n▸ ${name}@${version}`);
     const cwd = join(ROOT, dir);
     const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
     const accessFlag = pkg.name.startsWith('@') ? ' --access public' : '';
-    run(`npm publish${accessFlag}`, { cwd });
+    publishPackage(cwd, accessFlag, '');
     ok(`Published ${name}@${version}`);
   }
 
@@ -230,6 +355,9 @@ switch (command) {
   case 'dry-run':
     cmdDryRun();
     break;
+  case 'publish-auth':
+    cmdPublishAuth();
+    break;
   case 'publish':
     cmdPublish().catch((err) => {
       console.error(err);
@@ -241,6 +369,6 @@ switch (command) {
     cmdVersion(arg);
     break;
   default:
-    console.log(`Usage: node scripts/npm-release.mjs <check|dry-run|publish|version>`);
+    console.log(`Usage: node scripts/npm-release.mjs <check|dry-run|publish|publish-auth|version>`);
     process.exit(command ? 1 : 0);
 }

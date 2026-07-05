@@ -267,6 +267,14 @@ export async function startAgent(
   return {
     port,
     stop: async () => {
+      // Terminate open clients so wsServer.close() does not hang in test teardown.
+      for (const client of wsServer.clients) {
+        try {
+          client.terminate();
+        } catch {
+          // ignore
+        }
+      }
       await new Promise<void>((resolve) => wsServer.close(() => resolve()));
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await agent.close().catch(() => undefined);

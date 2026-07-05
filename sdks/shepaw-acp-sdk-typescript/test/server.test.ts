@@ -74,7 +74,7 @@ describe('ACPAgentServer v2.1 — echo flow', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -162,7 +162,7 @@ describe('ACPAgentServer v2.1 — handshake rejection', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -239,7 +239,7 @@ describe('ACPAgentServer v2.1 — peer.unregister', () => {
   });
 
   afterEach(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -316,7 +316,7 @@ describe('ACPAgentServer v2.1 — cancel + UI interaction', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -395,7 +395,7 @@ describe('ACPAgentServer v2.1 — cancellation', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -464,7 +464,7 @@ describe('ACPAgentServer v2.1 — agent.commands.list', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -579,7 +579,7 @@ describe('ACPAgentServer v2.1 — onSlashCommand hook', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -717,7 +717,7 @@ describe('ACPAgentServer v2.1 — agent.models.*', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -860,7 +860,7 @@ describe('ACPAgentServer v2.1 — registerFormHandler', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -926,7 +926,7 @@ describe('ACPAgentServer — /status', () => {
   });
 
   afterAll(async () => {
-    await stop();
+    await stop?.();
     rmSync(workdir, { recursive: true, force: true });
   });
 

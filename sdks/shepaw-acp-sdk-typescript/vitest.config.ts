@@ -16,5 +16,8 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts'],
     testTimeout: 10_000,
+    hookTimeout: 30_000,
+    // Integration tests bind ports and share process.env — run files serially.
+    fileParallelism: false,
   },
 });

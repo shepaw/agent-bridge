@@ -195,9 +195,18 @@ describe('peers', () => {
   });
 
   describe('resolvePeersPath', () => {
-    const savedEnv = { ...process.env };
+    const envKeys = ['SHEPAW_PEERS_PATH', 'XDG_CONFIG_HOME'] as const;
+    const saved: Partial<Record<(typeof envKeys)[number], string | undefined>> = {};
+
+    beforeEach(() => {
+      for (const key of envKeys) saved[key] = process.env[key];
+    });
+
     afterEach(() => {
-      process.env = { ...savedEnv };
+      for (const key of envKeys) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
     });
 
     it('prefers explicit override', () => {
