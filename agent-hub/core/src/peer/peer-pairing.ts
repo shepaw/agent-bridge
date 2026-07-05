@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { HubConfig } from '../config.js';
 import { detectLanIPv4 } from '../network.js';
 import { peerPairingPath } from '../paths.js';
 
@@ -122,4 +123,18 @@ export function resolveLocalEndpoint(port: number, host: string): string {
     ? detectLanIPv4() ?? '127.0.0.1'
     : host;
   return `ws://${ip}:${port}/peer/ws`;
+}
+
+/**
+ * WAN peer WS URL via the shared gateway channel. Omitted when no tunnel is
+ * configured. The tunnel router forwards `/peer/ws` to the local peer service.
+ */
+export function resolvePeerChannelEndpoint(cfg: HubConfig): string | undefined {
+  const t = cfg.gateway?.tunnel;
+  if (t === undefined) return undefined;
+  const wsBase = t.serverUrl
+    .replace(/\/+$/, '')
+    .replace(/^https:\/\//, 'wss://')
+    .replace(/^http:\/\//, 'ws://');
+  return `${wsBase}/proxy/${t.channelId}/peer/ws`;
 }

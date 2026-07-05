@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
-import type { PairedPeer, PeerPairingResult, PeerServiceStatus } from '../api/types.js';
+import type { GatewayInfo, PairedPeer, PeerPairingResult, PeerServiceStatus } from '../api/types.js';
+import { ChannelSettingsPanel } from './GatewaySettingsModal.js';
 
 /**
  * Peer pairing panel: start/stop the device peer service, mint a
@@ -12,6 +13,7 @@ export function PeerPairingPanel() {
   const [status, setStatus] = useState<PeerServiceStatus | null>(null);
   const [devices, setDevices] = useState<PairedPeer[]>([]);
   const [pairing, setPairing] = useState<PeerPairingResult | null>(null);
+  const [gateway, setGateway] = useState<GatewayInfo | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -20,9 +22,10 @@ export function PeerPairingPanel() {
 
   const load = async () => {
     try {
-      const res = await api.peer.get();
-      setStatus(res.status);
-      setDevices(res.devices);
+      const [peerRes, gw] = await Promise.all([api.peer.get(), api.gateway.get()]);
+      setStatus(peerRes.status);
+      setDevices(peerRes.devices);
+      setGateway(gw);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -65,6 +68,18 @@ export function PeerPairingPanel() {
 
   return (
     <>
+      <div style={section}>
+        <h4 style={sectionTitle}>共享 Channel（远程访问）</h4>
+        <ChannelSettingsPanel />
+      </div>
+
+      <div style={section}>
+        <h4 style={sectionTitle}>Peer 服务</h4>
+      {gateway?.channel && !gateway.status.running && (
+        <p style={warn}>
+          已配置 Channel 但隧道路由器未运行。远程配对需先启动路由器。
+        </p>
+      )}
       <div style={statusRow}>
         <div>
           <span style={dot(running)} />
@@ -78,8 +93,10 @@ export function PeerPairingPanel() {
         </div>
       </div>
       <p style={hint}>
-        用 Shepaw app 的「Device Pairing / Scan to Connect」扫描下方二维码。此 QR 走 peer 协议（<code style={code}>shepaw://peer</code>），
-        与「Add Agent」扫码入口的 <code style={code}>shepaw://pair</code> 不同——请确认手机用的是 Device Pairing 扫码器。
+        用 Shepaw app 的「Device Pairing / Scan to Connect」扫描下方二维码。
+        {gateway?.channel
+          ? ' 二维码包含局域网与 Channel 远程入口。'
+          : ' 当前仅局域网可用；配置 Channel 后可远程连接。'}
       </p>
 
       {!pairing ? (
@@ -91,7 +108,15 @@ export function PeerPairingPanel() {
           <QRCodeSVG value={pairing.qrPayload} size={200} bgColor="#1e1e2e" fgColor="#cdd6f4" />
           <p style={{ color: '#a6e3a1', fontSize: 24, letterSpacing: 6, margin: '12px 0 4px' }}>{pairing.code}</p>
           <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>{secondsLeft > 0 ? `${secondsLeft}s 后过期` : '已过期'}</p>
-          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 8 }}>入口：{pairing.localEndpoint}</p>
+          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 8 }}>
+            局域网：{pairing.localEndpoint}
+            {pairing.channelEndpoint && (
+              <>
+                <br />
+                Channel：{pairing.channelEndpoint}
+              </>
+            )}
+          </p>
           <div style={linkBox}>
             <div style={linkLabel}>配对链接(无摄像头可粘贴此链接到 app「Device Pairing → 输入」)</div>
             <div style={linkRow}>
@@ -109,6 +134,9 @@ export function PeerPairingPanel() {
         </div>
       )}
 
+      {err && <p style={{ color: '#f38ba8', fontSize: 13 }}>{err}</p>}
+      </div>
+
       <div style={section}>
         <h4 style={sectionTitle}>已配对设备（{devices.length}）</h4>
         {devices.length === 0
@@ -123,8 +151,6 @@ export function PeerPairingPanel() {
             </div>
           ))}
       </div>
-
-      {err && <p style={{ color: '#f38ba8', fontSize: 13 }}>{err}</p>}
     </>
   );
 }
@@ -135,7 +161,7 @@ function dot(running: boolean): React.CSSProperties {
 
 const statusRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#181825', border: '1px solid #313244', borderRadius: 6, padding: '10px 12px', marginBottom: 12 };
 const hint: React.CSSProperties = { color: '#6c7086', fontSize: 12, margin: '0 0 12px' };
-const code: React.CSSProperties = { background: '#181825', border: '1px solid #313244', borderRadius: 4, padding: '0 4px' };
+const warn: React.CSSProperties = { color: '#f9e2af', fontSize: 12, margin: '0 0 12px' };
 const primaryBtn: React.CSSProperties = { background: '#89b4fa', color: '#1e1e2e', border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', fontWeight: 600 };
 const dangerBtn: React.CSSProperties = { background: '#452632', color: '#f38ba8', border: '1px solid #f38ba8', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontSize: 12 };
 const qrBlock: React.CSSProperties = { textAlign: 'center', marginBottom: 16 };
@@ -146,5 +172,5 @@ const linkCode: React.CSSProperties = { flex: 1, padding: '6px 8px', background:
 const copyBtn: React.CSSProperties = { background: '#313244', color: '#cdd6f4', border: '1px solid #45475a', borderRadius: 4, padding: '0 12px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' };
 const linkHint: React.CSSProperties = { color: '#6c7086', fontSize: 11, marginTop: 8, lineHeight: 1.5 };
 const section: React.CSSProperties = { marginTop: 16, borderTop: '1px solid #313244', paddingTop: 14 };
-const sectionTitle: React.CSSProperties = { margin: '0 0 8px', color: '#cdd6f4', fontSize: 14 };
+const sectionTitle: React.CSSProperties = { margin: '0 0 12px', color: '#cdd6f4', fontSize: 14 };
 const deviceRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #313244' };

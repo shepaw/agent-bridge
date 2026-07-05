@@ -76,7 +76,7 @@ export function App() {
         <div style={topbar}>
           <div>
             <h1 style={title}>设置</h1>
-            <p style={subtitle}>全局设置 · 引擎管理 · 设备配对</p>
+            <p style={subtitle}>全局设置 · 引擎管理 · Peer 配对</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
           <button style={secondaryBtn} onClick={() => {

@@ -1092,7 +1092,8 @@ cli
       console.log('');
       console.log(`  Pairing code:  ${res.code}`);
       console.log(`  Expires in:    ${Math.round((res.expiresAt - Date.now()) / 1000)}s`);
-      console.log(`  Endpoint:      ${res.localEndpoint}`);
+      console.log(`  Local:         ${res.localEndpoint}`);
+      if (res.channelEndpoint) console.log(`  Channel:       ${res.channelEndpoint}`);
       console.log(`  Fingerprint:   ${res.fingerprint}`);
       console.log('');
       console.log('  Scan with the Shepaw app (Device Pairing / Scan to Connect):');

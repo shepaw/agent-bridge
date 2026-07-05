@@ -1,13 +1,13 @@
-import { GatewaySettingsPanel } from './GatewaySettingsModal.js';
-import { DevicePairingPanel } from './DevicePairingModal.js';
+import { ApprovalSettingsPanel } from './GatewaySettingsModal.js';
 import { EngineManager } from './EngineManager.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
 import type { SettingsTab } from '../utils/settingsRoute.js';
 
 /**
  * Unified settings page. Hosts the three configuration surfaces:
- *   - 全局: shared channel + tunnel router + device-wide approval + device pairing
+ *   - 全局: device-wide tool-call approval default
  *   - 引擎: per-engine overrides (enable/disable, command, default creds, approval)
+ *   - Peer 配对: shared channel + peer service + shepaw://peer pairing
  *
  * Instances (agent instances) live on the main dashboard; per-instance approval
  * is edited in InstanceDetail.
@@ -33,21 +33,11 @@ export function SettingsPage({
 
       <div style={panel}>
         {tab === 'global' && (
-          <>
-            <section style={card}>
-              <h3 style={cardTitle}>网关 / 共享 Channel + 审核策略</h3>
-              <p style={cardHint}>一个 channel 代理本机全部 Agent；设备级默认审核策略在此设置。</p>
-              <GatewaySettingsPanel />
-            </section>
-            <section style={card}>
-              <h3 style={cardTitle}>设备配对（Add Agent 流 · shepaw://pair）</h3>
-              <p style={cardHint}>
-                用 Shepaw App 的「Add Agent」扫码入口扫描。注意：这是 shepaw://pair 协议，
-                与「Peer 配对」分区的 shepaw://peer 不同，请确认手机用的是 Add Agent 扫码器。
-              </p>
-              <DevicePairingPanel />
-            </section>
-          </>
+          <section style={card}>
+            <h3 style={cardTitle}>工具调用审核策略（设备级默认）</h3>
+            <p style={cardHint}>决定本机 Agent 的默认工具审核行为；引擎或实例可单独覆盖。</p>
+            <ApprovalSettingsPanel />
+          </section>
         )}
 
         {tab === 'engines' && (
@@ -63,9 +53,9 @@ export function SettingsPage({
 
         {tab === 'peer' && (
           <section style={card}>
-            <h3 style={cardTitle}>Peer 配对（Device Pairing 流 · shepaw://peer）</h3>
+            <h3 style={cardTitle}>Peer 配对（shepaw://peer）</h3>
             <p style={cardHint}>
-              启动 peer 服务后生成二维码，用 Shepaw App 的「Device Pairing / Scan to Connect」扫码。
+              配置 Channel 后启动 Peer 服务并生成二维码，用 Shepaw App 的「Device Pairing / Scan to Connect」扫码。
               配对后手机可通过 peer 通道访问本机全部实例。
             </p>
             <PeerPairingPanel />

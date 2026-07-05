@@ -122,4 +122,24 @@ describe('GatewayTunnelRouter dispatch', () => {
     const body = (await resp.json()) as { role: string };
     expect(body.role).toBe('gateway-router');
   });
+
+  it('routes /peer/ws to the peer service port', async () => {
+    const peer = await mockAgent(() => 'peer-ok');
+    const cfg: HubConfig = {
+      path: '/tmp/hub.json',
+      instances: [instance('alpha', agentA.port)],
+      customEngines: [],
+      peer: { host: '127.0.0.1', port: peer.port },
+    };
+    await router.stop();
+    router = new GatewayTunnelRouter({
+      routerPort,
+      loadConfig: () => cfg,
+      onLog: () => undefined,
+    });
+    await router.start();
+    const base = `ws://127.0.0.1:${routerPort}`;
+    expect(await roundtrip(`${base}/peer/ws`)).toBe('peer-ok');
+    peer.close();
+  });
 });

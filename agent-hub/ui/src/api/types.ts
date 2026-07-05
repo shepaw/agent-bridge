@@ -203,6 +203,8 @@ export interface PeerPairingResult {
   qrPayload: string;
   expiresAt: number;
   localEndpoint: string;
+  /** WAN endpoint via shared channel; present when gateway tunnel is configured. */
+  channelEndpoint?: string;
   fingerprint: string;
 }
 

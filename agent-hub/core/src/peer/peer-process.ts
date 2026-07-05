@@ -18,6 +18,7 @@ import {
   generatePairingCode,
   PAIRING_TTL_MS,
   resolveLocalEndpoint,
+  resolvePeerChannelEndpoint,
   writePairingFile,
   type PairingFileEntry,
 } from './peer-pairing.js';
@@ -139,6 +140,8 @@ export interface MintPairingResult {
   qrPayload: string;
   expiresAt: number;
   localEndpoint: string;
+  /** WAN endpoint via shared channel; present when gateway tunnel is configured. */
+  channelEndpoint?: string;
   fingerprint: string;
 }
 
@@ -152,8 +155,10 @@ export async function mintPairingQr(): Promise<MintPairingResult> {
   const identity = loadOrCreatePeerIdentity();
   const code = generatePairingCode();
   const localEndpoint = resolveLocalEndpoint(port, host);
+  const channelEndpoint = resolvePeerChannelEndpoint(cfg);
   const qrPayload = buildPeerQrPayload({
     localEndpoint,
+    channelEndpoint,
     code,
     fingerprint: identity.fingerprint,
     publicKey: identity.staticPublicKey,
@@ -166,7 +171,14 @@ export async function mintPairingQr(): Promise<MintPairingResult> {
     createdAt: Date.now(),
   };
   writePairingFile(entry);
-  return { code, qrPayload, expiresAt: entry.expiresAt, localEndpoint, fingerprint: identity.fingerprint };
+  return {
+    code,
+    qrPayload,
+    expiresAt: entry.expiresAt,
+    localEndpoint,
+    channelEndpoint,
+    fingerprint: identity.fingerprint,
+  };
 }
 
 function resolveDaemonPath(): string {

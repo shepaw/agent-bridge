@@ -29,7 +29,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { ChannelTunnelConfig, TunnelClient, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 
-import { loadOrCreateHubConfig, type HubConfig, type InstanceConfig } from './config.js';
+import { loadOrCreateHubConfig, type HubConfig, type InstanceConfig, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from './config.js';
 import { instancePaths } from './paths.js';
 
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '']);
@@ -210,6 +210,12 @@ export class GatewayTunnelRouter {
   }
 
   private resolveTarget(rawUrl: string): { target: RouteTarget | undefined; localPath: string } {
+    const peerTarget = this.resolvePeerTarget(rawUrl);
+    if (peerTarget !== undefined) {
+      const url = new URL(rawUrl, 'http://localhost');
+      return { target: peerTarget, localPath: `${url.pathname}${url.search}` };
+    }
+
     const cfg = this.loadConfig();
     const { key, localPath } = this.parseRoute(rawUrl);
 
@@ -229,6 +235,17 @@ export class GatewayTunnelRouter {
     }
     const host = WILDCARD_HOSTS.has(instance.host) ? '127.0.0.1' : instance.host;
     return { target: { instanceId: instance.id, host, port: instance.port }, localPath };
+  }
+
+  /** Route `/peer/ws` to the device-level peer service (separate from ACP agents). */
+  private resolvePeerTarget(rawUrl: string): RouteTarget | undefined {
+    const url = new URL(rawUrl, 'http://localhost');
+    if (!url.pathname.startsWith('/peer')) return undefined;
+    const cfg = this.loadConfig();
+    const peerPort = cfg.peer?.port ?? DEFAULT_PEER_PORT;
+    const peerHost = cfg.peer?.host ?? DEFAULT_PEER_HOST;
+    const host = WILDCARD_HOSTS.has(peerHost) ? '127.0.0.1' : peerHost;
+    return { instanceId: '__peer__', host, port: peerPort };
   }
 
   // ── HTTP forwarding ──────────────────────────────────────────────
