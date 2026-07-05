@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   ACP_ENGINES,
@@ -33,11 +35,16 @@ describe('engines', () => {
     expect(spec.command).toBe('npx');
   });
 
-  it('spawnCommand resolves cursor-agent when agent is missing', () => {
+  it('spawnCommand resolves installed Cursor CLI at spawn time', () => {
     const spec = getBuiltinEngineSpec('cursor');
     const { command } = spawnCommand(spec);
-    if (existsSync('/opt/homebrew/bin/cursor-agent')) {
+    const localAgent = join(homedir(), '.local', 'bin', 'agent');
+    if (existsSync(localAgent)) {
+      expect(command).toBe(localAgent);
+    } else if (existsSync('/opt/homebrew/bin/cursor-agent')) {
       expect(command).toBe('/opt/homebrew/bin/cursor-agent');
+    } else {
+      expect(command).toBe('agent');
     }
   });
 
