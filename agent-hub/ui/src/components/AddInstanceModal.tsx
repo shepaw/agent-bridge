@@ -49,9 +49,6 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   useEffect(() => {
     api.instances.meta().then((meta) => {
       setHubMeta(meta);
-      if (meta.lastTunnelServerUrl) {
-        setTunnelServer(meta.lastTunnelServerUrl);
-      }
     }).catch(() => { /* optional UX enhancement */ });
   }, []);
 
@@ -64,18 +61,20 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
     setLoading(true);
     setErr(null);
     try {
-      const effectiveSecret = tunnelSecret === '__use_cache__' ? '' : tunnelSecret;
-      const hasTunnel = tunnelServer && tunnelChannelId && effectiveSecret;
-      if ((tunnelServer || tunnelChannelId || effectiveSecret) && !hasTunnel) {
-        setErr('All three tunnel fields (server, channel ID, secret) are required together.');
+      const server = tunnelServer.trim();
+      const channelId = tunnelChannelId.trim();
+      const effectiveSecret = (tunnelSecret === '__use_cache__' ? '' : tunnelSecret).trim();
+      const hasTunnel = Boolean(server && channelId && effectiveSecret);
+      if ((server || channelId || effectiveSecret) && !hasTunnel) {
+        setErr('填写 channel 时须同时提供 Server URL、Channel ID 与 Secret，或全部留空。');
         setLoading(false);
         return;
       }
       const tunnel = hasTunnel
-        ? { serverUrl: tunnelServer, channelId: tunnelChannelId, secret: effectiveSecret }
+        ? { serverUrl: server, channelId, secret: effectiveSecret }
         : undefined;
 
-      const resolvedBaseUrl = baseUrl || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
+      const resolvedBaseUrl = baseUrl.trim() || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
 
       await api.instances.create({
         id,
@@ -178,21 +177,15 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           {showTunnel && (
             <div style={tunnelBox}>
               <p style={tunnelNote}>
-                可选。通常在「设置 → 全局」配置共享 channel 即可让所有 agent 外网可达，无需在此填写。
-                仅当该 agent 需要独立的 channel（例如用不同的 channel 服务、或未启用全局路由器）时才在此配置。
-                三项须同时填写；Base URL 留空时会自动由 Server URL + Channel ID 推导。
+                可选。通常在「设置 → Peer 配对」配置共享 channel 即可让所有 agent 外网可达，无需在此填写。
+                仅当该 agent 需要独立的 channel 时才配置；三项须同时填写，留空则跳过。
               </p>
-              <label style={lbl}>
-                Server URL
-                {hubMeta?.lastTunnelServerUrl && tunnelServer === hubMeta.lastTunnelServerUrl && (
-                  <span style={reuseTag}> reused from last session</span>
-                )}
-              </label>
+              <label style={lbl}>Server URL</label>
               <input
                 style={inp}
                 value={tunnelServer}
                 onChange={(e) => setTunnelServer(e.target.value)}
-                placeholder="https://channel.example.com"
+                placeholder={hubMeta?.lastTunnelServerUrl ?? 'https://channel.example.com'}
               />
               <label style={lbl}>Channel ID</label>
               <input
@@ -303,9 +296,6 @@ const cachedValueDisplay: React.CSSProperties = {
   background: '#11111b', border: '1px solid #313244', borderRadius: 5,
   padding: '6px 10px', fontSize: 13, fontFamily: 'monospace',
   display: 'flex', alignItems: 'center',
-};
-const reuseTag: React.CSSProperties = {
-  color: '#a6e3a1', fontSize: 11, fontStyle: 'italic',
 };
 const unavailableBox: React.CSSProperties = {
   background: '#45263233', border: '1px solid #f38ba866', borderRadius: 6,

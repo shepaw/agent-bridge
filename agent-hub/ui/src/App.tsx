@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useInstances } from './hooks/useInstances.js';
 import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
 import { AddInstanceModal } from './components/AddInstanceModal.js';
 import { SettingsPage } from './components/SettingsPage.js';
+import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
+import { filterInstances, uniqueEngines } from './utils/instanceFilters.js';
 import { buildSettingsHash, parseSettingsHash, type SettingsTab } from './utils/settingsRoute.js';
 
 /** Read instance id from URL hash, e.g. "#instance/my-instance" → "my-instance" */
@@ -24,6 +26,17 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [showAdd, setShowAdd] = useState(false);
+  const [filters, setFilters] = useState<InstanceListFilterState>({
+    search: '',
+    busy: 'all',
+    engine: 'all',
+  });
+
+  const engines = useMemo(() => uniqueEngines(instances), [instances]);
+  const filteredInstances = useMemo(
+    () => filterInstances(instances, filters),
+    [instances, filters],
+  );
 
   const openEngineSettings = (engineId: string) => {
     setShowAdd(false);
@@ -128,7 +141,17 @@ export function App() {
         </div>
       </div>
 
-      {/* ── Instance grid ───────────────────────────────────────── */}
+      {/* ── Filters + instance grid ─────────────────────────────── */}
+      {!loading && instances.length > 0 && (
+        <InstanceListFilters
+          value={filters}
+          engines={engines}
+          onChange={setFilters}
+          shown={filteredInstances.length}
+          total={instances.length}
+        />
+      )}
+
       {!loading && instances.length === 0 && (
         <div style={empty}>
           <p>No instances registered yet.</p>
@@ -139,8 +162,21 @@ export function App() {
         </div>
       )}
 
+      {!loading && instances.length > 0 && filteredInstances.length === 0 && (
+        <div style={empty}>
+          <p>没有符合筛选条件的实例。</p>
+          <button
+            style={secondaryBtn}
+            type="button"
+            onClick={() => setFilters({ search: '', busy: 'all', engine: 'all' })}
+          >
+            清除筛选
+          </button>
+        </div>
+      )}
+
       <div style={grid}>
-        {instances.map((p) => (
+        {filteredInstances.map((p) => (
           <InstanceCard
             key={p.id}
             instance={p}

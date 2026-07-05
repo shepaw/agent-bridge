@@ -52,8 +52,7 @@ import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand } from './engines.js';
 import { instancePaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
-import { addPeer } from 'shepaw-acp-sdk';
-import { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
+import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -160,8 +159,7 @@ export async function startInstance(instance: InstanceConfig): Promise<{
     // /acp/ws (it acts as a Noise IK initiator to proxy agent_chat requests
     // from paired phones). Idempotent — addPeer dedupes by pubkey.
     try {
-      const peerIdentity = loadOrCreatePeerIdentity();
-      addPeer(paths.peersPath, Buffer.from(peerIdentity.staticPublicKey).toString('base64'), 'shepaw-hub-peer-service');
+      authorizePeerServiceOnInstance(instance.id, hubCfg);
     } catch {
       // Non-fatal: peer service still works for instances where this succeeds.
     }

@@ -61,6 +61,11 @@ export {
   stopPeerService,
 } from './peer/peer-process.js';
 export { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
+export {
+  authorizePeerServiceOnAllInstances,
+  authorizePeerServiceOnInstance,
+  PEER_SERVICE_PEER_LABEL,
+} from './peer/peer-auth.js';
 export type { MintPairingResult } from './peer/peer-process.js';
 export { loadPairedPeers, removePairedPeer, type PairedPeer } from './peer/peer-store.js';
 export { listAgents } from './peer/peer-agent-host.js';

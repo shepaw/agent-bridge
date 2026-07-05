@@ -30,6 +30,7 @@ import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { createHash } from 'node:crypto';
 import { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT, loadOrCreateHubConfig } from '../config.js';
 import type { PeerServiceConfig } from '../config.js';
+import { authorizePeerServiceOnAllInstances } from './peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import {
   clearPairingFile,
@@ -77,6 +78,14 @@ export class PeerServer {
         resolve();
       });
     });
+    try {
+      const { instanceIds } = authorizePeerServiceOnAllInstances();
+      if (instanceIds.length > 0) {
+        this.log(`peer service authorized on ${instanceIds.length} instance(s)`);
+      }
+    } catch (err) {
+      this.log(`peer service agent authorization failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   async stop(): Promise<void> {

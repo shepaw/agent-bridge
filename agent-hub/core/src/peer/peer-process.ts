@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isAlive, type StopResult } from '../spawn.js';
 import { loadOrCreateHubConfig, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
+import { authorizePeerServiceOnAllInstances } from './peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import {
   buildPeerQrPayload,
@@ -60,6 +61,11 @@ export async function startPeerService(
   const host = cfg.peer?.host ?? DEFAULT_PEER_HOST;
   const port = cfg.peer?.port ?? DEFAULT_PEER_PORT;
   if (prior !== undefined && prior.pid > 0 && isAlive(prior.pid)) {
+    try {
+      authorizePeerServiceOnAllInstances(cfg);
+    } catch {
+      /* best-effort for already-running daemon — peers file may be stale */
+    }
     return { pid: prior.pid, alreadyRunning: true, port: prior.port, host: prior.host };
   }
 
@@ -85,6 +91,13 @@ export async function startPeerService(
     }
 
     writePeerState({ pid: child.pid!, port, host, startedAt: new Date().toISOString() });
+    try {
+      authorizePeerServiceOnAllInstances(cfg);
+    } catch (err) {
+      throw new Error(
+        `Peer service started but failed to authorize on agent instances: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return { pid: child.pid!, alreadyRunning: false, port, host };
   } finally {
     try { closeSync(logFd); } catch { /* ignore */ }
