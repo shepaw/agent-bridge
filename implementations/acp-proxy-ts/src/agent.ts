@@ -138,8 +138,11 @@ export class AcpProxyAgent extends ACPAgentServer {
   }
 
   override async onSessionsList(params: SessionsListParams): Promise<SessionsListResult> {
+    // Register disposable warmup ids before session/list so Cursor ghosts from
+    // commands/model warm-up are filtered for both Hub Dashboard and app sync.
+    await this.subprocess.ensureCommandsWarm();
     const upstream = await this.subprocess.listSessions(params.cwd, {
-      preserveUpstreamIds: this.sessionStore.allSdkSessionIds(),
+      preserveUpstreamIds: this.sessionStore.establishedSdkSessionIds(),
     });
     const sessions: SessionInfo[] = upstream.map((s) => {
       // If the app already has a mapping to this upstream session, surface it

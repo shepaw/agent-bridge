@@ -84,6 +84,20 @@ export class SessionStore {
     return new Set(this.mapping.values());
   }
 
+  /**
+   * Upstream ids from real app chats (shepaw id ≠ upstream id).
+   *
+   * List-adopt pre-seeds use the same id for both sides; those must not bypass
+   * untitled-session filtering or empty warmup ghosts keep resurfacing.
+   */
+  establishedSdkSessionIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const [shepawId, sdkId] of this.mapping) {
+      if (shepawId !== sdkId) ids.add(sdkId);
+    }
+    return ids;
+  }
+
   set(shepawSessionId: string, sdkSessionId: string): void {
     if (this.mapping.get(shepawSessionId) === sdkSessionId) return;
     this.mapping.set(shepawSessionId, sdkSessionId);
