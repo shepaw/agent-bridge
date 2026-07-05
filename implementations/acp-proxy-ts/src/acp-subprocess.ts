@@ -50,6 +50,8 @@ export interface TurnContext {
 export interface RunPromptTurnOptions {
   readonly getStoredAcpSessionId?: (shepawSessionId: string) => string | undefined;
   readonly onAcpSessionId?: (shepawSessionId: string, acpSessionId: string) => void;
+  /** Called when a persisted upstream mapping cannot be restored (stale / hung). */
+  readonly onRestoreFailed?: (shepawSessionId: string) => void;
 }
 
 export interface AcpSubprocessOptions {
@@ -99,6 +101,9 @@ export class AcpSubprocess {
    * `session/list` so the app doesn't keep prompting to sync empty sessions.
    */
   private readonly disposableUpstreamSessionIds = new Set<string>();
+
+  /** Cursor `session/load` during chat restore can hang; bail out and restart upstream. */
+  private static readonly RESTORE_TIMEOUT_MS = 20_000;
 
   constructor(opts: AcpSubprocessOptions) {
     this.spec = opts.spec;
@@ -221,9 +226,16 @@ export class AcpSubprocess {
    * can't load sessions. `upstreamSessionId` must be the agent-side id.
    */
   async loadSessionTranscript(upstreamSessionId: string): Promise<SessionHistoryMessage[]> {
+    // Avoid spawning a second cursor-agent while a chat turn is using the cwd.
+    const deadline = Date.now() + 120_000;
+    while (this.currentTurn !== undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
     await this.start();
     if (!supportsSessionLoad(this.agentCaps)) return [];
-    return loadUpstreamSessionTranscript(this.spec, this.cwd, upstreamSessionId, this.extraEnv);
+    return loadUpstreamSessionTranscript(this.spec, this.cwd, upstreamSessionId, this.extraEnv, {
+      idleMs: 400,
+    });
   }
 
   /**
@@ -529,7 +541,13 @@ export class AcpSubprocess {
     const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
 
     if (storedId !== undefined && storedId.length > 0) {
-      const restored = await this.tryRestoreSession(agent, shepawSessionId, storedId);
+      const skipLoadRestore = this.spec.id === 'cursor' && !supportsSessionResume(this.agentCaps);
+      let restored: acp.ActiveSession | undefined;
+      if (!skipLoadRestore) {
+        restored = await this.tryRestoreSession(agent, shepawSessionId, storedId);
+      } else {
+        log('skip session/load restore for %s on cursor (use live session/new)', shepawSessionId);
+      }
       if (restored !== undefined) {
         this.sessions.set(shepawSessionId, restored);
         opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
@@ -539,6 +557,7 @@ export class AcpSubprocess {
         return restored;
       }
       log('stored ACP session %s unavailable; creating new session', storedId);
+      opts.onRestoreFailed?.(shepawSessionId);
     }
 
     const session = await agent.buildSession(this.cwd).start();
@@ -555,6 +574,38 @@ export class AcpSubprocess {
   }
 
   private async tryRestoreSession(
+    agent: acp.ClientContext,
+    shepawSessionId: string,
+    storedId: string,
+  ): Promise<acp.ActiveSession | undefined> {
+    if (this.disposableUpstreamSessionIds.has(storedId)) {
+      log('skip restore for disposable upstream session %s', storedId);
+      return undefined;
+    }
+
+    let timedOut = false;
+    const restoreWork = this.doTryRestoreSession(agent, shepawSessionId, storedId);
+    const timeout = new Promise<undefined>((resolve) => {
+      setTimeout(() => {
+        timedOut = true;
+        resolve(undefined);
+      }, AcpSubprocess.RESTORE_TIMEOUT_MS);
+    });
+
+    const result = await Promise.race([restoreWork, timeout]);
+    if (timedOut) {
+      log(
+        'session restore timed out for shepaw=%s upstream=%s; restarting upstream agent',
+        shepawSessionId,
+        storedId,
+      );
+      await this.restartUpstreamAfterHungRestore();
+      return undefined;
+    }
+    return result;
+  }
+
+  private async doTryRestoreSession(
     agent: acp.ClientContext,
     shepawSessionId: string,
     storedId: string,
@@ -603,6 +654,23 @@ export class AcpSubprocess {
     }
 
     return undefined;
+  }
+
+  /** Kill and respawn the upstream agent after a hung session/load left the pipe stuck. */
+  private async restartUpstreamAfterHungRestore(): Promise<void> {
+    this.disposeSessions();
+    try {
+      this.connection?.close();
+    } catch {
+      /* ignore */
+    }
+    this.connection = undefined;
+    if (this.child !== undefined && !this.child.killed) {
+      this.child.kill('SIGTERM');
+    }
+    this.child = undefined;
+    this.initPromise = undefined;
+    await this.start();
   }
 
   private async applyModelToSession(

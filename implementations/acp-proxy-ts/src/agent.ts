@@ -32,6 +32,7 @@ import {
 
 import { AcpSubprocess } from './acp-subprocess.js';
 import { createHubFanoutHandler } from './hub-fanout.js';
+import { SessionHistoryCache } from './session-history-cache.js';
 import {
   resolveEngineSpec,
   type AcpEngineSpec,
@@ -67,6 +68,7 @@ export class AcpProxyAgent extends ACPAgentServer {
   private readonly cwd: string;
   private readonly subprocess: AcpSubprocess;
   private readonly sessionStore: SessionStore;
+  private readonly sessionHistoryCache = new SessionHistoryCache();
 
   /** Last active Shepaw session — used for model picker when no session in params. */
   private lastShepawSessionId: string | undefined;
@@ -107,6 +109,7 @@ export class AcpProxyAgent extends ACPAgentServer {
   override async onChat(ctx: TaskContext, message: string, kwargs: ChatKwargs): Promise<void> {
     const shepawSessionId = kwargs.session_id ?? ctx.sessionId;
     this.lastShepawSessionId = shepawSessionId;
+    this.sessionHistoryCache.invalidate(shepawSessionId);
     const signal = this.activeTasks.get(ctx.taskId)?.signal ?? new AbortController().signal;
 
     await this.subprocess.runPromptTurn(
@@ -116,6 +119,9 @@ export class AcpProxyAgent extends ACPAgentServer {
       {
         getStoredAcpSessionId: (id) => this.sessionStore.get(id),
         onAcpSessionId: (id, acpId) => this.sessionStore.set(id, acpId),
+        onRestoreFailed: (id) => {
+          this.sessionStore.delete(id);
+        },
       },
     );
   }
@@ -162,11 +168,16 @@ export class AcpProxyAgent extends ACPAgentServer {
   override async onSessionHistory(params: SessionHistoryParams): Promise<SessionHistoryResult> {
     const sessionId = params.session_id;
     if (sessionId.length === 0) return { messages: [] };
+
+    const cached = this.sessionHistoryCache.get(sessionId);
+    if (cached !== undefined) return { messages: cached };
+
     // The app sends the same id it chats with; map it to the upstream agent
     // session id (pre-seeded / recorded in the SessionStore). Falls back to the
     // id itself for adopted-verbatim sessions.
     const upstreamId = this.sessionStore.get(sessionId) ?? sessionId;
     const messages = await this.subprocess.loadSessionTranscript(upstreamId);
+    this.sessionHistoryCache.set(sessionId, messages);
     return { messages };
   }
 

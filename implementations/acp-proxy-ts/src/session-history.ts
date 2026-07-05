@@ -30,7 +30,7 @@ export async function loadUpstreamSessionTranscript(
   env?: Record<string, string | undefined>,
   opts: { idleMs?: number; maxMs?: number } = {},
 ): Promise<SessionHistoryMessage[]> {
-  const idleMs = opts.idleMs ?? 1200;
+  const idleMs = opts.idleMs ?? 400;
   const maxMs = opts.maxMs ?? 30_000;
 
   const { command, args } = spawnCommand(spec);
