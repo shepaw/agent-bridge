@@ -2,14 +2,38 @@
   "name": "@shepaw/agent-hub-ui",
   "version": "0.1.0",
   "description": "React dashboard for Shepaw Agent Hub",
-  "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "prepack": "npm run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "shepaw",
+    "acp",
+    "agent-hub",
+    "dashboard"
+  ],
+  "author": "Shepaw",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shepaw/agent-bridge.git",
+    "directory": "agent-hub/ui"
+  },
+  "homepage": "https://github.com/shepaw/agent-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/shepaw/agent-bridge/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "qrcode.react": "^4.2.0",
@@ -24,6 +48,5 @@
   },
   "engines": {
     "node": ">=18.20.0"
-  },
-  "license": "Apache-2.0"
+  }
 }

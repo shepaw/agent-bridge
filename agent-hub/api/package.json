@@ -14,19 +14,41 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
+  "keywords": [
+    "shepaw",
+    "acp",
+    "agent-hub"
+  ],
+  "author": "Shepaw",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shepaw/agent-bridge.git",
+    "directory": "agent-hub/api"
+  },
+  "homepage": "https://github.com/shepaw/agent-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/shepaw/agent-bridge/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@shepaw/agent-hub-core": "*",
+    "@shepaw/agent-hub-core": "^0.1.0",
+    "@shepaw/agent-hub-ui": "^0.1.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "shepaw-acp-sdk": "*",
+    "shepaw-acp-sdk": "^0.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -39,6 +61,5 @@
   },
   "engines": {
     "node": ">=18.20.0"
-  },
-  "license": "Apache-2.0"
+  }
 }

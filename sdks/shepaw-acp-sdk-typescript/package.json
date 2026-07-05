@@ -21,6 +21,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -35,8 +36,17 @@
     "websocket",
     "json-rpc"
   ],
-  "author": "",
+  "author": "Shepaw",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shepaw/agent-bridge.git",
+    "directory": "sdks/shepaw-acp-sdk-typescript"
+  },
+  "homepage": "https://github.com/shepaw/agent-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/shepaw/agent-bridge/issues"
+  },
   "dependencies": {
     "debug": "^4.4.0",
     "noise-protocol": "^3.0.2",
