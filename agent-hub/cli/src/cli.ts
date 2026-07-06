@@ -1088,6 +1088,7 @@ cli
   .option('--label <label>', 'Unused placeholder (kept for symmetry with pair)')
   .action(async () => {
     try {
+      warnRouterIfNeeded();
       const res = await mintPairingQr();
       console.log('');
       console.log(`  Pairing code:  ${res.code}`);

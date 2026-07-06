@@ -37,6 +37,7 @@ import {
   constantTimeEquals,
   readActivePairingFile,
   resolveLocalEndpoint,
+  resolvePeerChannelEndpoint,
 } from './peer-pairing.js';
 import { upsertPairedPeer, loadPairedPeers, type PairedPeer } from './peer-store.js';
 import { drivePeerConnection } from './peer-connection.js';
@@ -207,15 +208,18 @@ export class PeerServer {
       return;
     }
 
-    // Accept.
+    // Accept. Advertise both LAN and channel endpoints so phones that paired
+    // over the tunnel can persist the hub's remote URL for reconnect.
     const peerId = randomUUID();
     const localEndpoint = resolveLocalEndpoint(this.port, this.host);
+    const channelEndpoint = resolvePeerChannelEndpoint(loadOrCreateHubConfig());
     const resp = {
       accepted: true,
       device_name: 'shepaw-hub',
       device_id: this.identity.fingerprint,
       peer_id: peerId,
       local_endpoint: localEndpoint,
+      ...(channelEndpoint !== undefined ? { channel_endpoint: channelEndpoint } : {}),
     };
     const msg2 = session.writeHandshake2(Buffer.from(JSON.stringify(resp), 'utf-8'));
     ws.send(encodeFrame({ t: 'hs', payload: msg2 }));
@@ -235,7 +239,9 @@ export class PeerServer {
     });
     this.log(`peer ${peerFingerprint} paired (id=${peerId}, name=${req.device_name ?? '?'})`);
 
-    await drivePeerConnection({ ws, session, peerIdentity: this.identity, peerId, log: this.log });
+    // The Shepaw app closes the pairing socket and opens a fresh reconnect
+    // session ({type:"reconnect"}). Keep this socket short-lived.
+    try { ws.close(); } catch { /* ignore */ }
   }
 
   private async handleReconnect(

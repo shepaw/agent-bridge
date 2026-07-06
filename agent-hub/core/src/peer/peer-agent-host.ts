@@ -7,12 +7,23 @@
  */
 
 import { loadOrCreateHubConfig } from '../config.js';
+import { instancePaths } from '../paths.js';
+import { isAlive, readState } from '../spawn.js';
 
 export interface AgentListEntry {
   readonly id: string;
   readonly name: string;
   readonly engine: string;
   readonly running: boolean;
+  /** Advertised to the Shepaw app (peer_agent_client_service.dart). */
+  readonly capabilities: readonly string[];
+  readonly bio?: string;
+  readonly avatar?: string;
+}
+
+function isInstanceRunning(instanceId: string): boolean {
+  const state = readState(instancePaths(instanceId).statePath);
+  return state !== undefined && state.pid > 0 && isAlive(state.pid);
 }
 
 /** List managed instances as `agent_list_resp` entries. */
@@ -22,6 +33,9 @@ export function listAgents(): AgentListEntry[] {
     id: i.id,
     name: i.label || i.id,
     engine: i.engine,
-    running: false,
+    running: isInstanceRunning(i.id),
+    capabilities: ['chat'],
+    bio: i.engine,
+    avatar: '🤖',
   }));
 }
