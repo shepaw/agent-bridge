@@ -111,6 +111,42 @@ export class PeerAcpClient {
     });
   }
 
+  /**
+   * Submit a tool-call verdict when the in-band turn handler is gone (deferred
+   * client approval after hub/phone restart). Requires the original task_id.
+   */
+  async submitDeferredApproval(
+    taskId: string,
+    confirmationId: string,
+    selected: { id: string; label?: string },
+  ): Promise<boolean> {
+    try {
+      await this.ensureConnected();
+    } catch {
+      return false;
+    }
+    this.log(
+      `submitDeferredApproval task=${taskId} confirmation=${confirmationId} ` +
+      `selected=${selected.id} label=${selected.label ?? ''}`,
+    );
+    this.send({
+      jsonrpc: '2.0',
+      id: this.rpcId++,
+      method: 'agent.submitResponse',
+      params: {
+        task_id: taskId,
+        response_data: {
+          confirmation_id: confirmationId,
+          selected_action_id: selected.id,
+          ...(selected.label !== undefined && selected.label.length > 0
+            ? { selected_action_label: selected.label }
+            : {}),
+        },
+      },
+    });
+    return true;
+  }
+
   /** Close the persistent connection and fail all in-flight turns. */
   close(): void {
     this.closed = true;

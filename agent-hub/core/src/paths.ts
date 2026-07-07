@@ -103,6 +103,11 @@ export function peerDevicesPath(root: string = hubRoot()): string {
   return join(root, 'peer-devices.json');
 }
 
+/** Pending peer tool-call approvals (hub-side, Phase C). */
+export function peerPendingApprovalsPath(root: string = hubRoot()): string {
+  return join(root, 'peer-pending-approvals.json');
+}
+
 /** State file for the device-level peer service process. */
 export function peerStatePath(root: string = hubRoot()): string {
   return join(root, 'peer-state.json');

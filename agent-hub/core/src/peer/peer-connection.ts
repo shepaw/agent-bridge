@@ -14,9 +14,19 @@ import { getInstance, loadOrCreateHubConfig } from '../config.js';
 import { instancePaths } from '../paths.js';
 import { listAgents } from './peer-agent-host.js';
 import { PeerAcpClient } from './peer-acp-client.js';
+import {
+  DEFAULT_APPROVAL_TTL_MS,
+  expireStalePendingApprovals,
+  getPendingApproval,
+  listPendingApprovalsForPeer,
+  markPendingApprovalSubmitted,
+  pendingApprovalFromRequest,
+  savePendingApproval,
+} from './peer-pending-approvals.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
+const APPROVAL_TIMEOUT_MS = DEFAULT_APPROVAL_TTL_MS;
 
 interface InflightChat {
   shouldCancel: boolean;
@@ -64,11 +74,21 @@ export async function drivePeerConnection(opts: {
   };
 
   /** Relay a tool-call approval to the phone and await its decision. */
-  const requestApproval = (chatRequestId: string, req: {
-    confirmationId: string; taskId: string; prompt: string;
-    actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
-    toolKind?: string; toolCallId?: string;
-  }): Promise<{ id: string; label?: string }> => {
+  const requestApproval = (
+    chatRequestId: string,
+    agentId: string,
+    req: {
+      confirmationId: string; taskId: string; prompt: string;
+      actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
+      toolKind?: string; toolCallId?: string;
+    },
+  ): Promise<{ id: string; label?: string }> => {
+    const record = pendingApprovalFromRequest(peerId, chatRequestId, agentId, req);
+    try {
+      savePendingApproval(record);
+    } catch (err) {
+      log(`failed to persist pending approval ${req.confirmationId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     send({
       type: 'agent_approval_req',
       approval_id: req.confirmationId,
@@ -88,13 +108,67 @@ export async function drivePeerConnection(opts: {
         pendingApprovals.delete(req.confirmationId);
         log(`approval ${req.confirmationId} timed out → deny`);
         resolve({ id: '' }); // fail closed
-      }, 5 * 60 * 1000);
+      }, APPROVAL_TIMEOUT_MS);
       pendingApprovals.set(req.confirmationId, (selected) => {
         clearTimeout(timer);
         resolve(selected);
       });
     });
   };
+
+  const handleDeferredApprovalResp = async (
+    approvalId: string,
+    selectedActionId: string,
+    selectedActionLabel: string | undefined,
+  ): Promise<void> => {
+    const record = getPendingApproval(approvalId);
+    if (record === undefined || record.status !== 'pending') {
+      log(`approval_resp deferred miss confirmation=${approvalId}`);
+      return;
+    }
+    if (record.peerId !== peerId) {
+      log(`approval_resp deferred peer mismatch confirmation=${approvalId}`);
+      return;
+    }
+    let client: PeerAcpClient;
+    try {
+      client = getAcpClient(record.agentId);
+    } catch (err) {
+      log(`approval_resp deferred client error: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    const ok = await client.submitDeferredApproval(
+      record.taskId,
+      record.approvalId,
+      { id: selectedActionId, label: selectedActionLabel },
+    );
+    if (ok) {
+      markPendingApprovalSubmitted(approvalId, selectedActionId, selectedActionLabel);
+      log(`approval_resp deferred relayed confirmation=${approvalId}`);
+    }
+  };
+
+  const resendPendingApprovalsForPeer = (): void => {
+    const pending = listPendingApprovalsForPeer(peerId);
+    for (const record of pending) {
+      send({
+        type: 'agent_approval_req',
+        approval_id: record.approvalId,
+        request_id: record.requestId,
+        task_id: record.taskId,
+        prompt: record.prompt,
+        actions: record.actions,
+        ...(record.toolKind !== undefined ? { tool_kind: record.toolKind } : {}),
+        ...(record.toolCallId !== undefined ? { tool_call_id: record.toolCallId } : {}),
+      });
+    }
+    if (pending.length > 0) {
+      log(`re-sent ${pending.length} pending approval(s) to peer ${peerId}`);
+    }
+  };
+
+  expireStalePendingApprovals();
+  resendPendingApprovalsForPeer();
 
   /** App requests the slash-command palette for an agent. */
   const handleAgentCommandsReq = async (params: Record<string, unknown>): Promise<void> => {
@@ -212,7 +286,7 @@ export async function drivePeerConnection(opts: {
           onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
           onDone: (content, metadata) => { log(`agent_done req=${requestId}`); send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }); },
           onError: (msg) => { log(`agent_error req=${requestId}: ${msg}`); send({ type: 'agent_error', request_id: requestId, message: msg }); },
-          onApproval: (a) => requestApproval(requestId, a),
+          onApproval: (a) => requestApproval(requestId, agentId, a),
         },
       );
     } catch (err) {
@@ -279,6 +353,7 @@ export async function drivePeerConnection(opts: {
             const resolver = pendingApprovals.get(aid);
             if (resolver !== undefined) {
               pendingApprovals.delete(aid);
+              markPendingApprovalSubmitted(aid, sel ?? '', label);
               log(
                 `approval_resp confirmation=${aid} → ${sel && sel.length > 0 ? 'allow' : 'deny'} ` +
                 `action=${sel ?? ''} label=${label ?? ''} remaining=${pendingApprovals.size}`,
@@ -287,8 +362,9 @@ export async function drivePeerConnection(opts: {
             } else {
               log(
                 `approval_resp NO MATCH confirmation=${aid} action=${sel ?? ''} ` +
-                `pendingKeys=[${[...pendingApprovals.keys()].join(', ')}]`,
+                `pendingKeys=[${[...pendingApprovals.keys()].join(', ')}] → deferred relay`,
               );
+              void handleDeferredApprovalResp(aid, sel ?? '', label);
             }
           }
           break;
@@ -326,8 +402,8 @@ export async function drivePeerConnection(opts: {
     const teardown = (): void => {
       closed = true;
       clearInterval(heartbeat);
-      // Fail-closed any pending approvals so local agents don't hang.
-      for (const resolver of pendingApprovals.values()) resolver({ id: '' });
+      // Drop in-memory waiters without auto-deny — persisted records survive
+      // for deferred client responses after reconnect.
       pendingApprovals.clear();
       // Close all persistent ACP clients for this peer.
       for (const c of acpClients.values()) {
