@@ -49,6 +49,10 @@ interface InflightTurn {
   accumulated: string;
   resolve: () => void;
   cancelTimer: NodeJS.Timeout;
+  /** In-flight phone approvals relayed for this turn (async-confirmation agents). */
+  pendingApprovals: number;
+  /** Set when `task.completed` arrives before approvals finish. */
+  completedPayload?: { content: string; metadata?: Record<string, unknown> };
 }
 
 export class PeerAcpClient {
@@ -90,7 +94,13 @@ export class PeerAcpClient {
       }
     }, 300);
 
-    const turn: InflightTurn = { handlers, accumulated: '', resolve: () => {}, cancelTimer };
+    const turn: InflightTurn = {
+      handlers,
+      accumulated: '',
+      resolve: () => {},
+      cancelTimer,
+      pendingApprovals: 0,
+    };
     this.inflight.set(taskId, turn);
 
     this.send({
@@ -386,9 +396,11 @@ export class PeerAcpClient {
       if (method === 'ui.actionConfirmation' && turn !== undefined) {
         const confirmationId = params.confirmation_id as string | undefined;
         if (confirmationId === undefined) return;
+        turn.pendingApprovals += 1;
         this.log(
           `ui.actionConfirmation task=${taskId} confirmation=${confirmationId} ` +
-          `actions=${Array.isArray(params.actions) ? params.actions.length : 0}`,
+          `actions=${Array.isArray(params.actions) ? params.actions.length : 0} ` +
+          `pendingApprovals=${turn.pendingApprovals}`,
         );
         const actions = Array.isArray(params.actions)
           ? (params.actions as Array<Record<string, unknown>>).map((a) => ({
@@ -431,15 +443,17 @@ export class PeerAcpClient {
               jsonrpc: '2.0', id: this.rpcId++, method: 'agent.submitResponse',
               params: { task_id: taskId, response_data: { confirmation_id: confirmationId, selected_action_id: '' } },
             });
+          })
+          .finally(() => {
+            turn.pendingApprovals = Math.max(0, turn.pendingApprovals - 1);
+            this.maybeFinishTurn(taskId, turn);
           });
         return;
       }
       if (method === 'task.completed' && turn !== undefined) {
-        clearInterval(turn.cancelTimer);
         const meta = params as Record<string, unknown>;
-        turn.handlers.onDone(turn.accumulated, meta);
-        this.inflight.delete(taskId);
-        turn.resolve();
+        turn.completedPayload = { content: turn.accumulated, metadata: meta };
+        this.maybeFinishTurn(taskId, turn);
         return;
       }
       if (method === 'task.error' && turn !== undefined) {
@@ -454,6 +468,26 @@ export class PeerAcpClient {
       // frame. Log so silent drops don't hide approval-stream bugs.
       this.log(`acp frame drop: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Async-confirmation agents end the SDK turn (`task.completed`) while the
+   * phone approval is still in flight. Defer `onDone` until every relayed
+   * approval for this turn settles so the app keeps `sendChat` open.
+   */
+  private maybeFinishTurn(taskId: string, turn: InflightTurn): void {
+    if (turn.pendingApprovals > 0) {
+      this.log(
+        `task defer finish task=${taskId} pendingApprovals=${turn.pendingApprovals}`,
+      );
+      return;
+    }
+    if (turn.completedPayload === undefined) return;
+    clearInterval(turn.cancelTimer);
+    const { content, metadata } = turn.completedPayload;
+    turn.handlers.onDone(content, metadata);
+    this.inflight.delete(taskId);
+    turn.resolve();
   }
 
   private onTransportGone(): void {
