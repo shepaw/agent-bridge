@@ -106,12 +106,14 @@ export {
   ensureInstanceDir,
   isAlive,
   readState,
+  restartAllInstances,
+  restartInstance,
   rotateInstanceLogs,
   startInstance,
   stopInstance,
   writeState,
 } from './spawn.js';
-export type { InstanceState, StopResult } from './spawn.js';
+export type { InstanceState, RestartInstanceResult, StopResult } from './spawn.js';
 
 export { tailLog } from './logs.js';
 export type { TailOptions } from './logs.js';

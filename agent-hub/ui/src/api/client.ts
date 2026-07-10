@@ -64,6 +64,18 @@ export const api = {
     stop: (id: string): Promise<{ result: 'graceful' | 'hard' | 'not-running' }> =>
       request(`/instances/${id}/stop`, { method: 'POST' }),
 
+    restartAll: (): Promise<{
+      restarted: number;
+      failed: number;
+      results: Array<{
+        id: string;
+        wasRunning: boolean;
+        stopResult?: 'graceful' | 'hard' | 'not-running';
+        startResult?: { pid: number; alreadyRunning: boolean };
+        error?: string;
+      }>;
+    }> => request('/instances/restart-all', { method: 'POST' }),
+
     setApproval: (id: string, policy: ApprovalPolicy): Promise<Instance> =>
       request(`/instances/${id}/approval`, { method: 'PUT', body: JSON.stringify(policy) }),
 

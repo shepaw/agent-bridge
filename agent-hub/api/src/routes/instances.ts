@@ -9,6 +9,7 @@
  * PATCH  /api/instances/:id           — update label/host/cwd/baseUrl/extraArgs
  * POST   /api/instances/:id/start     — start the gateway process
  * POST   /api/instances/:id/stop      — stop the gateway process
+ * POST   /api/instances/restart-all   — restart all running instances
  * GET    /api/instances/:id/peers     — list authorized peers
  * POST   /api/instances/:id/peers     — add a peer { pubkey, label? }
  * DELETE /api/instances/:id/peers/:fp — remove a peer by fingerprint
@@ -57,6 +58,7 @@ import {
   InstanceNotFoundError,
   readState,
   removeInstance,
+  restartAllInstances,
   setInstanceEnvVar,
   startInstance,
   stopInstance,
@@ -232,6 +234,22 @@ instancesRouter.get('/meta', (_req: Request, res: Response) => {
     lastTunnelSecretHint: cfg.lastTunnelSecretHint?.masked ?? null,
     credentialHints: hints,
   });
+});
+
+// ── restart all ────────────────────────────────────────────────────
+
+/** POST /api/instances/restart-all — stop then start every running instance. */
+instancesRouter.post('/restart-all', async (_req: Request, res: Response) => {
+  try {
+    const results = await restartAllInstances({
+      onStopped: (id) => closeInstanceAcpRpcClient(id),
+    });
+    const restarted = results.filter((r) => r.wasRunning && r.error === undefined).length;
+    const failed = results.filter((r) => r.error !== undefined).length;
+    res.json({ restarted, failed, results });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // ── create ─────────────────────────────────────────────────────────

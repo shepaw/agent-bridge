@@ -280,6 +280,62 @@ export async function startInstance(instance: InstanceConfig): Promise<{
  * - 'not-running' — state.json said it was running but the pid was gone.
  *                   The CLI treats this as a recoverable "already stopped".
  */
+export interface RestartInstanceResult {
+  readonly id: string;
+  readonly wasRunning: boolean;
+  readonly stopResult?: StopResult;
+  readonly startResult?: { pid: number; alreadyRunning: boolean };
+  readonly error?: string;
+}
+
+/**
+ * Restart a single instance when it is running: stop, then start again.
+ * Stopped instances are left untouched.
+ */
+export async function restartInstance(
+  instance: InstanceConfig,
+  hooks?: { onStopped?: (instanceId: string) => void },
+): Promise<RestartInstanceResult> {
+  let wasRunning = false;
+  try {
+    const paths = instancePaths(instance.id);
+    const prior = readState(paths.statePath);
+    wasRunning = prior !== undefined && prior.pid > 0 && isAlive(prior.pid);
+  } catch (err) {
+    return { id: instance.id, wasRunning: false, error: formatErr(err) };
+  }
+
+  if (!wasRunning) {
+    return { id: instance.id, wasRunning: false };
+  }
+
+  try {
+    const stopResult = await stopInstance(instance);
+    hooks?.onStopped?.(instance.id);
+    const startResult = await startInstance(instance);
+    return { id: instance.id, wasRunning: true, stopResult, startResult };
+  } catch (err) {
+    return { id: instance.id, wasRunning: true, error: formatErr(err) };
+  }
+}
+
+/**
+ * Restart every configured instance sequentially. Only instances that are
+ * currently running are stopped and started again; stopped instances are
+ * left untouched.
+ */
+export async function restartAllInstances(
+  hooks?: { onStopped?: (instanceId: string) => void },
+): Promise<RestartInstanceResult[]> {
+  const cfg = loadOrCreateHubConfig();
+  const results: RestartInstanceResult[] = [];
+  for (const instance of cfg.instances) {
+    ensureInstanceDir(instance.id);
+    results.push(await restartInstance(instance, hooks));
+  }
+  return results;
+}
+
 export async function stopInstance(instance: InstanceConfig): Promise<StopResult> {
   const paths = instancePaths(instance.id);
   const prior = readState(paths.statePath);

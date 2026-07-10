@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useInstances } from './hooks/useInstances.js';
 import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
@@ -12,6 +12,7 @@ import {
   parseInstanceHash,
   type InstanceDetailTab,
 } from './utils/instanceRoute.js';
+import { api } from './api/client.js';
 
 function getInitialInstanceRoute() {
   return parseInstanceHash(location.hash);
@@ -32,6 +33,8 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [showAdd, setShowAdd] = useState(false);
+  const [restartAllBusy, setRestartAllBusy] = useState(false);
+  const [restartAllErr, setRestartAllErr] = useState<string | null>(null);
   const [filters, setFilters] = useState<InstanceListFilterState>({
     search: '',
     busy: 'all',
@@ -133,6 +136,28 @@ export function App() {
 
   const running = instances.filter((p) => p.status.running).length;
 
+  const restartAll = useCallback(async () => {
+    if (running === 0) return;
+    if (!window.confirm(`确定要重启全部 ${running} 个运行中的实例吗？`)) return;
+    setRestartAllBusy(true);
+    setRestartAllErr(null);
+    try {
+      const result = await api.instances.restartAll();
+      if (result.failed > 0) {
+        const details = result.results
+          .filter((r) => r.error !== undefined)
+          .map((r) => `${r.id}: ${r.error}`)
+          .join('; ');
+        setRestartAllErr(`部分实例重启失败: ${details}`);
+      }
+      await reload();
+    } catch (e) {
+      setRestartAllErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRestartAllBusy(false);
+    }
+  }, [running, reload]);
+
   return (
     <Layout>
       {/* ── Topbar ─────────────────────────────────────────────── */}
@@ -148,6 +173,15 @@ export function App() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {running > 0 && (
+            <button
+              style={restartAllBtn}
+              disabled={restartAllBusy || loading}
+              onClick={() => void restartAll()}
+            >
+              {restartAllBusy ? '重启中...' : '重启全部'}
+            </button>
+          )}
           <button style={secondaryBtn} onClick={() => {
             setSettingsTab('global');
             setFocusEngineId(null);
@@ -160,6 +194,10 @@ export function App() {
           </button>
         </div>
       </div>
+
+      {restartAllErr && (
+        <p style={{ color: '#e74c3c', margin: '0 0 16px', fontSize: 14 }}>{restartAllErr}</p>
+      )}
 
       {/* ── Filters + instance grid ─────────────────────────────── */}
       {!loading && instances.length > 0 && (
@@ -277,6 +315,17 @@ const secondaryBtn: React.CSSProperties = {
   background: 'transparent',
   color: '#cdd6f4',
   border: '1px solid #45475a',
+  borderRadius: 6,
+  padding: '8px 18px',
+  cursor: 'pointer',
+  fontWeight: 600,
+  fontSize: 14,
+};
+
+const restartAllBtn: React.CSSProperties = {
+  background: 'transparent',
+  color: '#f9e2af',
+  border: '1px solid #f9e2af',
   borderRadius: 6,
   padding: '8px 18px',
   cursor: 'pointer',
