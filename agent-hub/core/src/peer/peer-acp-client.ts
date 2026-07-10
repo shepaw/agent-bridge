@@ -130,16 +130,33 @@ export class PeerAcpClient {
     confirmationId: string,
     selected: { id: string; label?: string },
   ): Promise<boolean> {
+    return this.submitResponseToAgent(taskId, confirmationId, selected);
+  }
+
+  /**
+   * Deliver `agent.submitResponse` to the local ACP agent. Reconnects if the
+   * WS dropped mid-turn — a silent no-op here leaves Cursor on [pending]
+   * forever after the user already tapped Allow.
+   */
+  private async submitResponseToAgent(
+    taskId: string,
+    confirmationId: string,
+    selected: { id: string; label?: string },
+  ): Promise<boolean> {
     try {
       await this.ensureConnected();
-    } catch {
+    } catch (err) {
+      this.log(
+        `submitResponse ensureConnected failed task=${taskId} ` +
+        `confirmation=${confirmationId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return false;
     }
     this.log(
-      `submitDeferredApproval task=${taskId} confirmation=${confirmationId} ` +
+      `submitResponse task=${taskId} confirmation=${confirmationId} ` +
       `selected=${selected.id} label=${selected.label ?? ''}`,
     );
-    this.send({
+    const ok = this.send({
       jsonrpc: '2.0',
       id: this.rpcId++,
       method: 'agent.submitResponse',
@@ -154,7 +171,12 @@ export class PeerAcpClient {
         },
       },
     });
-    return true;
+    if (!ok) {
+      this.log(
+        `submitResponse DROPPED (ws not open) task=${taskId} confirmation=${confirmationId}`,
+      );
+    }
+    return ok;
   }
 
   /** Close the persistent connection and fail all in-flight turns. */
@@ -419,30 +441,15 @@ export class PeerAcpClient {
             toolKind: typeof extra.tool_kind === 'string' ? extra.tool_kind : undefined,
             toolCallId: typeof extra.tool_call_id === 'string' ? extra.tool_call_id : undefined,
           })
-          .then((selected) => {
+          .then(async (selected) => {
             this.log(
               `ui.actionConfirmation resolved task=${taskId} confirmation=${confirmationId} ` +
               `selected=${selected.id ?? ''} label=${selected.label ?? ''}`,
             );
-            this.send({
-              jsonrpc: '2.0', id: this.rpcId++, method: 'agent.submitResponse',
-              params: {
-                task_id: taskId,
-                response_data: {
-                  confirmation_id: confirmationId,
-                  selected_action_id: selected.id ?? '',
-                  ...(selected.label !== undefined && selected.label.length > 0
-                    ? { selected_action_label: selected.label }
-                    : {}),
-                },
-              },
-            });
+            await this.submitResponseToAgent(taskId, confirmationId, selected);
           })
-          .catch(() => {
-            this.send({
-              jsonrpc: '2.0', id: this.rpcId++, method: 'agent.submitResponse',
-              params: { task_id: taskId, response_data: { confirmation_id: confirmationId, selected_action_id: '' } },
-            });
+          .catch(async () => {
+            await this.submitResponseToAgent(taskId, confirmationId, { id: '' });
           })
           .finally(() => {
             turn.pendingApprovals = Math.max(0, turn.pendingApprovals - 1);
@@ -506,9 +513,12 @@ export class PeerAcpClient {
     this.inflight.clear();
   }
 
-  private send(obj: Record<string, unknown>): void {
-    if (this.ws === undefined || this.session === undefined || this.ws.readyState !== this.ws.OPEN) return;
+  private send(obj: Record<string, unknown>): boolean {
+    if (this.ws === undefined || this.session === undefined || this.ws.readyState !== this.ws.OPEN) {
+      return false;
+    }
     const ct = this.session.encrypt(Buffer.from(JSON.stringify(obj), 'utf-8'));
     this.ws.send(encodeFrame({ t: 'data', payload: ct }));
+    return true;
   }
 }

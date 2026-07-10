@@ -15,7 +15,6 @@ import { instancePaths } from '../paths.js';
 import { listAgents } from './peer-agent-host.js';
 import { PeerAcpClient } from './peer-acp-client.js';
 import {
-  DEFAULT_APPROVAL_TTL_MS,
   expireStalePendingApprovals,
   getPendingApproval,
   listPendingApprovalsForPeer,
@@ -26,7 +25,9 @@ import {
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
-const APPROVAL_TIMEOUT_MS = DEFAULT_APPROVAL_TTL_MS;
+// In-memory wait must match Cursor's waitForResponse (20 min), not the 24h
+// persistence TTL. A lost verdict otherwise leaves the turn hung for a day.
+const APPROVAL_TIMEOUT_MS = 20 * 60 * 1000;
 
 interface InflightChat {
   shouldCancel: boolean;
@@ -52,6 +53,9 @@ export async function drivePeerConnection(opts: {
   // Pending tool-call approvals: confirmationId → resolver. The phone replies
   // with agent_approval_resp; on disconnect/timeout we resolve '' (deny).
   const pendingApprovals = new Map<string, (selected: { id: string; label?: string }) => void>();
+  // Replies that arrived before requestApproval registered its resolver
+  // (loopback race). Consumed when the matching approval_req is set up.
+  const earlyApprovalResps = new Map<string, { id: string; label?: string }>();
   let lastActivity = Date.now();
   let closed = false;
 
@@ -89,20 +93,9 @@ export async function drivePeerConnection(opts: {
     } catch (err) {
       log(`failed to persist pending approval ${req.confirmationId}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    send({
-      type: 'agent_approval_req',
-      approval_id: req.confirmationId,
-      request_id: chatRequestId,
-      task_id: req.taskId,
-      prompt: req.prompt,
-      actions: req.actions,
-      ...(req.toolKind !== undefined ? { tool_kind: req.toolKind } : {}),
-      ...(req.toolCallId !== undefined ? { tool_call_id: req.toolCallId } : {}),
-    });
-    log(
-      `approval_req sent confirmation=${req.confirmationId} chatReq=${chatRequestId} ` +
-      `task=${req.taskId} pending=${pendingApprovals.size + 1} actions=${req.actions.length}`,
-    );
+    // Register the resolver BEFORE sending to the phone. On loopback / fast
+    // auto-approve paths the reply can arrive in the same tick; if we send
+    // first, approval_resp hits NO MATCH and Cursor stays on [pending].
     return new Promise<{ id: string; label?: string }>((resolve) => {
       const timer = setTimeout(() => {
         pendingApprovals.delete(req.confirmationId);
@@ -113,6 +106,34 @@ export async function drivePeerConnection(opts: {
         clearTimeout(timer);
         resolve(selected);
       });
+      // Consume a reply that raced in before the resolver was registered.
+      const early = earlyApprovalResps.get(req.confirmationId);
+      if (early !== undefined) {
+        earlyApprovalResps.delete(req.confirmationId);
+        pendingApprovals.delete(req.confirmationId);
+        clearTimeout(timer);
+        markPendingApprovalSubmitted(req.confirmationId, early.id, early.label);
+        log(
+          `approval_req consumed early resp confirmation=${req.confirmationId} ` +
+          `action=${early.id}`,
+        );
+        resolve(early);
+        return;
+      }
+      send({
+        type: 'agent_approval_req',
+        approval_id: req.confirmationId,
+        request_id: chatRequestId,
+        task_id: req.taskId,
+        prompt: req.prompt,
+        actions: req.actions,
+        ...(req.toolKind !== undefined ? { tool_kind: req.toolKind } : {}),
+        ...(req.toolCallId !== undefined ? { tool_call_id: req.toolCallId } : {}),
+      });
+      log(
+        `approval_req sent confirmation=${req.confirmationId} chatReq=${chatRequestId} ` +
+        `task=${req.taskId} pending=${pendingApprovals.size} actions=${req.actions.length}`,
+      );
     });
   };
 
@@ -360,11 +381,18 @@ export async function drivePeerConnection(opts: {
               );
               resolver({ id: sel ?? '', label });
             } else {
-              log(
-                `approval_resp NO MATCH confirmation=${aid} action=${sel ?? ''} ` +
-                `pendingKeys=[${[...pendingApprovals.keys()].join(', ')}] → deferred relay`,
-              );
-              void handleDeferredApprovalResp(aid, sel ?? '', label);
+              // Buffer briefly in case the reply raced ahead of requestApproval's
+              // resolver registration; otherwise fall through to deferred relay.
+              earlyApprovalResps.set(aid, { id: sel ?? '', label });
+              setTimeout(() => {
+                if (!earlyApprovalResps.has(aid)) return;
+                earlyApprovalResps.delete(aid);
+                log(
+                  `approval_resp NO MATCH confirmation=${aid} action=${sel ?? ''} ` +
+                  `pendingKeys=[${[...pendingApprovals.keys()].join(', ')}] → deferred relay`,
+                );
+                void handleDeferredApprovalResp(aid, sel ?? '', label);
+              }, 250);
             }
           }
           break;
@@ -402,9 +430,16 @@ export async function drivePeerConnection(opts: {
     const teardown = (): void => {
       closed = true;
       clearInterval(heartbeat);
-      // Drop in-memory waiters without auto-deny — persisted records survive
-      // for deferred client responses after reconnect.
+      // Fail-closed: resolve every in-memory waiter as deny so PeerAcpClient
+      // can unblock Cursor instead of hanging until APPROVAL_TIMEOUT_MS.
+      // Persisted records still survive for deferred client responses after
+      // reconnect.
+      for (const [id, resolver] of pendingApprovals) {
+        log(`peer disconnect → deny in-flight approval ${id}`);
+        try { resolver({ id: '' }); } catch { /* ignore */ }
+      }
       pendingApprovals.clear();
+      earlyApprovalResps.clear();
       // Close all persistent ACP clients for this peer.
       for (const c of acpClients.values()) {
         try { c.close(); } catch { /* ignore */ }

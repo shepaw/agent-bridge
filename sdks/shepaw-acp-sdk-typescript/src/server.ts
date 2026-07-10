@@ -250,6 +250,12 @@ export class ACPAgentServer {
   private readonly pendingHubRequests = new Map<string, Deferred<unknown>>();
   private readonly pendingResponses = new Map<string, Deferred<Record<string, unknown>>>();
   /**
+   * submitResponse that arrived before waitForResponse registered the waiter
+   * (peer loopback race). Consumed by waitForResponse / handleSubmitResponse.
+   */
+  private readonly earlyResponses = new Map<string, Record<string, unknown>>();
+  private readonly earlyResponseTimers = new Map<string, NodeJS.Timeout>();
+  /**
    * Per-session FIFO queue tail. Each `handleChatDispatch` call chains onto
    * the previous promise for the same sessionId so that concurrent `agent.chat`
    * calls (e.g. multiple simultaneous "Allow All Similar" taps) are serialized
@@ -1251,6 +1257,7 @@ export class ACPAgentServer {
       sessionId,
       pendingHubRequests: this.pendingHubRequests,
       pendingResponses: this.pendingResponses,
+      takeEarlyResponse: (id) => this.takeEarlyResponse(id),
     });
 
     // Enqueue this task behind any already-running task for the same session.
@@ -1383,10 +1390,45 @@ export class ACPAgentServer {
         const deferred = this.pendingResponses.get(componentId);
         if (deferred !== undefined && !deferred.settled) {
           deferred.resolve(responseData);
+        } else {
+          // Buffer briefly so a reply that raced ahead of waitForResponse is
+          // not silently dropped (Cursor would stay on [pending] forever).
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[ACP] submitResponse: no waiter for ${idKey}=${componentId} ` +
+            `task=${taskId} — buffering 2s`,
+          );
+          this.bufferEarlyResponse(componentId, responseData);
         }
         break;
       }
     }
+  }
+
+  private bufferEarlyResponse(componentId: string, responseData: Record<string, unknown>): void {
+    const prevTimer = this.earlyResponseTimers.get(componentId);
+    if (prevTimer !== undefined) clearTimeout(prevTimer);
+    this.earlyResponses.set(componentId, responseData);
+    this.earlyResponseTimers.set(
+      componentId,
+      setTimeout(() => {
+        this.earlyResponses.delete(componentId);
+        this.earlyResponseTimers.delete(componentId);
+      }, 2_000),
+    );
+  }
+
+  /** Consume a buffered early submitResponse, if any. */
+  takeEarlyResponse(componentId: string): Record<string, unknown> | undefined {
+    const early = this.earlyResponses.get(componentId);
+    if (early === undefined) return undefined;
+    this.earlyResponses.delete(componentId);
+    const timer = this.earlyResponseTimers.get(componentId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.earlyResponseTimers.delete(componentId);
+    }
+    return early;
   }
 
   // ── rollback ───────────────────────────────────────────────────

@@ -815,7 +815,12 @@ export class AcpSubprocess {
         response,
       );
       return { outcome: { outcome: 'cancelled' } };
-    } catch {
+    } catch (err) {
+      log(
+        'permission wait failed (%s): %s',
+        confirmationId,
+        err instanceof Error ? err.message : String(err),
+      );
       return { outcome: { outcome: 'cancelled' } };
     }
   }

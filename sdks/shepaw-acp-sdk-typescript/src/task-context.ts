@@ -130,6 +130,9 @@ export interface TaskContextInit {
   sessionId: string;
   pendingHubRequests: Map<string, Deferred<unknown>>;
   pendingResponses: Map<string, Deferred<Record<string, unknown>>>;
+  /** Optional early-submitResponse buffer shared with the server. */
+  earlyResponses?: Map<string, Record<string, unknown>>;
+  takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
 }
 
 export class TaskContext {
@@ -138,6 +141,7 @@ export class TaskContext {
   private readonly ws: WebSocket;
   private readonly pendingHubRequests: Map<string, Deferred<unknown>>;
   private readonly pendingResponses: Map<string, Deferred<Record<string, unknown>>>;
+  private readonly takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
 
   constructor(init: TaskContextInit) {
     this.ws = init.ws;
@@ -145,6 +149,7 @@ export class TaskContext {
     this.sessionId = init.sessionId;
     this.pendingHubRequests = init.pendingHubRequests;
     this.pendingResponses = init.pendingResponses;
+    this.takeEarlyResponse = init.takeEarlyResponse;
   }
 
   // ── Streaming text ────────────────────────────────────────────
@@ -369,8 +374,14 @@ export class TaskContext {
     componentId: string,
     opts: WaitForResponseOpts = {},
   ): Promise<Record<string, unknown>> {
+    // Register the waiter FIRST, then consume any early reply. Reversing
+    // these races with peer loopback submitResponse and drops the verdict.
     const deferred = createDeferred<Record<string, unknown>>();
     this.pendingResponses.set(componentId, deferred);
+    const early = this.takeEarlyResponse?.(componentId);
+    if (early !== undefined) {
+      deferred.resolve(early);
+    }
     try {
       return await withTimeout(deferred.promise, opts.timeoutMs ?? 300_000, `component ${componentId}`);
     } finally {
