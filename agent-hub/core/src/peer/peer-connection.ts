@@ -305,6 +305,7 @@ export async function drivePeerConnection(opts: {
         { message, sessionId: params.session_id as string | undefined, shouldCancel: () => state.shouldCancel },
         {
           onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
+          onMetadata: (metadata) => send({ type: 'agent_metadata', request_id: requestId, metadata }),
           onDone: (content, metadata) => { log(`agent_done req=${requestId}`); send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }); },
           onError: (msg) => { log(`agent_error req=${requestId}: ${msg}`); send({ type: 'agent_error', request_id: requestId, message: msg }); },
           onApproval: (a) => requestApproval(requestId, agentId, a),

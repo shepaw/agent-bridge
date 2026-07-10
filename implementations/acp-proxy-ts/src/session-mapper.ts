@@ -16,6 +16,13 @@ export async function mapSessionUpdate(
     case 'agent_message_chunk': {
       const content = update.content;
       if (content.type === 'text' && content.text.length > 0) {
+        // End any collapsible thinking/tool section so the answer stays visible
+        // while progress is folded into metadata.progress_content on the client.
+        await ctx.sendMessageMetadata({
+          collapsible: false,
+          collapsibleTitle: '',
+          autoCollapse: false,
+        });
         await ctx.sendText(content.text);
       }
       break;

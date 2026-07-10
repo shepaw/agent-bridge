@@ -36,6 +36,8 @@ export interface AcpChatHandlers {
   onDone: (fullContent: string, metadata?: Record<string, unknown>) => void;
   onError: (message: string) => void;
   onApproval: (req: ApprovalRequest) => Promise<{ id: string; label?: string }>;
+  /** Relays `ui.messageMetadata` (collapsible thinking/tool sections). */
+  onMetadata?: (metadata: Record<string, unknown>) => void;
 }
 
 export interface AcpChatRequest {
@@ -413,6 +415,12 @@ export class PeerAcpClient {
           turn.accumulated += content;
           turn.handlers.onChunk(content);
         }
+        return;
+      }
+      if (method === 'ui.messageMetadata' && turn !== undefined) {
+        // Strip task_id — peer clients key by request_id, not ACP task_id.
+        const { task_id: _taskId, ...meta } = params;
+        turn.handlers.onMetadata?.(meta);
         return;
       }
       if (method === 'ui.actionConfirmation' && turn !== undefined) {
