@@ -85,4 +85,28 @@ describe('mapSessionUpdate', () => {
 
     expect(chunks).toEqual(['Hello']);
   });
+
+  it('streams tool_call_update status so post-approval progress is visible', async () => {
+    const chunks: string[] = [];
+    const ctx = {
+      sendText: async (text: string) => {
+        chunks.push(text);
+      },
+      sendMessageMetadata: async () => {},
+    };
+
+    await mapSessionUpdate(
+      {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc_1',
+        status: 'completed',
+        title: 'Bash',
+        kind: 'execute',
+      },
+      ctx as never,
+    );
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toContain('[completed] Bash');
+  });
 });

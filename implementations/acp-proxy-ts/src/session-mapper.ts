@@ -60,6 +60,21 @@ export async function mapSessionUpdate(
     case 'tool_call_update': {
       if (update.status !== undefined) {
         log('tool_call_update %s → %s', update.toolCallId, update.status);
+        // After a permission grant, Cursor often only emits status updates
+        // (in_progress / completed) — not a fresh agent_message_chunk. Stream
+        // those so the phone UI shows progress instead of looking frozen
+        // until the next permission card or final text.
+        const title = update.title ?? update.kind ?? update.toolCallId ?? 'Tool';
+        const lines = [`[${update.status}] ${title}`];
+        const command = extractCommand(update);
+        if (command.length > 0 && command !== title) {
+          lines.push('```', command.slice(0, 2000), '```');
+        }
+        const paths = extractPaths(update);
+        if (paths.length > 0) {
+          lines.push(`Files: ${paths.slice(0, 12).join(', ')}${paths.length > 12 ? ' …' : ''}`);
+        }
+        await ctx.sendText(`${lines.join('\n')}\n`);
       }
       break;
     }
