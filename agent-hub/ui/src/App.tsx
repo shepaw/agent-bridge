@@ -86,6 +86,31 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  // Must stay above early returns — Rules of Hooks
+  const running = instances.filter((p) => p.status.running).length;
+
+  const restartAll = useCallback(async () => {
+    if (running === 0) return;
+    if (!window.confirm(`确定要重启全部 ${running} 个运行中的实例吗？`)) return;
+    setRestartAllBusy(true);
+    setRestartAllErr(null);
+    try {
+      const result = await api.instances.restartAll();
+      if (result.failed > 0) {
+        const details = result.results
+          .filter((r) => r.error !== undefined)
+          .map((r) => `${r.id}: ${r.error}`)
+          .join('; ');
+        setRestartAllErr(`部分实例重启失败: ${details}`);
+      }
+      await reload();
+    } catch (e) {
+      setRestartAllErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRestartAllBusy(false);
+    }
+  }, [running, reload]);
+
   if (selected) {
     return (
       <Layout wide>
@@ -133,30 +158,6 @@ export function App() {
       </Layout>
     );
   }
-
-  const running = instances.filter((p) => p.status.running).length;
-
-  const restartAll = useCallback(async () => {
-    if (running === 0) return;
-    if (!window.confirm(`确定要重启全部 ${running} 个运行中的实例吗？`)) return;
-    setRestartAllBusy(true);
-    setRestartAllErr(null);
-    try {
-      const result = await api.instances.restartAll();
-      if (result.failed > 0) {
-        const details = result.results
-          .filter((r) => r.error !== undefined)
-          .map((r) => `${r.id}: ${r.error}`)
-          .join('; ');
-        setRestartAllErr(`部分实例重启失败: ${details}`);
-      }
-      await reload();
-    } catch (e) {
-      setRestartAllErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRestartAllBusy(false);
-    }
-  }, [running, reload]);
 
   return (
     <Layout>

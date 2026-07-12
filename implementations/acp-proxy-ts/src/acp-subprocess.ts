@@ -474,7 +474,7 @@ export class AcpSubprocess {
   /** Run one user prompt turn, streaming updates to TaskContext. */
   async runPromptTurn(
     shepawSessionId: string,
-    message: string,
+    prompt: string | acp.ContentBlock | ReadonlyArray<acp.ContentBlock>,
     turn: TurnContext,
     opts: RunPromptTurnOptions = {},
   ): Promise<void> {
@@ -488,7 +488,10 @@ export class AcpSubprocess {
     try {
       const session = await this.getOrCreateSession(shepawSessionId, opts);
 
-      const promptPromise = session.prompt(message);
+      const promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
+        ? [...prompt]
+        : (prompt as string | acp.ContentBlock);
+      const promptPromise = session.prompt(promptArg);
       const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
 
       const abortPromise = new Promise<never>((_, reject) => {

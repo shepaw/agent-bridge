@@ -38,6 +38,8 @@ import {
   type AcpEngineSpec,
 } from './engines.js';
 import { PermissionPolicy, loadPolicyFromEnv } from './permission/policy.js';
+import { preparePromptFromAttachments } from './prompt-attachments.js';
+import { log } from './debug.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
@@ -112,9 +114,24 @@ export class AcpProxyAgent extends ACPAgentServer {
     this.sessionHistoryCache.invalidate(shepawSessionId);
     const signal = this.activeTasks.get(ctx.taskId)?.signal ?? new AbortController().signal;
 
+    // Peer / app attachments arrive as base64 on agent.chat; Cursor (and most
+    // ACP engines) only see them if we materialize into cwd and pass ContentBlocks.
+    const { blocks, materialized } = preparePromptFromAttachments(
+      this.cwd,
+      message,
+      kwargs.attachments,
+    );
+    if (materialized.length > 0) {
+      log(
+        'onChat attachments=%d paths=%s',
+        materialized.length,
+        materialized.map((m) => m.relativePath).join(', '),
+      );
+    }
+
     await this.subprocess.runPromptTurn(
       shepawSessionId,
-      message,
+      blocks,
       { taskCtx: ctx, signal },
       {
         getStoredAcpSessionId: (id) => this.sessionStore.get(id),

@@ -372,6 +372,7 @@ export async function drivePeerConnection(opts: {
       size,
       chunks: new Map(),
     });
+    send({ type: 'agent_file_ack', file_id: fileId, ok: true, stage: 'begin' });
   };
 
   const handleFileChunk = (params: Record<string, unknown>): void => {
@@ -400,18 +401,18 @@ export async function drivePeerConnection(opts: {
     const incoming = incomingFiles.get(fileId);
     incomingFiles.delete(fileId);
     if (incoming === undefined) {
-      send({ type: 'agent_file_ack', file_id: fileId, ok: false, error: 'unknown file_id' });
+      send({ type: 'agent_file_ack', file_id: fileId, ok: false, stage: 'end', error: 'unknown file_id' });
       return;
     }
     try {
       const stored = persistIncomingFile(incoming, chunkCount);
       storedFiles.set(fileId, stored);
-      send({ type: 'agent_file_ack', file_id: fileId, ok: true });
+      send({ type: 'agent_file_ack', file_id: fileId, ok: true, stage: 'end' });
       log(`agent_file stored file_id=${fileId} path=${stored.absPath}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`agent_file_end failed: ${msg}`);
-      send({ type: 'agent_file_ack', file_id: fileId, ok: false, error: msg });
+      send({ type: 'agent_file_ack', file_id: fileId, ok: false, stage: 'end', error: msg });
     }
   };
 

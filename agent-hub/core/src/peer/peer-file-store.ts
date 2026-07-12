@@ -8,7 +8,6 @@
 import {
   mkdirSync,
   writeFileSync,
-  readFileSync,
   existsSync,
   readdirSync,
   statSync,
@@ -73,7 +72,12 @@ export function normalizePeerAttachmentRefs(
   return out.length > 0 ? out : undefined;
 }
 
-/** Assemble ACP-style attachments (with base64 `data`) from stored file refs. */
+/** Assemble ACP attachment refs with on-disk `path` (no base64).
+ *
+ * Peer→instance Shepaw ACP frames are capped at 256KiB (`MAX_FRAME_APP_TO_AGENT`).
+ * Embedding image bytes here closes the socket with 4402 FRAME_TOO_LARGE.
+ * The instance (acp-proxy) reads `path` locally and feeds Cursor via stdio.
+ */
 export function resolveAttachmentsForAcp(
   agentId: string,
   refs: ReadonlyArray<Record<string, unknown>> | undefined,
@@ -90,14 +94,13 @@ export function resolveAttachmentsForAcp(
     if (!existsSync(entry.absPath)) {
       throw new Error(`Attachment file missing on host: ${fileId}`);
     }
-    const bytes = readFileSync(entry.absPath);
     out.push({
       file_id: fileId,
       file_name: entry.fileName,
       mime_type: entry.mimeType,
       size: entry.size,
       type: entry.semanticType,
-      data: bytes.toString('base64'),
+      path: entry.absPath,
     });
   }
   return out;

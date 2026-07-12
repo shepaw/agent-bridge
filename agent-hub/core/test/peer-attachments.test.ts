@@ -84,7 +84,7 @@ describe('persistIncomingFile', () => {
 });
 
 describe('resolveAttachmentsForAcp', () => {
-  it('loads bytes as base64 for ACP', () => {
+  it('returns on-disk path refs without base64 data', () => {
     const chunks = new Map<number, Buffer>();
     chunks.set(0, Buffer.from('img'));
     const stored = persistIncomingFile(
@@ -106,8 +106,10 @@ describe('resolveAttachmentsForAcp', () => {
       map,
     );
     expect(acp).toHaveLength(1);
-    expect(acp![0].data).toBe(Buffer.from('img').toString('base64'));
+    expect(acp![0].data).toBeUndefined();
+    expect(acp![0].path).toBe(stored.absPath);
     expect(acp![0].type).toBe('image');
+    expect(acp![0].file_name).toBe('a.png');
   });
 });
 
