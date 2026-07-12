@@ -32,6 +32,8 @@ import {
 
 import { AcpSubprocess } from './acp-subprocess.js';
 import { createHubFanoutHandler } from './hub-fanout.js';
+import { tryLoadDiskHistory } from './disk-history/index.js';
+import { ensureHistoryCreatedAt } from './history-created-at.js';
 import { SessionHistoryCache } from './session-history-cache.js';
 import {
   resolveEngineSpec,
@@ -68,6 +70,7 @@ export interface AcpProxyAgentOptions {
 
 export class AcpProxyAgent extends ACPAgentServer {
   private readonly cwd: string;
+  private readonly engineId: string;
   private readonly subprocess: AcpSubprocess;
   private readonly sessionStore: SessionStore;
   private readonly sessionHistoryCache = new SessionHistoryCache();
@@ -88,6 +91,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     });
 
     this.cwd = opts.cwd ?? process.cwd();
+    this.engineId = spec.id;
     this.subprocess =
       opts.subprocess ??
       new AcpSubprocess({
@@ -195,6 +199,20 @@ export class AcpProxyAgent extends ACPAgentServer {
     // session id (pre-seeded / recorded in the SessionStore). Falls back to the
     // id itself for adopted-verbatim sessions.
     const upstreamId = this.sessionStore.get(sessionId) ?? sessionId;
+
+    // Prefer durable engine stores that already carry per-message timestamps.
+    const fromDisk = await tryLoadDiskHistory(this.engineId, upstreamId, this.cwd);
+    if (fromDisk !== null && fromDisk.length > 0) {
+      const messages = ensureHistoryCreatedAt(fromDisk);
+      log(
+        'session history from disk engine=%s session=%s messages=%d',
+        this.engineId,
+        upstreamId,
+        messages.length,
+      );
+      this.sessionHistoryCache.set(sessionId, messages);
+      return { messages };
+    }
 
     // Resolve session-level updated_at so history normalization can anchor
     // messages that the engine does not stamp individually.
