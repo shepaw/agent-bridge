@@ -15,6 +15,14 @@ import { instancePaths } from '../paths.js';
 import { listAgents } from './peer-agent-host.js';
 import { PeerAcpClient } from './peer-acp-client.js';
 import {
+  MAX_PEER_FILE_BYTES,
+  normalizePeerAttachmentRefs,
+  persistIncomingFile,
+  resolveAttachmentsForAcp,
+  type IncomingPeerFile,
+  type StoredPeerFile,
+} from './peer-file-store.js';
+import {
   expireStalePendingApprovals,
   getPendingApproval,
   listPendingApprovalsForPeer,
@@ -56,6 +64,8 @@ export async function drivePeerConnection(opts: {
   // Replies that arrived before requestApproval registered its resolver
   // (loopback race). Consumed when the matching approval_req is set up.
   const earlyApprovalResps = new Map<string, { id: string; label?: string }>();
+  const incomingFiles = new Map<string, IncomingPeerFile>();
+  const storedFiles = new Map<string, StoredPeerFile>();
   let lastActivity = Date.now();
   let closed = false;
 
@@ -301,8 +311,15 @@ export async function drivePeerConnection(opts: {
       return;
     }
     try {
+      const refs = normalizePeerAttachmentRefs(params.attachments);
+      const attachments = resolveAttachmentsForAcp(agentId, refs, storedFiles);
       await client.chat(
-        { message, sessionId: params.session_id as string | undefined, shouldCancel: () => state.shouldCancel },
+        {
+          message,
+          sessionId: params.session_id as string | undefined,
+          shouldCancel: () => state.shouldCancel,
+          attachments,
+        },
         {
           onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
           onMetadata: (metadata) => send({ type: 'agent_metadata', request_id: requestId, metadata }),
@@ -320,6 +337,81 @@ export async function drivePeerConnection(opts: {
       send({ type: 'agent_error', request_id: requestId, message: msg });
     } finally {
       inflight.delete(requestId);
+    }
+  };
+
+  const handleFileBegin = (params: Record<string, unknown>): void => {
+    const fileId = params.file_id as string | undefined;
+    const agentId = params.agent_id as string | undefined;
+    const fileName = (params.file_name as string | undefined) ?? 'file';
+    const mimeType = (params.mime_type as string | undefined) ?? 'application/octet-stream';
+    const semanticType =
+      (params.file_type as string | undefined) ??
+      (params.semantic_type as string | undefined) ??
+      'file';
+    const size = typeof params.size === 'number' ? params.size : 0;
+    if (fileId === undefined || agentId === undefined) return;
+    if (size <= 0 || size > MAX_PEER_FILE_BYTES) {
+      send({ type: 'agent_file_error', file_id: fileId, message: `invalid or oversized file (${size} bytes)` });
+      return;
+    }
+    try {
+      const cfg = loadOrCreateHubConfig();
+      getInstance(cfg, agentId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      send({ type: 'agent_file_error', file_id: fileId, message: msg });
+      return;
+    }
+    incomingFiles.set(fileId, {
+      agentId,
+      fileId,
+      fileName,
+      mimeType,
+      semanticType,
+      size,
+      chunks: new Map(),
+    });
+  };
+
+  const handleFileChunk = (params: Record<string, unknown>): void => {
+    const fileId = params.file_id as string | undefined;
+    const index = params.index as number | undefined;
+    const data = params.data as string | undefined;
+    if (fileId === undefined || index === undefined || typeof data !== 'string') return;
+    const incoming = incomingFiles.get(fileId);
+    if (incoming === undefined) return;
+    try {
+      incoming.chunks.set(index, Buffer.from(data, 'base64'));
+    } catch (err) {
+      incomingFiles.delete(fileId);
+      send({
+        type: 'agent_file_error',
+        file_id: fileId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const handleFileEnd = (params: Record<string, unknown>): void => {
+    const fileId = params.file_id as string | undefined;
+    const chunkCount = typeof params.chunk_count === 'number' ? params.chunk_count : 0;
+    if (fileId === undefined) return;
+    const incoming = incomingFiles.get(fileId);
+    incomingFiles.delete(fileId);
+    if (incoming === undefined) {
+      send({ type: 'agent_file_ack', file_id: fileId, ok: false, error: 'unknown file_id' });
+      return;
+    }
+    try {
+      const stored = persistIncomingFile(incoming, chunkCount);
+      storedFiles.set(fileId, stored);
+      send({ type: 'agent_file_ack', file_id: fileId, ok: true });
+      log(`agent_file stored file_id=${fileId} path=${stored.absPath}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`agent_file_end failed: ${msg}`);
+      send({ type: 'agent_file_ack', file_id: fileId, ok: false, error: msg });
     }
   };
 
@@ -357,6 +449,15 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_chat':
           void handleAgentChat(obj as Record<string, unknown>);
+          break;
+        case 'agent_file_begin':
+          handleFileBegin(obj);
+          break;
+        case 'agent_file_chunk':
+          handleFileChunk(obj);
+          break;
+        case 'agent_file_end':
+          handleFileEnd(obj);
           break;
         case 'agent_cancel': {
           const rid = obj.request_id as string | undefined;

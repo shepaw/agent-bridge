@@ -44,6 +44,8 @@ export interface AcpChatRequest {
   readonly message: string;
   readonly sessionId?: string;
   readonly shouldCancel: () => boolean;
+  /** ACP-compatible attachment objects (base64 `data`, `file_name`, …). */
+  readonly attachments?: ReadonlyArray<Record<string, unknown>>;
 }
 
 interface InflightTurn {
@@ -115,6 +117,9 @@ export class PeerAcpClient {
         message: req.message,
         user_id: 'peer-service',
         ui_component_version: 'v2',
+        ...(req.attachments && req.attachments.length > 0
+          ? { attachments: req.attachments }
+          : {}),
       },
     });
 

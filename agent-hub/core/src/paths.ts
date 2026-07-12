@@ -12,6 +12,7 @@
  *         ├── enrollments.json        — per-instance pairing-code store
  *         ├── state.json              — pid / port / startedAt / exitCode
  *         ├── sessions.json           — Shepaw session_id → upstream ACP session_id
+ *         ├── peer-attachments/       — files pushed over peer agent_chat
  *         └── logs/
  *             └── agent.log           — stdout+stderr from the gateway child
  * ```
@@ -143,6 +144,14 @@ export function instancePaths(instanceId: string, root: string = hubRoot()): Ins
     logsDir: join(instanceRoot, 'logs'),
     logFile: join(instanceRoot, 'logs', 'agent.log'),
   };
+}
+
+/**
+ * Peer-pushed attachments for an agent instance live next to identity.json:
+ * `{hubRoot}/instances/<instance-id>/peer-attachments/`.
+ */
+export function peerAttachmentsDir(instanceId: string, root: string = hubRoot()): string {
+  return join(instancePaths(instanceId, root).root, 'peer-attachments');
 }
 
 /**
