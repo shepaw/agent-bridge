@@ -226,7 +226,10 @@ export class AcpSubprocess {
    * (keeps the live serving subprocess untouched). Returns `[]` if the agent
    * can't load sessions. `upstreamSessionId` must be the agent-side id.
    */
-  async loadSessionTranscript(upstreamSessionId: string): Promise<SessionHistoryMessage[]> {
+  async loadSessionTranscript(
+    upstreamSessionId: string,
+    opts?: { sessionUpdatedAt?: string },
+  ): Promise<SessionHistoryMessage[]> {
     // Avoid spawning a second cursor-agent while a chat turn is using the cwd.
     const deadline = Date.now() + 120_000;
     while (this.currentTurn !== undefined && Date.now() < deadline) {
@@ -236,6 +239,7 @@ export class AcpSubprocess {
     if (!supportsSessionLoad(this.agentCaps)) return [];
     return loadUpstreamSessionTranscript(this.spec, this.cwd, upstreamSessionId, this.extraEnv, {
       idleMs: 400,
+      sessionUpdatedAt: opts?.sessionUpdatedAt,
     });
   }
 

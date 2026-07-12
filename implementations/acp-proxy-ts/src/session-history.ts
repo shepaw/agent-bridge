@@ -16,6 +16,8 @@ import type { SessionHistoryMessage } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
 import { spawnCommand } from './engines.js';
+import { extractEmbeddedTimestamp } from './transcript-timestamp.js';
+import { ensureHistoryCreatedAt } from './history-created-at.js';
 
 /** Skip synthetic user turns that are really tool-output notifications. */
 function isSyntheticUserTurn(text: string): boolean {
@@ -28,7 +30,7 @@ export async function loadUpstreamSessionTranscript(
   cwd: string,
   sessionId: string,
   env?: Record<string, string | undefined>,
-  opts: { idleMs?: number; maxMs?: number } = {},
+  opts: { idleMs?: number; maxMs?: number; sessionUpdatedAt?: string } = {},
 ): Promise<SessionHistoryMessage[]> {
   const idleMs = opts.idleMs ?? 400;
   const maxMs = opts.maxMs ?? 30_000;
@@ -50,10 +52,22 @@ export async function loadUpstreamSessionTranscript(
     lastUpdateAt = Date.now();
     const last = turns[turns.length - 1];
     if (last !== undefined && last.role === role && messageId !== undefined && last.message_id === messageId) {
+      // Append to an in-progress turn. Timestamp tags (if any) already came on
+      // the first chunk; later chunks are plain content.
       last.content += text;
       return;
     }
-    turns.push({ role, content: text, message_id: messageId });
+    // Engine-specific enrichment → standard `created_at` (see transcript-timestamp).
+    const extracted = role === 'user' ? extractEmbeddedTimestamp(text) : { text };
+    const turn: SessionHistoryMessage = {
+      role,
+      content: extracted.text,
+      message_id: messageId,
+    };
+    if (extracted.createdAt !== undefined) {
+      turn.created_at = extracted.createdAt;
+    }
+    turns.push(turn);
   };
 
   const stream = acp.ndJsonStream(
@@ -105,7 +119,10 @@ export async function loadUpstreamSessionTranscript(
     if (!child.killed) child.kill('SIGTERM');
   }
 
-  return turns
+  const filtered = turns
     .filter((t) => t.content.trim().length > 0)
     .filter((t) => !(t.role === 'user' && isSyntheticUserTurn(t.content)));
+
+  // Always emit protocol `created_at` so clients never need engine adapters.
+  return ensureHistoryCreatedAt(filtered, { sessionUpdatedAt: opts.sessionUpdatedAt });
 }

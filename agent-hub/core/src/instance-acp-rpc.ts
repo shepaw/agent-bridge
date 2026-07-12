@@ -62,6 +62,7 @@ function parseHistoryMessage(raw: unknown): SessionHistoryMessage | null {
     role,
     content,
     message_id: typeof obj.message_id === 'string' ? obj.message_id : undefined,
+    created_at: typeof obj.created_at === 'string' ? obj.created_at : undefined,
   };
 }
 

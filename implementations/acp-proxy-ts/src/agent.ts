@@ -195,7 +195,27 @@ export class AcpProxyAgent extends ACPAgentServer {
     // session id (pre-seeded / recorded in the SessionStore). Falls back to the
     // id itself for adopted-verbatim sessions.
     const upstreamId = this.sessionStore.get(sessionId) ?? sessionId;
-    const messages = await this.subprocess.loadSessionTranscript(upstreamId);
+
+    // Resolve session-level updated_at so history normalization can anchor
+    // messages that the engine does not stamp individually.
+    let sessionUpdatedAt: string | undefined;
+    try {
+      const listed = await this.subprocess.listSessions(undefined, {
+        preserveUpstreamIds: this.sessionStore.establishedSdkSessionIds(),
+      });
+      const match = listed.find((s) => {
+        const knownShepawId = this.sessionStore.findShepawIdBySdkId(s.sessionId);
+        const id = knownShepawId ?? s.sessionId;
+        return id === sessionId || s.sessionId === upstreamId;
+      });
+      sessionUpdatedAt = match?.updatedAt ?? undefined;
+    } catch {
+      // Non-fatal — ensureHistoryCreatedAt falls back without an anchor.
+    }
+
+    const messages = await this.subprocess.loadSessionTranscript(upstreamId, {
+      sessionUpdatedAt,
+    });
     this.sessionHistoryCache.set(sessionId, messages);
     return { messages };
   }

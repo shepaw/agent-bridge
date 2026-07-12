@@ -223,6 +223,13 @@ export interface SessionHistoryMessage {
   content: string;
   /** Upstream message id, when available (used for de-dup on the app side). */
   message_id?: string;
+  /**
+   * ISO-8601 original send time. Always populated by acp-proxy before the
+   * history response leaves the bridge (engine adapters fill what they can;
+   * remaining gaps are normalized). Clients should treat this as the source of
+   * truth for bubble / session-list timestamps.
+   */
+  created_at?: string;
 }
 
 /** `agent.sessions.history` request params. */

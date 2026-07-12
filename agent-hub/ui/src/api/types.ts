@@ -233,6 +233,8 @@ export interface SessionHistoryMessage {
   role: 'user' | 'agent';
   content: string;
   message_id?: string;
+  /** ISO-8601 original send time when known. */
+  created_at?: string;
 }
 
 /** Peer-pushed attachment stored under instances/<id>/peer-attachments/. */
