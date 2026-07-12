@@ -16,6 +16,7 @@ import type {
   MaskedEnvVar,
   PairedPeer,
   Peer,
+  PeerAttachment,
   PeerPairingResult,
   PeerServiceStatus,
   Instance,
@@ -144,6 +145,19 @@ export const api = {
       request(
         `/instances/${instanceId}/conversations/${encodeURIComponent(sessionId)}/history`,
       ),
+  },
+
+  attachments: {
+    list: (instanceId: string): Promise<{ attachments: PeerAttachment[] }> =>
+      request(`/instances/${instanceId}/attachments`),
+
+    remove: (instanceId: string, name: string): Promise<void> =>
+      request(`/instances/${instanceId}/attachments/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      }),
+
+    clear: (instanceId: string): Promise<{ ok: boolean; deleted: number }> =>
+      request(`/instances/${instanceId}/attachments`, { method: 'DELETE' }),
   },
 
   engines: {

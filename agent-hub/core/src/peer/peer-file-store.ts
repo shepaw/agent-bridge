@@ -5,13 +5,33 @@
  * that instance's identity.json / authorized_peers.json.
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  rmSync,
+} from 'node:fs';
+import { basename, join } from 'node:path';
 
 import { getInstance, loadOrCreateHubConfig } from '../config.js';
 import { peerAttachmentsDir } from '../paths.js';
 
 export const MAX_PEER_FILE_BYTES = 20 * 1024 * 1024;
+
+/** On-disk peer attachment entry for hub management APIs. */
+export interface PeerAttachmentInfo {
+  /** Filename under peer-attachments/ (safe to use as an id). */
+  name: string;
+  /** Best-effort original file name parsed from `{fileId}_{fileName}`. */
+  fileName: string;
+  size: number;
+  /** ISO mtime from filesystem. */
+  modifiedAt: string;
+}
 
 export interface IncomingPeerFile {
   agentId: string;
@@ -120,4 +140,98 @@ export function persistIncomingFile(
     semanticType: incoming.semanticType,
     size: bytes.length,
   };
+}
+
+/**
+ * Reject path traversal / absolute paths. Attachment names are always plain
+ * basenames written by `persistIncomingFile`.
+ */
+export function assertSafeAttachmentName(name: string): string {
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('Attachment name is required');
+  }
+  const leaf = basename(name);
+  if (leaf !== name || name.includes('..') || name.includes('/') || name.includes('\\')) {
+    throw new Error(`Invalid attachment name: ${name}`);
+  }
+  return leaf;
+}
+
+/** Parse `{safeFileId}_{safeFileName}` leaf names when possible. */
+function displayFileName(leaf: string): string {
+  const idx = leaf.indexOf('_');
+  if (idx <= 0 || idx >= leaf.length - 1) return leaf;
+  return leaf.slice(idx + 1);
+}
+
+/** List files currently under `peer-attachments/` for an instance. */
+export function listPeerAttachments(instanceId: string): PeerAttachmentInfo[] {
+  const cfg = loadOrCreateHubConfig();
+  getInstance(cfg, instanceId);
+  const dir = peerAttachmentsDir(instanceId);
+  if (!existsSync(dir)) return [];
+
+  const entries: PeerAttachmentInfo[] = [];
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    let st;
+    try {
+      st = statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    entries.push({
+      name,
+      fileName: displayFileName(name),
+      size: st.size,
+      modifiedAt: st.mtime.toISOString(),
+    });
+  }
+  entries.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+  return entries;
+}
+
+/** Delete one attachment by basename. Returns false if missing. */
+export function deletePeerAttachment(instanceId: string, name: string): boolean {
+  const cfg = loadOrCreateHubConfig();
+  getInstance(cfg, instanceId);
+  const leaf = assertSafeAttachmentName(name);
+  const abs = join(peerAttachmentsDir(instanceId), leaf);
+  if (!existsSync(abs)) return false;
+  const st = statSync(abs);
+  if (!st.isFile()) {
+    throw new Error(`Not a file: ${leaf}`);
+  }
+  unlinkSync(abs);
+  return true;
+}
+
+/** Remove every file under peer-attachments/. Returns deleted count. */
+export function clearPeerAttachments(instanceId: string): number {
+  const cfg = loadOrCreateHubConfig();
+  getInstance(cfg, instanceId);
+  const dir = peerAttachmentsDir(instanceId);
+  if (!existsSync(dir)) return 0;
+
+  let deleted = 0;
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    let st;
+    try {
+      st = statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    unlinkSync(abs);
+    deleted += 1;
+  }
+  // Drop empty dir so operators see a clean tree; ignore races.
+  try {
+    if (readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  return deleted;
 }

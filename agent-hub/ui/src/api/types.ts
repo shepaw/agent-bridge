@@ -235,6 +235,14 @@ export interface SessionHistoryMessage {
   message_id?: string;
 }
 
+/** Peer-pushed attachment stored under instances/<id>/peer-attachments/. */
+export interface PeerAttachment {
+  name: string;
+  fileName: string;
+  size: number;
+  modifiedAt: string;
+}
+
 /** Hub-level agent catalog entry (GET /api/pair/agents). */
 export interface HubAgentCatalogEntry {
   instanceId: string;

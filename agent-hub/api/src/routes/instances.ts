@@ -23,6 +23,9 @@
  * GET    /api/instances/:id/envvars   — list env var keys (values masked)
  * PUT    /api/instances/:id/envvars/:key — set a single env var (also updates credential hints cache)
  * DELETE /api/instances/:id/envvars/:key — delete a single env var
+ * GET    /api/instances/:id/attachments — list peer-attachments on disk
+ * DELETE /api/instances/:id/attachments — clear all peer-attachments
+ * DELETE /api/instances/:id/attachments/:name — delete one peer-attachment by filename
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -56,6 +59,9 @@ import {
   instancePaths,
   InstanceExistsError,
   InstanceNotFoundError,
+  listPeerAttachments,
+  deletePeerAttachment,
+  clearPeerAttachments,
   readState,
   removeInstance,
   restartAllInstances,
@@ -822,6 +828,53 @@ instancesRouter.delete('/:id/sessions/:shepawSessionId', (req: Request, res: Res
   } catch (err) {
     if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+// ── peer attachments ───────────────────────────────────────────────
+
+instancesRouter.get('/:id/attachments', (req: Request, res: Response) => {
+  try {
+    const attachments = listPeerAttachments(req.params.id!);
+    res.json({ attachments });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+instancesRouter.delete('/:id/attachments', (req: Request, res: Response) => {
+  try {
+    const deleted = clearPeerAttachments(req.params.id!);
+    res.json({ ok: true, deleted });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+instancesRouter.delete('/:id/attachments/:name', (req: Request, res: Response) => {
+  try {
+    const removed = deletePeerAttachment(req.params.id!, req.params.name!);
+    if (!removed) {
+      res.status(404).json({ error: `No attachment named "${req.params.name}".` });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof Error && /Invalid attachment name|Attachment name is required|Not a file/.test(err.message)) {
+      res.status(400).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
     }

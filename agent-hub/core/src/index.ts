@@ -70,6 +70,20 @@ export type { MintPairingResult } from './peer/peer-process.js';
 export { loadPairedPeers, removePairedPeer, type PairedPeer } from './peer/peer-store.js';
 export { listAgents } from './peer/peer-agent-host.js';
 export { PeerAcpClient } from './peer/peer-acp-client.js';
+export {
+  assertSafeAttachmentName,
+  clearPeerAttachments,
+  deletePeerAttachment,
+  listPeerAttachments,
+  MAX_PEER_FILE_BYTES,
+  normalizePeerAttachmentRefs,
+  persistIncomingFile,
+  resolveAttachmentsForAcp,
+  safeFileName,
+  type IncomingPeerFile,
+  type PeerAttachmentInfo,
+  type StoredPeerFile,
+} from './peer/peer-file-store.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 
@@ -84,6 +98,7 @@ export {
   hubRoot,
   normalizeCwd,
   instancePaths,
+  peerAttachmentsDir,
   validateInstanceId,
 } from './paths.js';
 export type { InstancePaths } from './paths.js';

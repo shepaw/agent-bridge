@@ -1,8 +1,21 @@
 /** Parse `#instance/<id>` with optional tab or `/sessions/<sessionId>` from the location hash. */
 
-export type InstanceDetailTab = 'overview' | 'sessions' | 'logs' | 'devices' | 'config';
+export type InstanceDetailTab =
+  | 'overview'
+  | 'sessions'
+  | 'logs'
+  | 'devices'
+  | 'attachments'
+  | 'config';
 
-const INSTANCE_TABS: InstanceDetailTab[] = ['overview', 'sessions', 'logs', 'devices', 'config'];
+const INSTANCE_TABS: InstanceDetailTab[] = [
+  'overview',
+  'sessions',
+  'logs',
+  'devices',
+  'attachments',
+  'config',
+];
 
 export interface InstanceRoute {
   instanceId: string;
@@ -27,7 +40,9 @@ export function parseInstanceHash(hash: string): InstanceRoute | null {
     };
   }
 
-  const withTab = hash.match(/^#instance\/([^/]+)\/(overview|sessions|logs|devices|config)$/);
+  const withTab = hash.match(
+    /^#instance\/([^/]+)\/(overview|sessions|logs|devices|attachments|config)$/,
+  );
   if (withTab) {
     return {
       instanceId: decodeURIComponent(withTab[1]!),

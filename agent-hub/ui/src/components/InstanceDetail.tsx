@@ -6,6 +6,7 @@ import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
 import { SessionsPanel } from './SessionsPanel.js';
+import { AttachmentsPanel } from './AttachmentsPanel.js';
 import { InstanceApprovalSection } from './InstanceApprovalSection.js';
 import { maskSecret } from '../utils/maskSecret.js';
 import {
@@ -31,6 +32,7 @@ const NAV_ITEMS: { id: InstanceDetailTab; label: string }[] = [
   { id: 'sessions', label: '会话' },
   { id: 'logs', label: '日志' },
   { id: 'devices', label: '设备' },
+  { id: 'attachments', label: '附件' },
   { id: 'config', label: '配置' },
 ];
 
@@ -600,6 +602,20 @@ export function InstanceDetail({
                   ))}
                 </div>
               )}
+            </section>
+          )}
+
+          {activeTab === 'attachments' && (
+            <section>
+              <div style={panelHeaderRow}>
+                <div>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>附件</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>
+                    管理本实例 peer-attachments 目录中手机端推送的文件。
+                  </p>
+                </div>
+              </div>
+              <AttachmentsPanel instanceId={instanceId} />
             </section>
           )}
 

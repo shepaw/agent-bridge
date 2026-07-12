@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addInstance, loadOrCreateHubConfig, saveHubConfig } from '../src/config.js';
 import { peerAttachmentsDir } from '../src/paths.js';
 import {
+  clearPeerAttachments,
+  deletePeerAttachment,
+  listPeerAttachments,
   normalizePeerAttachmentRefs,
   persistIncomingFile,
   resolveAttachmentsForAcp,
@@ -111,5 +114,43 @@ describe('resolveAttachmentsForAcp', () => {
 describe('safeFileName', () => {
   it('strips unsafe characters', () => {
     expect(safeFileName('../a b.png')).toBe('.._a_b.png');
+  });
+});
+
+describe('list/delete/clear peer attachments', () => {
+  it('lists persisted files and supports delete + clear', () => {
+    const persist = (fileId: string, fileName: string, body: string) => {
+      const chunks = new Map<number, Buffer>();
+      chunks.set(0, Buffer.from(body));
+      return persistIncomingFile(
+        {
+          agentId: 'alpha',
+          fileId,
+          fileName,
+          mimeType: 'text/plain',
+          semanticType: 'file',
+          size: body.length,
+          chunks,
+        },
+        1,
+      );
+    };
+
+    persist('id111', 'one.txt', 'one');
+    persist('id222', 'two.txt', 'two');
+
+    const listed = listPeerAttachments('alpha');
+    expect(listed).toHaveLength(2);
+    expect(listed.map((a) => a.fileName).sort()).toEqual(['one.txt', 'two.txt']);
+    expect(listed.every((a) => a.size > 0 && a.modifiedAt.length > 0)).toBe(true);
+
+    const target = listed.find((a) => a.fileName === 'one.txt')!;
+    expect(deletePeerAttachment('alpha', target.name)).toBe(true);
+    expect(listPeerAttachments('alpha')).toHaveLength(1);
+    expect(deletePeerAttachment('alpha', target.name)).toBe(false);
+
+    expect(clearPeerAttachments('alpha')).toBe(1);
+    expect(listPeerAttachments('alpha')).toEqual([]);
+    expect(clearPeerAttachments('alpha')).toBe(0);
   });
 });
