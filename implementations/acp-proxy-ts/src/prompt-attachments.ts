@@ -1,18 +1,21 @@
 /**
- * Materialize Shepaw `agent.chat` attachments into the agent cwd and build
- * ACP `ContentBlock`s so engines like Cursor actually see images/files.
+ * Resolve Shepaw `agent.chat` attachments and build ACP `ContentBlock`s so
+ * engines like Cursor actually see images/files.
  *
  * Attachments may arrive as:
- *   - `{ path }` / `{ abs_path }` — preferred for peer (avoids 256KiB ACP frame limit)
- *   - `{ data: base64 }` — small / legacy inline payloads
+ *   - `{ path }` / `{ abs_path }` — preferred for peer (hub peer-attachments;
+ *     avoids 256KiB ACP frame limit and does NOT copy into the project cwd)
+ *   - `{ data: base64 }` — small / legacy inline payloads (written under os.tmpdir)
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 
-export const ATTACHMENTS_DIR = '.shepaw/attachments';
+/** Temp directory name for inline (base64-only) attachments — never under project cwd. */
+export const INLINE_ATTACHMENTS_DIR = 'shepaw-acp-attachments';
 
 export interface ShepawAttachment {
   fileId?: string;
@@ -28,7 +31,6 @@ export interface ShepawAttachment {
 
 export interface MaterializedAttachment {
   absPath: string;
-  relativePath: string;
   fileName: string;
   mimeType: string;
   semanticType: string;
@@ -109,37 +111,45 @@ export function parseShepawAttachments(raw: unknown): ShepawAttachment[] {
   return out;
 }
 
-/** Copy / write attachment bytes under `{cwd}/.shepaw/attachments/`. */
+/**
+ * Resolve attachment bytes to an absolute path + base64 for ContentBlocks.
+ *
+ * - Prefer existing `sourcePath` (e.g. hub peer-attachments) — no copy into project.
+ * - Inline base64 only is written under `os.tmpdir()/shepaw-acp-attachments/`.
+ */
 export function materializeAttachments(
-  cwd: string,
   attachments: ReadonlyArray<ShepawAttachment>,
 ): MaterializedAttachment[] {
   if (attachments.length === 0) return [];
-  const dir = join(cwd, ATTACHMENTS_DIR);
-  mkdirSync(dir, { recursive: true });
   return attachments.map((att, index) => {
-    const idPart = att.fileId ? safeAttachmentLeaf(att.fileId) : `att${index}`;
-    const leaf = `${idPart}_${safeAttachmentLeaf(att.fileName)}`;
-    const absPath = join(dir, leaf);
-
     if (att.sourcePath !== undefined && existsSync(att.sourcePath)) {
-      copyFileSync(att.sourcePath, absPath);
-    } else if (att.dataBase64 !== undefined) {
-      writeFileSync(absPath, Buffer.from(att.dataBase64, 'base64'));
-    } else {
+      const dataBase64 =
+        att.dataBase64 ?? readFileSync(att.sourcePath).toString('base64');
+      return {
+        absPath: att.sourcePath,
+        fileName: att.fileName,
+        mimeType: att.mimeType,
+        semanticType: att.semanticType,
+        dataBase64,
+      };
+    }
+
+    if (att.dataBase64 === undefined) {
       throw new Error(`Attachment missing path/data: ${att.fileName}`);
     }
 
-    const dataBase64 =
-      att.dataBase64 ?? readFileSync(absPath).toString('base64');
-
+    const dir = join(tmpdir(), INLINE_ATTACHMENTS_DIR);
+    mkdirSync(dir, { recursive: true });
+    const idPart = att.fileId ? safeAttachmentLeaf(att.fileId) : `att${index}`;
+    const leaf = `${idPart}_${safeAttachmentLeaf(att.fileName)}`;
+    const absPath = join(dir, leaf);
+    writeFileSync(absPath, Buffer.from(att.dataBase64, 'base64'));
     return {
       absPath,
-      relativePath: join(ATTACHMENTS_DIR, leaf),
       fileName: att.fileName,
       mimeType: att.mimeType,
       semanticType: att.semanticType,
-      dataBase64,
+      dataBase64: att.dataBase64,
     };
   });
 }
@@ -166,7 +176,7 @@ export function buildPromptWithAttachments(
   const textBody = [
     message.trim().length > 0 ? message : '(see attached files)',
     '',
-    'Attached files (saved under the agent working directory):',
+    'Attached files:',
     ...pathLines,
   ].join('\n');
 
@@ -193,14 +203,13 @@ export function buildPromptWithAttachments(
   return blocks;
 }
 
-/** Parse + materialize + build prompt blocks in one step. */
+/** Parse + resolve + build prompt blocks in one step. */
 export function preparePromptFromAttachments(
-  cwd: string,
   message: string,
   rawAttachments: unknown,
 ): { blocks: ContentBlock[]; materialized: MaterializedAttachment[] } {
   const parsed = parseShepawAttachments(rawAttachments);
-  const materialized = materializeAttachments(cwd, parsed);
+  const materialized = materializeAttachments(parsed);
   return {
     blocks: buildPromptWithAttachments(message, materialized),
     materialized,

@@ -114,10 +114,9 @@ export class AcpProxyAgent extends ACPAgentServer {
     this.sessionHistoryCache.invalidate(shepawSessionId);
     const signal = this.activeTasks.get(ctx.taskId)?.signal ?? new AbortController().signal;
 
-    // Peer / app attachments arrive as base64 on agent.chat; Cursor (and most
-    // ACP engines) only see them if we materialize into cwd and pass ContentBlocks.
+    // Peer / app attachments arrive as path refs (or small base64). Resolve
+    // outside the project cwd and pass ContentBlocks into Cursor.
     const { blocks, materialized } = preparePromptFromAttachments(
-      this.cwd,
       message,
       kwargs.attachments,
     );
@@ -125,7 +124,7 @@ export class AcpProxyAgent extends ACPAgentServer {
       log(
         'onChat attachments=%d paths=%s',
         materialized.length,
-        materialized.map((m) => m.relativePath).join(', '),
+        materialized.map((m) => m.absPath).join(', '),
       );
     }
 

@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  ATTACHMENTS_DIR,
+  INLINE_ATTACHMENTS_DIR,
   buildPromptWithAttachments,
   materializeAttachments,
   parseShepawAttachments,
@@ -13,10 +13,13 @@ import {
   safeAttachmentLeaf,
 } from '../src/prompt-attachments.js';
 
-let cwd: string;
+let scratch: string | undefined;
 
 afterEach(() => {
-  if (cwd) rmSync(cwd, { recursive: true, force: true });
+  if (scratch) {
+    rmSync(scratch, { recursive: true, force: true });
+    scratch = undefined;
+  }
 });
 
 describe('parseShepawAttachments', () => {
@@ -52,35 +55,34 @@ describe('parseShepawAttachments', () => {
   });
 });
 
-describe('materializeAttachments + buildPromptWithAttachments', () => {
-  it('writes under cwd/.shepaw/attachments and injects paths + image blocks', () => {
-    cwd = mkdtempSync(join(tmpdir(), 'shepaw-prompt-att-'));
-    const materialized = materializeAttachments(cwd, [
+describe('materializeAttachments', () => {
+  it('reuses source path without copying into a project cwd', () => {
+    scratch = mkdtempSync(join(tmpdir(), 'shepaw-prompt-att-'));
+    const peerDir = join(scratch, 'peer-attachments');
+    mkdirSync(peerDir, { recursive: true });
+    const src = join(peerDir, 'abc_39.jpg');
+    writeFileSync(src, 'img-bytes');
+
+    const materialized = materializeAttachments([
       {
         fileId: 'abc123',
         fileName: '39.jpg',
         mimeType: 'image/jpeg',
         semanticType: 'image',
-        dataBase64: Buffer.from('img-bytes').toString('base64'),
+        sourcePath: src,
       },
     ]);
     expect(materialized).toHaveLength(1);
-    expect(materialized[0].relativePath.startsWith(ATTACHMENTS_DIR)).toBe(true);
-    expect(readFileSync(materialized[0].absPath, 'utf8')).toBe('img-bytes');
+    expect(materialized[0].absPath).toBe(src);
 
     const blocks = buildPromptWithAttachments('这张图是什么', materialized);
-    expect(blocks[0]).toMatchObject({ type: 'text' });
-    expect((blocks[0] as { text: string }).text).toContain('这张图是什么');
-    expect((blocks[0] as { text: string }).text).toContain(materialized[0].absPath);
-    expect(blocks[1]).toMatchObject({
-      type: 'image',
-      mimeType: 'image/jpeg',
-    });
+    expect((blocks[0] as { text: string }).text).toContain(src);
+    expect((blocks[0] as { text: string }).text).not.toContain('.shepaw/attachments');
+    expect(blocks[1]).toMatchObject({ type: 'image', mimeType: 'image/jpeg' });
   });
 
-  it('uses resource_link for non-image files', () => {
-    cwd = mkdtempSync(join(tmpdir(), 'shepaw-prompt-att-'));
-    const { blocks } = preparePromptFromAttachments(cwd, '见附件', [
+  it('writes inline base64 under os.tmpdir, not project cwd', () => {
+    const { blocks, materialized } = preparePromptFromAttachments('见附件', [
       {
         file_id: 'f1',
         file_name: 'notes.txt',
@@ -89,15 +91,19 @@ describe('materializeAttachments + buildPromptWithAttachments', () => {
         data: Buffer.from('hello').toString('base64'),
       },
     ]);
+    expect(materialized[0].absPath.includes(INLINE_ATTACHMENTS_DIR)).toBe(true);
+    expect(materialized[0].absPath.startsWith(tmpdir())).toBe(true);
     expect(blocks.some((b) => b.type === 'resource_link')).toBe(true);
-    expect((blocks[0] as { text: string }).text).toContain('notes.txt');
   });
 
-  it('copies from source path without requiring inline base64', () => {
-    cwd = mkdtempSync(join(tmpdir(), 'shepaw-prompt-att-'));
-    const src = join(cwd, 'src.jpg');
+  it('does not create .shepaw under project when path is provided', () => {
+    scratch = mkdtempSync(join(tmpdir(), 'shepaw-prompt-att-'));
+    const src = join(scratch, 'src.jpg');
     writeFileSync(src, 'img-from-path');
-    const { blocks, materialized } = preparePromptFromAttachments(cwd, '看图', [
+    const projectCwd = join(scratch, 'project');
+    mkdirSync(projectCwd, { recursive: true });
+
+    const { materialized } = preparePromptFromAttachments('看图', [
       {
         file_id: 'p1',
         file_name: '39.jpg',
@@ -106,10 +112,9 @@ describe('materializeAttachments + buildPromptWithAttachments', () => {
         path: src,
       },
     ]);
-    expect(materialized).toHaveLength(1);
+    expect(materialized[0].absPath).toBe(src);
     expect(readFileSync(materialized[0].absPath, 'utf8')).toBe('img-from-path');
-    expect(blocks.some((b) => b.type === 'image')).toBe(true);
-    expect((blocks[0] as { text: string }).text).toContain(materialized[0].absPath);
+    expect(existsSync(join(projectCwd, '.shepaw'))).toBe(false);
   });
 });
 
