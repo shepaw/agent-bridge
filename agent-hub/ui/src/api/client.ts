@@ -28,11 +28,47 @@ import type {
 } from './types.js';
 
 const BASE = '/api';
+const TOKEN_STORAGE_KEY = 'shepaw_hub_token';
+
+function getAuthToken(): string | undefined {
+  try {
+    const fromStorage = localStorage.getItem(TOKEN_STORAGE_KEY)?.trim();
+    if (fromStorage) return fromStorage;
+  } catch {
+    // ignore (SSR / private mode)
+  }
+  return undefined;
+}
+
+export function setHubAuthToken(token: string | null): void {
+  try {
+    if (!token) {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    } else {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token.trim());
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getHubAuthToken(): string | undefined {
+  return getAuthToken();
+}
+
+function authHeaders(): HeadersInit {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+      ...(init?.headers ?? {}),
+    },
   });
   const body = await res.json() as T | { error: string };
   if (!res.ok) throw new Error((body as { error: string }).error ?? `HTTP ${res.status}`);

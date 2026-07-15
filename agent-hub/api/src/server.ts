@@ -5,9 +5,8 @@
  * - WebSocket log streaming at /ws/logs/<instanceId>
  * - Static SPA served from ui/dist at everything else
  *
- * The server is intentionally simple: no auth by default (it's meant to run
- * on loopback). Operators who need auth can add middleware before calling
- * startServer().
+ * Auth: set SHEPAW_HUB_TOKEN (or pass authToken). Loopback binds may omit a
+ * token for local-dev convenience; non-loopback binds require a token.
  */
 
 import { createServer } from 'node:http';
@@ -26,6 +25,12 @@ import { pairRouter } from './routes/pair.js';
 import { gatewayRouter } from './routes/gateway.js';
 import { peerRouter } from './routes/peer.js';
 import { attachLogsWss } from './ws.js';
+import {
+  authorizeWsUpgrade,
+  createAuthMiddleware,
+  isLoopbackHost,
+  resolveHubAuthToken,
+} from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -33,16 +38,45 @@ const require = createRequire(import.meta.url);
 export interface ServerOptions {
   port?: number;
   host?: string;
+  /** Dashboard API token. Defaults to SHEPAW_HUB_TOKEN env. */
+  authToken?: string;
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const port = opts.port ?? 4000;
   const host = opts.host ?? '127.0.0.1';
+  const authToken = resolveHubAuthToken(opts.authToken);
+
+  if (!isLoopbackHost(host) && !authToken) {
+    throw new Error(
+      `Refusing to bind Hub dashboard to ${host} without auth. ` +
+        `Set SHEPAW_HUB_TOKEN or use --host 127.0.0.1.`,
+    );
+  }
 
   const app = express();
 
-  app.use(cors());
+  // Only allow loopback browser origins. Bearer auth is still required when
+  // SHEPAW_HUB_TOKEN is set — this mainly blocks drive-by cross-site calls.
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(null, false);
+      },
+    }),
+  );
   app.use(express.json());
+
+  // Auth for all /api routes (health is exempt inside middleware).
+  app.use('/api', createAuthMiddleware(authToken));
 
   // ── API routes ───────────────────────────────────────────────────
   app.use('/api/instances', instancesRouter);
@@ -56,7 +90,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // ── Health check ─────────────────────────────────────────────────
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, time: new Date().toISOString() });
+    res.json({
+      ok: true,
+      time: new Date().toISOString(),
+      authRequired: Boolean(authToken),
+    });
   });
 
   // ── Static UI ────────────────────────────────────────────────────
@@ -86,6 +124,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   httpServer.on('upgrade', (request, socket, head) => {
     const url = request.url ?? '';
     if (url.startsWith('/ws/logs/')) {
+      if (!authorizeWsUpgrade(request, authToken)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -98,6 +141,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     httpServer.listen(port, host, () => resolve());
     httpServer.once('error', reject);
   });
+
+  if (!isLoopbackHost(host)) {
+    console.warn(
+      `[shepaw-hub] WARNING: dashboard bound to ${host}. Auth token is required and enabled.`,
+    );
+  } else if (!authToken) {
+    console.warn(
+      '[shepaw-hub] Dashboard auth disabled (loopback only). Set SHEPAW_HUB_TOKEN to enable.',
+    );
+  }
 }
 
 /**

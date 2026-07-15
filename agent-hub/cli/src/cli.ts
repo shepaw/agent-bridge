@@ -1146,11 +1146,28 @@ cli
       const port = Number(opts.port);
       const host = opts.host;
       const shouldOpen = opts.open !== false;
+      const authToken = process.env.SHEPAW_HUB_TOKEN?.trim();
+
+      if (host === '0.0.0.0' || host === '::') {
+        console.warn('');
+        console.warn('WARNING: Binding the Hub dashboard to all interfaces.');
+        console.warn('  This exposes start/stop/engine APIs on your LAN/public network.');
+        console.warn('  SHEPAW_HUB_TOKEN is REQUIRED for non-loopback binds.');
+        console.warn('  Prefer: shepaw-hub web --host 127.0.0.1');
+        console.warn('');
+        if (!authToken) {
+          console.error('Refusing to start: set SHEPAW_HUB_TOKEN before using --host 0.0.0.0');
+          process.exit(1);
+        }
+      }
 
       console.log(`Starting Shepaw Hub dashboard on http://${host}:${port} ...`);
+      if (authToken) {
+        console.log('Auth: SHEPAW_HUB_TOKEN is set (Bearer required for /api and /ws).');
+      }
 
       const { startServer } = await import('@shepaw/agent-hub-api');
-      await startServer({ port, host });
+      await startServer({ port, host, authToken });
 
       const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
       console.log(`Dashboard ready: ${url}`);

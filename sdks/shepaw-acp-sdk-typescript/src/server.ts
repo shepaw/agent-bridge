@@ -477,7 +477,7 @@ export class ACPAgentServer {
   // ── server lifecycle ───────────────────────────────────────────
 
   async run(opts: RunOptions = {}): Promise<void> {
-    const host = opts.host ?? '0.0.0.0';
+    const host = opts.host ?? '127.0.0.1';
     const port = opts.port ?? 8080;
 
     const { httpServer, wsServer } = this.createServer();

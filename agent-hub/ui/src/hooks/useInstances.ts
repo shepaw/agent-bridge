@@ -45,7 +45,14 @@ export function useLogs(instanceId: string | null, opts: UseLogsOptions = {}) {
 
     const tail = opts.tail ?? 100;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${protocol}://${window.location.host}/ws/logs/${instanceId}?tail=${tail}`;
+    const params = new URLSearchParams({ tail: String(tail) });
+    try {
+      const token = localStorage.getItem('shepaw_hub_token')?.trim();
+      if (token) params.set('token', token);
+    } catch {
+      // ignore
+    }
+    const wsUrl = `${protocol}://${window.location.host}/ws/logs/${instanceId}?${params.toString()}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

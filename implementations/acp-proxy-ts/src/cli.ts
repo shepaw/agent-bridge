@@ -50,7 +50,9 @@ cli
   .option('--port <port>', 'Port to listen on', {
     default: process.env.AGENT_PORT ?? 8090,
   })
-  .option('--host <host>', 'Host to bind to', { default: '0.0.0.0' })
+  .option('--host <host>', 'Host to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)', {
+    default: process.env.AGENT_HOST ?? '127.0.0.1',
+  })
   .option('--name <name>', 'Display name shown in Shepaw')
   .option('--peers-path <path>', 'Override authorized_peers.json path')
   .option('--enrollments-path <path>', 'Override enrollments.json path')

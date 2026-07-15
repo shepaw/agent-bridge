@@ -97,9 +97,26 @@ shepaw-hub instance-list
 
 ### Web 仪表盘
 
+默认仅监听本机（安全）：
+
 ```bash
+shepaw-hub web --host 127.0.0.1 --port 4000
+```
+
+若必须在局域网访问 Dashboard，**必须**设置鉴权 token，并显式绑定：
+
+```bash
+export SHEPAW_HUB_TOKEN="$(openssl rand -hex 24)"
 shepaw-hub web --host 0.0.0.0 --port 4000 --no-open
 ```
+
+浏览器打开后，在 DevTools Console 执行一次（或写入本地设置）：
+
+```js
+localStorage.setItem('shepaw_hub_token', '<你的 SHEPAW_HUB_TOKEN>')
+```
+
+未设置 `SHEPAW_HUB_TOKEN` 时，`--host 0.0.0.0` 会被拒绝启动。
 
 浏览器访问 `http://<主机>:4000`，通过 **Add Instance** 创建并启动实例。
 
@@ -141,10 +158,16 @@ shepaw-hub gateway-start
 ### 3. Web 仪表盘（管理界面）
 
 ```bash
+# 本机（推荐）
+shepaw-hub web --host 127.0.0.1 --port 4000
+
+# 局域网：必须设置 SHEPAW_HUB_TOKEN
+export SHEPAW_HUB_TOKEN="$(openssl rand -hex 24)"
 shepaw-hub web --host 0.0.0.0 --port 4000 --no-open
+# 浏览器端：localStorage.setItem('shepaw_hub_token', '<token>')
 ```
 
-默认 **无 HTTP 鉴权**，仅适合本机或可信内网。若暴露到公网，请在前置反向代理上增加认证。
+未设置 token 时，非 loopback 绑定会被拒绝。公网暴露时仍建议前置 HTTPS 反向代理。
 
 ---
 
