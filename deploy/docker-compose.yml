@@ -1,0 +1,20 @@
+# Example: Hub dashboard with host networking so Peer/gateway ports bind on the host.
+# Prefer bare-metal + systemd for production agents (see docs/DOCKER.md).
+services:
+  shepaw-hub-web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    network_mode: host
+    environment:
+      SHEPAW_HUB_HOME: /data/shepaw-hub
+      # Required when binding non-loopback; safe to set always:
+      # SHEPAW_HUB_TOKEN: replace-me
+    volumes:
+      - shepaw_hub_data:/data/shepaw-hub
+    restart: unless-stopped
+    # Override to expose LAN (must set SHEPAW_HUB_TOKEN):
+    # command: ["shepaw-hub", "web", "--host", "0.0.0.0", "--port", "4000", "--no-open"]
+
+volumes:
+  shepaw_hub_data:

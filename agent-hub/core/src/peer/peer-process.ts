@@ -1,7 +1,7 @@
 /**
  * Spawn/stop control for the device-level peer service, mirroring
  * `gateway-process.ts`. Also exposes `mintPairingQr` used by `peer pair`:
- * it ensures the daemon is running, generates a 6-char code, writes it to
+ * it ensures the daemon is running, generates an 8-char code, writes it to
  * `peer-pairing.json` (which the daemon reads on the next handshake), and
  * returns the `shepaw://peer?...` QR payload.
  */
@@ -159,7 +159,7 @@ export interface MintPairingResult {
 }
 
 /**
- * Ensure the peer service is running, mint a 6-char code, write it to the
+ * Ensure the peer service is running, mint an 8-char code, write it to the
  * pairing file (daemon reads on handshake), and return the QR payload.
  */
 export async function mintPairingQr(): Promise<MintPairingResult> {

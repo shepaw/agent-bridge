@@ -10,7 +10,7 @@
  *   4. On reconnect: match pubkey against the paired store → `reconnect_ack`
  *      → hand off.
  *
- * The hub auto-accepts a pairing when the 6-char code matches (the code is the
+ * The hub auto-accepts a pairing when the 8-char code matches (the code is the
  * auth; the operator already initiated pairing by running `peer pair`). This
  * skips the app's manual "confirm" step, which a headless hub has no UI for.
  */

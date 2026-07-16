@@ -1,0 +1,15 @@
+[Unit]
+Description=Shepaw Agent Hub Peer Service
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=shepaw
+WorkingDirectory=/opt/agent-bridge
+Environment=SHEPAW_HUB_HOME=/var/lib/shepaw-hub
+ExecStart=/usr/bin/env shepaw-hub peer-start
+ExecStop=/usr/bin/env shepaw-hub peer-stop
+
+[Install]
+WantedBy=multi-user.target

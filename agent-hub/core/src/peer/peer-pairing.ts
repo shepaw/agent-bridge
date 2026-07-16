@@ -2,9 +2,9 @@
  * Pairing code + QR construction for the peer service.
  *
  * Mirrors the Shepaw app's `lib/peer/services/peer_pairing_service.dart`:
- *   - 6-char code, charset `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no 0/O/1/I/L).
+ *   - 8-char code, charset `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no 0/O/1/I/L).
  *   - 5-minute TTL, single-use, constant-time compare.
- *   - QR: `shepaw://peer?local=<ws>&code=<6char>#fp=<16hex>&pk=<base64url>`.
+ *   - QR: `shepaw://peer?local=<ws>&code=<8char>#fp=<16hex>&pk=<base64url>`.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -15,7 +15,7 @@ import { detectLanIPv4 } from '../network.js';
 import { peerPairingPath } from '../paths.js';
 
 const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-export const PAIRING_CODE_LENGTH = 6;
+export const PAIRING_CODE_LENGTH = 8;
 export const PAIRING_TTL_MS = 5 * 60 * 1000;
 
 export interface PairingFileEntry {
@@ -60,7 +60,7 @@ export function clearPairingFile(): void {
   try { unlinkSync(path); } catch { /* ignore */ }
 }
 
-/** Generate a 6-char pairing code using CSPRNG. */
+/** Generate an 8-char pairing code using CSPRNG (~40 bit). */
 export function generatePairingCode(): string {
   const out: string[] = [];
   const buf = randomBytes(PAIRING_CODE_LENGTH);
@@ -90,7 +90,7 @@ export interface PeerQrOptions {
   localEndpoint: string;
   /** Optional channel-relay endpoint (WAN). Omitted for LAN-only Phase 1. */
   channelEndpoint?: string;
-  /** 6-char pairing code. */
+  /** 8-char pairing code. */
   code: string;
   /** Responder fingerprint (16 hex). */
   fingerprint: string;

@@ -2,7 +2,8 @@
 
 本文说明如何将 **agent-bridge** 仓库中的 **Shepaw Agent Hub**（`shepaw-hub`）部署到一台主机上，并通过 Shepaw 手机 App 连接、使用本机上的 Agent 实例。
 
-Hub 的典型形态是：**单机或 VM 上运行 CLI + Web 仪表盘 + 若干 Agent 子进程**。仓库内暂无官方 Docker / Kubernetes 清单，以下步骤以裸机部署为准。
+Hub 的典型形态是：**单机或 VM 上运行 CLI + Web 仪表盘 + 若干 Agent 子进程**。  
+Docker / systemd 示例见 **[DOCKER.md](./DOCKER.md)**（`deploy/` 目录）；以下步骤以裸机部署为准。
 
 ---
 

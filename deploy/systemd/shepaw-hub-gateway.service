@@ -1,0 +1,15 @@
+[Unit]
+Description=Shepaw Agent Hub Channel Gateway (tunnel router)
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=shepaw
+WorkingDirectory=/opt/agent-bridge
+Environment=SHEPAW_HUB_HOME=/var/lib/shepaw-hub
+ExecStart=/usr/bin/env shepaw-hub gateway-start
+ExecStop=/usr/bin/env shepaw-hub gateway-stop
+
+[Install]
+WantedBy=multi-user.target

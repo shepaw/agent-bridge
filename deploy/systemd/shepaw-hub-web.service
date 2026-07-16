@@ -1,0 +1,17 @@
+[Unit]
+Description=Shepaw Agent Hub Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=shepaw
+WorkingDirectory=/opt/agent-bridge
+Environment=SHEPAW_HUB_HOME=/var/lib/shepaw-hub
+Environment=SHEPAW_HUB_TOKEN=
+# Leave TOKEN empty only for 127.0.0.1 binds.
+ExecStart=/usr/bin/env shepaw-hub web --host 127.0.0.1 --port 4000 --no-open
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

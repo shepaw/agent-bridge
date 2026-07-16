@@ -50,7 +50,7 @@ peerRouter.post('/stop', async (_req: Request, res: Response) => {
   }
 });
 
-/** POST /api/peer/pair — mint a 6-char code + build the shepaw://peer QR. */
+/** POST /api/peer/pair — mint an 8-char code + build the shepaw://peer QR. */
 peerRouter.post('/pair', async (_req: Request, res: Response) => {
   try {
     const result = await mintPairingQr();
