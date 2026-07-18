@@ -56,6 +56,29 @@ export function getHubAuthToken(): string | undefined {
   return getAuthToken();
 }
 
+/**
+ * If the page was opened with `?token=...`, persist it and strip the query
+ * (avoids leaking the secret via referrer / screenshots of the address bar).
+ */
+export function bootstrapHubAuthTokenFromUrl(
+  search: string = typeof window !== 'undefined' ? window.location.search : '',
+): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(search);
+    const fromQuery = params.get('token')?.trim();
+    if (!fromQuery) return false;
+    setHubAuthToken(fromQuery);
+    params.delete('token');
+    const next = params.toString();
+    const url = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`;
+    window.history.replaceState(null, '', url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function authHeaders(): HeadersInit {
   const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};

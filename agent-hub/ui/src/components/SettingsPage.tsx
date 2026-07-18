@@ -1,11 +1,12 @@
 import { ApprovalSettingsPanel } from './GatewaySettingsModal.js';
 import { EngineManager } from './EngineManager.js';
+import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
 import type { SettingsTab } from '../utils/settingsRoute.js';
 
 /**
  * Unified settings page. Hosts the three configuration surfaces:
- *   - 全局: device-wide tool-call approval default
+ *   - 全局: dashboard auth token + device-wide tool-call approval default
  *   - 引擎: per-engine overrides (enable/disable, command, default creds, approval)
  *   - Peer 配对: shared channel + peer service + shepaw://peer pairing
  *
@@ -17,11 +18,13 @@ export function SettingsPage({
   onTabChange,
   focusEngineId,
   onFocusEngineHandled,
+  onAuthTokenSaved,
 }: {
   tab: SettingsTab;
   onTabChange: (tab: SettingsTab) => void;
   focusEngineId: string | null;
   onFocusEngineHandled: () => void;
+  onAuthTokenSaved?: () => void;
 }) {
   return (
     <div>
@@ -33,11 +36,21 @@ export function SettingsPage({
 
       <div style={panel}>
         {tab === 'global' && (
-          <section style={card}>
-            <h3 style={cardTitle}>工具调用审核策略（设备级默认）</h3>
-            <p style={cardHint}>决定本机 Agent 的默认工具审核行为；引擎或实例可单独覆盖。</p>
-            <ApprovalSettingsPanel />
-          </section>
+          <>
+            <section style={card}>
+              <h3 style={cardTitle}>Dashboard 鉴权 Token</h3>
+              <p style={cardHint}>
+                当 Hub 以 <code style={inlineCode}>SHEPAW_HUB_TOKEN</code> 启动时，浏览器需保存同一 Token，
+                才能访问 Peer / Channel 等 API。Token 仅存于本机 localStorage。
+              </p>
+              <HubAuthTokenPanel onSaved={onAuthTokenSaved} />
+            </section>
+            <section style={card}>
+              <h3 style={cardTitle}>工具调用审核策略（设备级默认）</h3>
+              <p style={cardHint}>决定本机 Agent 的默认工具审核行为；引擎或实例可单独覆盖。</p>
+              <ApprovalSettingsPanel />
+            </section>
+          </>
         )}
 
         {tab === 'engines' && (
@@ -79,3 +92,6 @@ const card: React.CSSProperties = {
 };
 const cardTitle: React.CSSProperties = { margin: '0 0 4px', color: '#cdd6f4', fontSize: 16 };
 const cardHint: React.CSSProperties = { margin: '0 0 16px', color: '#a6adc8', fontSize: 13 };
+const inlineCode: React.CSSProperties = {
+  background: '#181825', border: '1px solid #313244', borderRadius: 4, padding: '0 4px',
+};

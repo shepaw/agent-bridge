@@ -111,10 +111,13 @@ export SHEPAW_HUB_TOKEN="$(openssl rand -hex 24)"
 shepaw-hub web --host 0.0.0.0 --port 4000 --no-open
 ```
 
-浏览器打开后，在 DevTools Console 执行一次（或写入本地设置）：
+浏览器打开后，启动日志中的 `Dashboard ready:` 链接在设置了
+`SHEPAW_HUB_TOKEN` 时会自动带上 `?token=`；打开后 Dashboard 会写入
+localStorage 并从地址栏去掉。也可在 **设置 → 全局设置 → Dashboard 鉴权 Token**
+中手动填写，或使用：
 
-```js
-localStorage.setItem('shepaw_hub_token', '<你的 SHEPAW_HUB_TOKEN>')
+```text
+http://<主机>:4000/?token=<你的 SHEPAW_HUB_TOKEN>
 ```
 
 未设置 `SHEPAW_HUB_TOKEN` 时，`--host 0.0.0.0` 会被拒绝启动。
@@ -165,7 +168,7 @@ shepaw-hub web --host 127.0.0.1 --port 4000
 # 局域网：必须设置 SHEPAW_HUB_TOKEN
 export SHEPAW_HUB_TOKEN="$(openssl rand -hex 24)"
 shepaw-hub web --host 0.0.0.0 --port 4000 --no-open
-# 浏览器端：localStorage.setItem('shepaw_hub_token', '<token>')
+# 浏览器端：设置 → 全局设置 → Dashboard 鉴权 Token
 ```
 
 未设置 token 时，非 loopback 绑定会被拒绝。公网暴露时仍建议前置 HTTPS 反向代理。

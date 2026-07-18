@@ -49,7 +49,7 @@ import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
 import { augmentSpawnPath, getCursorAcpCommand, resolveCursorCliBinary, resolveEngineAvailability } from './engine-setup.js';
 import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
-import { findCustomEngine, formatShellCommand } from './engines.js';
+import { findCustomEngine, formatShellCommand, isKnownEngine } from './engines.js';
 import { instancePaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
 import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
@@ -142,6 +142,13 @@ export async function startInstance(instance: InstanceConfig): Promise<{
     }
 
     const customEngine = findCustomEngine(hubCfg.customEngines, instance.engine);
+    if (!isKnownEngine(instance.engine, hubCfg.customEngines)) {
+      throw new Error(
+        `Instance "${instance.id}" uses unknown engine "${instance.engine}". ` +
+          `Register it with 'shepaw-hub engine add' or upgrade Hub so the built-in engine is available. ` +
+          `Other instances are not affected.`,
+      );
+    }
     const engineEnv = resolveEngineEnvVars(hubCfg, instance.engine);
 
     const availability = resolveEngineAvailability(instance.engine, {

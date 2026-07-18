@@ -3,6 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { GatewayInfo, PairedPeer, PeerPairingResult, PeerServiceStatus } from '../api/types.js';
 import { ChannelSettingsPanel } from './GatewaySettingsModal.js';
+import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 
 /**
  * Peer pairing panel: start/stop the device peer service, mint a
@@ -68,6 +69,20 @@ export function PeerPairingPanel() {
 
   return (
     <>
+      {err && /unauthorized|SHEPAW_HUB_TOKEN/i.test(err) && (
+        <div style={authBox}>
+          <p style={{ margin: '0 0 12px', color: '#f9e2af', fontSize: 13 }}>
+            API 鉴权失败。请先配置 Dashboard Token（与启动时的 SHEPAW_HUB_TOKEN 相同）：
+          </p>
+          <HubAuthTokenPanel
+            onSaved={() => {
+              setErr(null);
+              void load();
+            }}
+          />
+        </div>
+      )}
+
       <div style={section}>
         <h4 style={sectionTitle}>共享 Channel（远程访问）</h4>
         <ChannelSettingsPanel />
@@ -172,5 +187,9 @@ const linkCode: React.CSSProperties = { flex: 1, padding: '6px 8px', background:
 const copyBtn: React.CSSProperties = { background: '#313244', color: '#cdd6f4', border: '1px solid #45475a', borderRadius: 4, padding: '0 12px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' };
 const linkHint: React.CSSProperties = { color: '#6c7086', fontSize: 11, marginTop: 8, lineHeight: 1.5 };
 const section: React.CSSProperties = { marginTop: 16, borderTop: '1px solid #313244', paddingTop: 14 };
+const authBox: React.CSSProperties = {
+  background: '#181825', border: '1px solid #f9e2af', borderRadius: 8,
+  padding: '14px 16px', marginBottom: 8,
+};
 const sectionTitle: React.CSSProperties = { margin: '0 0 12px', color: '#cdd6f4', fontSize: 14 };
 const deviceRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #313244' };

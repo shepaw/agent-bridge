@@ -23,6 +23,7 @@ describe('engines', () => {
     expect(ids).toContain('codebuddy');
     expect(ids).toContain('codex');
     expect(ids).toContain('cursor');
+    expect(ids).toContain('kimi');
     expect(ids.length).toBe(Object.keys(ACP_ENGINES).length);
   });
 

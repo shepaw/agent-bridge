@@ -4,7 +4,7 @@ import type { EngineInfo, HubMeta } from '../api/types.js';
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'codex',
-  'opencode', 'openclaw', 'cursor', 'hermes',
+  'opencode', 'openclaw', 'cursor', 'hermes', 'kimi',
 ];
 
 interface AddInstanceModalProps {

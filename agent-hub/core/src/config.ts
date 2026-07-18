@@ -895,7 +895,7 @@ function loadExisting(path: string): HubConfig {
     const entry: InstanceConfig = {
       id: requireString(p.id, `instances[${i}].id`, path),
       label: typeof p.label === 'string' ? p.label : '',
-      engine: requireInstanceEngine(p.engine, customEngines, `instances[${i}].engine`, path),
+      engine: parseInstanceEngine(p.engine, customEngines, `instances[${i}].engine`, path),
       cwd: requireString(p.cwd, `instances[${i}].cwd`, path),
       port: requireNumber(p.port, `instances[${i}].port`, path),
       host: typeof p.host === 'string' ? p.host : '127.0.0.1',
@@ -1049,7 +1049,15 @@ function requireNumber(v: unknown, field: string, file: string): number {
   return v;
 }
 
-function requireInstanceEngine(
+/**
+ * Parse an instance engine id from disk.
+ *
+ * Unknown engines must NOT fail the whole hub.json load — a single stale or
+ * forward-compatible engine (e.g. a newer built-in not yet in this process)
+ * would otherwise block every other instance (peer routing, catalog, spawn).
+ * Create/update paths still validate via {@link isKnownEngine}.
+ */
+function parseInstanceEngine(
   v: unknown,
   customEngines: ReadonlyArray<CustomEngineDefinition>,
   field: string,
@@ -1059,9 +1067,9 @@ function requireInstanceEngine(
     throw new Error(`Hub config at ${file}: ${field} must be a non-empty string.`);
   }
   if (!isKnownEngine(v, customEngines)) {
-    throw new Error(
-      `Hub config at ${file}: ${field} references unknown engine "${v}". ` +
-        `Register it under customEngines or use a built-in id.`,
+    console.warn(
+      `[shepaw-hub] Warning: ${field} references unknown engine "${v}" in ${file}. ` +
+        `That instance will not start until the engine is registered; other instances are unaffected.`,
     );
   }
   return v;

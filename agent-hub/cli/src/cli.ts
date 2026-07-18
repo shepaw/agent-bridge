@@ -1169,8 +1169,14 @@ cli
       const { startServer } = await import('@shepaw/agent-hub-api');
       await startServer({ port, host, authToken });
 
-      const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
+      const baseUrl = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
+      const url = authToken
+        ? `${baseUrl}/?token=${encodeURIComponent(authToken)}`
+        : baseUrl;
       console.log(`Dashboard ready: ${url}`);
+      if (authToken) {
+        console.log('  (URL includes token once; the dashboard stores it in localStorage and strips it from the address bar.)');
+      }
 
       if (shouldOpen) {
         try {

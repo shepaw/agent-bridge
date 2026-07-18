@@ -80,6 +80,15 @@ describe('engine-setup', () => {
     expect(guide.installable).toBe(false);
   });
 
+  it('returns kimi guide with official install command', () => {
+    const guide = getEngineSetupGuide('kimi', 'darwin');
+    expect(guide.acpCommand).toBe('kimi acp');
+    expect(guide.checkBinary).toBe('kimi');
+    expect(guide.installable).toBe(true);
+    expect(guide.installCommand).toContain('code.kimi.com/install.sh');
+    expect(guide.docsUrl).toContain('MoonshotAI/kimi-cli');
+  });
+
   it('resolveBinaryPath finds executable in extra path', () => {
     fakeBin = mkdtempSync(join(tmpdir(), 'shepaw-bin-'));
     const script = join(fakeBin, 'fake-agent');

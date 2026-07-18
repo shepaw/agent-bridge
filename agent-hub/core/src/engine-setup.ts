@@ -94,6 +94,7 @@ export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = {
   openclaw: 'npx -y openclaw acp',
   cursor: 'agent acp',
   hermes: 'hermes acp',
+  kimi: 'kimi acp',
 };
 
 const LOCAL_BIN = join(homedir(), '.local', 'bin');
@@ -524,7 +525,52 @@ function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatf
           },
         ],
       };
+    case 'kimi':
+      return buildKimiGuide(platform);
   }
+}
+
+const KIMI_INSTALL_UNIX = 'curl -LsSf https://code.kimi.com/install.sh | bash';
+const KIMI_INSTALL_WIN32 =
+  "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression\"";
+
+function buildKimiGuide(platform: HubPlatform): EngineSetupGuide {
+  const installCommand = platform === 'win32' ? KIMI_INSTALL_WIN32 : KIMI_INSTALL_UNIX;
+  const installStepCommand =
+    platform === 'win32'
+      ? 'Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression'
+      : KIMI_INSTALL_UNIX;
+
+  return {
+    engineId: 'kimi',
+    summary: `Kimi CLI（MoonshotAI）原生支持 ACP；需安装 kimi 命令并完成 login（${hubPlatformLabel(platform)}）。`,
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.kimi,
+    docsUrl: 'https://github.com/MoonshotAI/kimi-cli',
+    checkBinary: 'kimi',
+    installable: true,
+    installCommand,
+    steps: [
+      {
+        title: '安装 Kimi CLI',
+        description:
+          platform === 'win32'
+            ? '在 PowerShell 中运行官方安装脚本（通过 uv 安装 kimi-cli）。'
+            : '运行官方安装脚本（会安装 uv，再通过 uv 安装 kimi-cli）。也可：uv tool install --python 3.13 kimi-cli。',
+        command: installStepCommand,
+      },
+      {
+        title: '完成登录',
+        description:
+          '在终端运行 kimi，进入后执行 /login 完成 OAuth 或 API Key 配置。ACP 模式要求已登录，否则会返回 AUTH_REQUIRED。',
+        command: 'kimi',
+      },
+      {
+        title: '验证 ACP',
+        description: 'Gateway 通过 kimi acp 子进程接入；进程应保持运行（Ctrl+C 退出）。',
+        command: 'kimi acp',
+      },
+    ],
+  };
 }
 
 const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {

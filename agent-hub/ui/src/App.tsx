@@ -12,7 +12,8 @@ import {
   parseInstanceHash,
   type InstanceDetailTab,
 } from './utils/instanceRoute.js';
-import { api } from './api/client.js';
+import { api, getHubAuthToken } from './api/client.js';
+import { HubAuthTokenPanel } from './components/HubAuthTokenPanel.js';
 
 function getInitialInstanceRoute() {
   return parseInstanceHash(location.hash);
@@ -154,6 +155,7 @@ export function App() {
           onTabChange={setSettingsTab}
           focusEngineId={focusEngineId}
           onFocusEngineHandled={() => setFocusEngineId(null)}
+          onAuthTokenSaved={() => void reload()}
         />
       </Layout>
     );
@@ -198,6 +200,17 @@ export function App() {
 
       {restartAllErr && (
         <p style={{ color: '#e74c3c', margin: '0 0 16px', fontSize: 14 }}>{restartAllErr}</p>
+      )}
+
+      {isUnauthorizedError(error) && (
+        <div style={authBanner}>
+          <p style={{ margin: '0 0 12px', color: '#f9e2af', fontSize: 14 }}>
+            Dashboard API 需要鉴权
+            {!getHubAuthToken() ? '（本机尚未配置 Token）' : '（当前 Token 无效）'}。
+            请填写与启动命令中 <code style={inlineCode}>SHEPAW_HUB_TOKEN</code> 相同的值。
+          </p>
+          <HubAuthTokenPanel onSaved={() => void reload()} />
+        </div>
       )}
 
       {/* ── Filters + instance grid ─────────────────────────────── */}
@@ -264,6 +277,11 @@ function Layout({ children, wide }: { children: React.ReactNode; wide?: boolean 
   );
 }
 
+function isUnauthorizedError(error: string | null): boolean {
+  if (!error) return false;
+  return /unauthorized|SHEPAW_HUB_TOKEN/i.test(error);
+}
+
 // ── styles ────────────────────────────────────────────────────────
 
 const layoutStyle: React.CSSProperties = {
@@ -299,6 +317,14 @@ const subtitle: React.CSSProperties = {
   margin: '4px 0 0',
   color: '#a6adc8',
   fontSize: 14,
+};
+
+const authBanner: React.CSSProperties = {
+  background: '#1e1e2e',
+  border: '1px solid #f9e2af',
+  borderRadius: 10,
+  padding: '16px 20px',
+  marginBottom: 20,
 };
 
 const addBtn: React.CSSProperties = {

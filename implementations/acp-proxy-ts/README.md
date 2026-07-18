@@ -50,6 +50,7 @@ Custom engines are stored in `hub.json` under `customEngines` and appear in the 
 | `openclaw`    | `npx openclaw acp` |
 | `cursor`      | `agent acp` |
 | `hermes`      | `hermes acp` |
+| `kimi`        | `kimi acp` |
 
 ## Quick start
 

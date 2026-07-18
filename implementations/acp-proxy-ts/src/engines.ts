@@ -22,7 +22,8 @@ export type BuiltinEngineId =
   | 'opencode'
   | 'openclaw'
   | 'cursor'
-  | 'hermes';
+  | 'hermes'
+  | 'kimi';
 
 /** @deprecated Use BuiltinEngineId — kept for existing imports. */
 export type AcpEngineId = BuiltinEngineId;
@@ -93,6 +94,13 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     command: 'hermes',
     args: ['acp'],
     defaultAgentName: 'Hermes',
+  },
+  kimi: {
+    id: 'kimi',
+    displayName: 'Kimi CLI',
+    command: 'kimi',
+    args: ['acp'],
+    defaultAgentName: 'Kimi CLI',
   },
 };
 

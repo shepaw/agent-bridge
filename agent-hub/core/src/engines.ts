@@ -13,6 +13,7 @@ export const BUILTIN_ENGINE_IDS = [
   'openclaw',
   'cursor',
   'hermes',
+  'kimi',
 ] as const;
 
 export type BuiltinAgentEngine = (typeof BUILTIN_ENGINE_IDS)[number];
@@ -28,6 +29,7 @@ export const BUILTIN_ENGINE_LABELS: Record<BuiltinAgentEngine, string> = {
   openclaw: 'OpenClaw',
   cursor: 'Cursor',
   hermes: 'Hermes',
+  kimi: 'Kimi CLI',
 };
 
 export interface CustomEngineDefinition {

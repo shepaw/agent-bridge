@@ -64,7 +64,7 @@ node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
 ```
 
 Supported `--engine` values: `claude-code`, `codebuddy`, `codex`,
-`opencode`, `openclaw`, `cursor`, `hermes`. See
+`opencode`, `openclaw`, `cursor`, `hermes`, `kimi`. See
 [`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
 
 ### Run multiple agents from one CLI (`shepaw-hub`)

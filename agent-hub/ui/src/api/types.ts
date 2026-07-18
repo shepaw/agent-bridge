@@ -7,7 +7,8 @@ export type AgentEngine =
   | 'opencode'
   | 'openclaw'
   | 'cursor'
-  | 'hermes';
+  | 'hermes'
+  | 'kimi';
 
 export interface TunnelConfig {
   serverUrl: string;
