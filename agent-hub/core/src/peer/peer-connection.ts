@@ -109,6 +109,10 @@ export async function drivePeerConnection(opts: {
     return new Promise<{ id: string; label?: string }>((resolve) => {
       const timer = setTimeout(() => {
         pendingApprovals.delete(req.confirmationId);
+        // Mark the persisted record as resolved (deny) — otherwise a reconnect
+        // revives this card even though the agent already got the denial, and
+        // taps on it fall into the void.
+        markPendingApprovalSubmitted(req.confirmationId, '');
         log(`approval ${req.confirmationId} timed out → deny`);
         resolve({ id: '' }); // fail closed
       }, APPROVAL_TIMEOUT_MS);
@@ -539,6 +543,9 @@ export async function drivePeerConnection(opts: {
       // reconnect.
       for (const [id, resolver] of pendingApprovals) {
         log(`peer disconnect → deny in-flight approval ${id}`);
+        // Also mark the persisted record — the agent has been denied, so this
+        // card must not be re-sent on reconnect (taps on it would be void).
+        try { markPendingApprovalSubmitted(id, ''); } catch { /* ignore */ }
         try { resolver({ id: '' }); } catch { /* ignore */ }
       }
       pendingApprovals.clear();

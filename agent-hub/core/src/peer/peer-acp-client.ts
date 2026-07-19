@@ -22,6 +22,12 @@ import {
 import type { AgentIdentity } from 'shepaw-acp-sdk';
 import type { InstanceConfig } from '../config.js';
 
+/** Keep the hub→proxy WS alive across long approval waits (no traffic otherwise). */
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const HEARTBEAT_ACK_TIMEOUT_MS = 10_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 export interface ApprovalRequest {
   readonly confirmationId: string;
   readonly taskId: string;
@@ -70,6 +76,7 @@ export class PeerAcpClient {
   private closed = false;
   /** Stable session id for this (peer, agent) pair — preserves multi-turn context. */
   private readonly defaultSessionId: string;
+  private heartbeat: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly peerIdentity: AgentIdentity,
@@ -143,52 +150,106 @@ export class PeerAcpClient {
   /**
    * Deliver `agent.submitResponse` to the local ACP agent. Reconnects if the
    * WS dropped mid-turn — a silent no-op here leaves Cursor on [pending]
-   * forever after the user already tapped Allow.
+   * forever after the user already tapped Allow. Retries a few times with a
+   * fresh connection before giving up; callers must treat a `false` return
+   * as "the agent will hang until its own timeout".
    */
   private async submitResponseToAgent(
     taskId: string,
     confirmationId: string,
     selected: { id: string; label?: string },
   ): Promise<boolean> {
-    try {
-      await this.ensureConnected();
-    } catch (err) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await this.ensureConnected();
+      } catch (err) {
+        this.log(
+          `submitResponse ensureConnected failed (attempt ${attempt}/3) task=${taskId} ` +
+          `confirmation=${confirmationId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        this.resetTransport();
+        if (attempt < 3) await sleep(500);
+        continue;
+      }
       this.log(
-        `submitResponse ensureConnected failed task=${taskId} ` +
-        `confirmation=${confirmationId}: ${err instanceof Error ? err.message : String(err)}`,
+        `submitResponse task=${taskId} confirmation=${confirmationId} ` +
+        `selected=${selected.id} label=${selected.label ?? ''}`,
       );
-      return false;
+      const ok = this.send({
+        jsonrpc: '2.0',
+        id: this.rpcId++,
+        method: 'agent.submitResponse',
+        params: {
+          task_id: taskId,
+          response_data: {
+            confirmation_id: confirmationId,
+            selected_action_id: selected.id,
+            ...(selected.label !== undefined && selected.label.length > 0
+              ? { selected_action_label: selected.label }
+              : {}),
+          },
+        },
+      });
+      if (ok) return true;
+      this.log(
+        `submitResponse send failed (attempt ${attempt}/3, ws not open) ` +
+        `task=${taskId} confirmation=${confirmationId}`,
+      );
+      this.resetTransport();
+      if (attempt < 3) await sleep(500);
     }
     this.log(
-      `submitResponse task=${taskId} confirmation=${confirmationId} ` +
-      `selected=${selected.id} label=${selected.label ?? ''}`,
+      `submitResponse FAILED after 3 attempts task=${taskId} confirmation=${confirmationId} ` +
+      `— the agent stays [pending] until its own approval timeout`,
     );
-    const ok = this.send({
-      jsonrpc: '2.0',
-      id: this.rpcId++,
-      method: 'agent.submitResponse',
-      params: {
-        task_id: taskId,
-        response_data: {
-          confirmation_id: confirmationId,
-          selected_action_id: selected.id,
-          ...(selected.label !== undefined && selected.label.length > 0
-            ? { selected_action_label: selected.label }
-            : {}),
-        },
-      },
-    });
-    if (!ok) {
-      this.log(
-        `submitResponse DROPPED (ws not open) task=${taskId} confirmation=${confirmationId}`,
-      );
+    return false;
+  }
+
+  /**
+   * Drop the current transport WITHOUT failing in-flight turns (unlike
+   * onTransportGone). Used between submitResponse retries so the next attempt
+   * reconnects cleanly; the old socket's close event must not trigger failAll.
+   */
+  private resetTransport(): void {
+    this.stopHeartbeat();
+    const ws = this.ws;
+    this.ws = undefined;
+    this.session = undefined;
+    this.connecting = undefined;
+    if (ws !== undefined) {
+      ws.removeAllListeners();
+      try { ws.close(); } catch { /* ignore */ }
     }
-    return ok;
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeat = setInterval(() => {
+      const id = this.rpcId++;
+      // Register a no-op resolver so the pong ack isn't logged as unknown;
+      // expire it if the pong never arrives so pendingRequests can't leak.
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+      }, HEARTBEAT_ACK_TIMEOUT_MS);
+      this.pendingRequests.set(id, () => clearTimeout(timer));
+      if (!this.send({ jsonrpc: '2.0', id, method: 'ping', params: {} })) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(id);
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat !== undefined) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = undefined;
+    }
   }
 
   /** Close the persistent connection and fail all in-flight turns. */
   close(): void {
     this.closed = true;
+    this.stopHeartbeat();
     this.failAll('peer connection closed');
     for (const r of this.pendingRequests.values()) r(undefined);
     this.pendingRequests.clear();
@@ -382,6 +443,7 @@ export class PeerAcpClient {
     ws.on('message', (data) => this.onMessage(data));
     ws.once('close', () => this.onTransportGone());
     ws.once('error', () => this.onTransportGone());
+    this.startHeartbeat();
     this.log(`acp client connected to ${this.instance.id} (${this.instance.port})`);
   }
 
@@ -413,6 +475,17 @@ export class PeerAcpClient {
       // Every notification we route is task-scoped; ignore anything without one.
       if (taskId === undefined) return;
       const turn = this.inflight.get(taskId);
+      if (
+        turn === undefined &&
+        (method === 'ui.actionConfirmation' || method === 'task.completed' || method === 'task.error')
+      ) {
+        // Previously these were dropped silently — an approval request lost
+        // here leaves the agent on [pending] until its own timeout.
+        this.log(
+          `acp notify dropped (unknown task=${taskId}) method=${method} ` +
+          `inflight=[${[...this.inflight.keys()].join(', ')}]`,
+        );
+      }
 
       if (method === 'ui.textContent') {
         const content = (params.content as string | undefined) ?? '';
@@ -444,15 +517,25 @@ export class PeerAcpClient {
               style: typeof a.style === 'string' ? a.style : undefined,
             }))
           : [];
-        const extra = (params.extra as Record<string, unknown> | undefined) ?? {};
+        // The SDK flattens `extra` into params top-level (task-context.ts);
+        // fall back to a nested `extra` object for older senders.
+        const nestedExtra = (params.extra as Record<string, unknown> | undefined) ?? {};
+        const toolKind =
+          typeof params.tool_kind === 'string' ? params.tool_kind
+            : typeof nestedExtra.tool_kind === 'string' ? nestedExtra.tool_kind
+              : undefined;
+        const toolCallId =
+          typeof params.tool_call_id === 'string' ? params.tool_call_id
+            : typeof nestedExtra.tool_call_id === 'string' ? nestedExtra.tool_call_id
+              : undefined;
         void turn.handlers
           .onApproval({
             confirmationId,
             taskId,
             prompt: (params.prompt as string | undefined) ?? '',
             actions,
-            toolKind: typeof extra.tool_kind === 'string' ? extra.tool_kind : undefined,
-            toolCallId: typeof extra.tool_call_id === 'string' ? extra.tool_call_id : undefined,
+            toolKind,
+            toolCallId,
           })
           .then(async (selected) => {
             this.log(
@@ -511,6 +594,7 @@ export class PeerAcpClient {
   }
 
   private onTransportGone(): void {
+    this.stopHeartbeat();
     this.ws = undefined;
     this.session = undefined;
     this.connecting = undefined;

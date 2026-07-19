@@ -238,6 +238,13 @@ export class ACPAgentServer {
 
   private httpServer: HttpServer | undefined;
   private wsServer: WebSocketServer | undefined;
+  /**
+   * Live WS connections. The task/waiter teardown on `close` is global (the
+   * maps are shared across connections), so it must only run when the LAST
+   * connection drops — otherwise one flapping client kills another client's
+   * in-flight approvals and tasks.
+   */
+  private openConnections = 0;
   /** Set when the HTTP server starts listening — used for uptime in /status. */
   private startedAtMs = 0;
   private tunnelConfig: ChannelTunnelConfig | undefined;
@@ -795,6 +802,7 @@ export class ACPAgentServer {
     const sws = ws as ShepawWebSocket;
     // eslint-disable-next-line no-console
     console.log(`[ACP] New WebSocket connection from ${remote}`);
+    this.openConnections += 1;
 
     // v2.1: no token pre-filter. Authorization is by public-key allowlist
     // and happens after the Noise handshake completes (so we learn the peer's
@@ -910,13 +918,19 @@ export class ACPAgentServer {
       } catch {
         /* ignore */
       }
-      for (const ctrl of this.activeTasks.values()) ctrl.abort();
-      this.activeTasks.clear();
-      this.chatQueues.clear();
-      for (const d of this.pendingHubRequests.values()) d.reject(new Error('Connection closed'));
-      this.pendingHubRequests.clear();
-      for (const d of this.pendingResponses.values()) d.reject(new Error('Connection closed'));
-      this.pendingResponses.clear();
+      this.openConnections = Math.max(0, this.openConnections - 1);
+      if (this.openConnections === 0) {
+        // Last connection gone — fail all tasks and pending UI waiters so
+        // nothing leaks. While other connections remain, their tasks and
+        // approval waiters (server-global maps) must stay untouched.
+        for (const ctrl of this.activeTasks.values()) ctrl.abort();
+        this.activeTasks.clear();
+        this.chatQueues.clear();
+        for (const d of this.pendingHubRequests.values()) d.reject(new Error('Connection closed'));
+        this.pendingHubRequests.clear();
+        for (const d of this.pendingResponses.values()) d.reject(new Error('Connection closed'));
+        this.pendingResponses.clear();
+      }
       // eslint-disable-next-line no-console
       console.log('[ACP] WebSocket connection closed');
     });
