@@ -24,7 +24,7 @@ import {
   mergeConfigOptions,
 } from './config-options.js';
 import { log } from './debug.js';
-import { mapSessionUpdate } from './session-mapper.js';
+import { flushAgentMessage, mapSessionUpdate } from './session-mapper.js';
 import {
   attachActiveSession,
   discardLoadReplayUpdates,
@@ -34,6 +34,12 @@ import {
   supportsSessionResume,
 } from './session-lifecycle.js';
 import { filterListedSessions } from './sessions-filter.js';
+import {
+  CURSOR_STALE_AUTH_MESSAGE,
+  CURSOR_STALE_AUTH_RETRIES,
+  isPossibleStaleAuthPrefix,
+  isStaleAuthMessage,
+} from './stale-auth.js';
 import { TerminalHost } from './terminal-host.js';
 import {
   buildActions,
@@ -42,6 +48,10 @@ import {
   resolveSelectedOption,
 } from './permission/format.js';
 import { PermissionPolicy } from './permission/policy.js';
+
+type DrainTurnResult =
+  | { readonly kind: 'ok' }
+  | { readonly kind: 'stale_auth'; readonly text: string };
 
 export interface TurnContext {
   readonly taskCtx: TaskContext;
@@ -487,35 +497,100 @@ export class AcpSubprocess {
       throw new Error('ACP connection not established');
     }
 
-    this.currentTurn = turn;
+    // Cursor ACP may emit stale-auth as assistant text; restart + retry a few
+    // times before surfacing it and ending the turn.
+    for (let retry = 0; ; retry++) {
+      this.currentTurn = turn;
+      try {
+        const result = await this.runPromptTurnOnce(shepawSessionId, prompt, turn, opts);
+        if (result.kind === 'ok') return;
 
-    try {
-      const session = await this.getOrCreateSession(shepawSessionId, opts);
-
-      const promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
-        ? [...prompt]
-        : (prompt as string | acp.ContentBlock);
-      const promptPromise = session.prompt(promptArg);
-      const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
-
-      const abortPromise = new Promise<never>((_, reject) => {
-        if (turn.signal.aborted) {
-          reject(new TaskCancelledError());
+        if (retry >= CURSOR_STALE_AUTH_RETRIES) {
+          log(
+            'cursor stale auth persisted after %d retries; surfacing to user and ending turn',
+            CURSOR_STALE_AUTH_RETRIES,
+          );
+          await this.endShepawSessionAfterStaleAuth(shepawSessionId, opts);
+          await flushAgentMessage(turn.taskCtx, result.text);
+          // Fresh ACP process so the *next* user message can authenticate again.
+          await this.restartUpstreamAgent();
           return;
         }
-        turn.signal.addEventListener(
-          'abort',
-          () => {
-            void this.cancelSession(session.sessionId);
-            reject(new TaskCancelledError());
-          },
-          { once: true },
-        );
-      });
 
-      await Promise.race([Promise.all([promptPromise, updatesLoop]), abortPromise]);
-    } finally {
-      this.currentTurn = undefined;
+        log(
+          'cursor stale auth detected (retry %d/%d); restarting ACP subprocess',
+          retry + 1,
+          CURSOR_STALE_AUTH_RETRIES,
+        );
+        this.forgetShepawSession(shepawSessionId, opts);
+        await this.restartUpstreamAgent();
+      } finally {
+        this.currentTurn = undefined;
+      }
+    }
+  }
+
+  private async runPromptTurnOnce(
+    shepawSessionId: string,
+    prompt: string | acp.ContentBlock | ReadonlyArray<acp.ContentBlock>,
+    turn: TurnContext,
+    opts: RunPromptTurnOptions,
+  ): Promise<DrainTurnResult> {
+    if (this.connection === undefined) {
+      throw new Error('ACP connection not established');
+    }
+
+    const session = await this.getOrCreateSession(shepawSessionId, opts);
+
+    const promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
+      ? [...prompt]
+      : (prompt as string | acp.ContentBlock);
+    const promptPromise = session.prompt(promptArg);
+    const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
+
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (turn.signal.aborted) {
+        reject(new TaskCancelledError());
+        return;
+      }
+      turn.signal.addEventListener(
+        'abort',
+        () => {
+          void this.cancelSession(session.sessionId);
+          reject(new TaskCancelledError());
+        },
+        { once: true },
+      );
+    });
+
+    const run = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
+    return await Promise.race([run, abortPromise]);
+  }
+
+  /** Drop live + persisted mapping so the next turn opens a fresh ACP session. */
+  private forgetShepawSession(shepawSessionId: string, opts: RunPromptTurnOptions): void {
+    const session = this.sessions.get(shepawSessionId);
+    if (session !== undefined) {
+      session.dispose();
+      this.sessions.delete(shepawSessionId);
+    }
+    this.configByShepawSession.delete(shepawSessionId);
+    opts.onRestoreFailed?.(shepawSessionId);
+  }
+
+  /**
+   * After exhausting stale-auth retries: clear mapping and drop the upstream
+   * session so this Shepaw conversation does not keep reusing a dead ACP id.
+   */
+  private async endShepawSessionAfterStaleAuth(
+    shepawSessionId: string,
+    opts: RunPromptTurnOptions,
+  ): Promise<void> {
+    const session = this.sessions.get(shepawSessionId);
+    const upstreamId = session?.sessionId;
+    this.forgetShepawSession(shepawSessionId, opts);
+    if (upstreamId !== undefined) {
+      await this.tryDeleteUpstreamSession(upstreamId);
     }
   }
 
@@ -607,7 +682,7 @@ export class AcpSubprocess {
         shepawSessionId,
         storedId,
       );
-      await this.restartUpstreamAfterHungRestore();
+      await this.restartUpstreamAgent();
       return undefined;
     }
     return result;
@@ -664,8 +739,8 @@ export class AcpSubprocess {
     return undefined;
   }
 
-  /** Kill and respawn the upstream agent after a hung session/load left the pipe stuck. */
-  private async restartUpstreamAfterHungRestore(): Promise<void> {
+  /** Kill and respawn the upstream agent (hung restore or Cursor stale auth). */
+  private async restartUpstreamAgent(): Promise<void> {
     this.disposeSessions();
     try {
       this.connection?.close();
@@ -710,7 +785,12 @@ export class AcpSubprocess {
     session: acp.ActiveSession,
     turn: TurnContext,
     shepawSessionId: string,
-  ): Promise<void> {
+  ): Promise<DrainTurnResult> {
+    // Hold agent_message_chunk while it still looks like Cursor's stale-auth
+    // reply so we can restart without leaking "Please sign in…" to the UI.
+    let agentTextBuffer = '';
+    let agentStreaming = false;
+
     for (;;) {
       if (turn.signal.aborted) {
         throw new TaskCancelledError();
@@ -719,7 +799,18 @@ export class AcpSubprocess {
       const msg = await session.nextUpdate();
       if (msg.kind === 'stop') {
         log('prompt stopped: %s', msg.stopReason);
-        return;
+        if (!agentStreaming && isStaleAuthMessage(agentTextBuffer)) {
+          return {
+            kind: 'stale_auth',
+            text: agentTextBuffer.trim().length > 0
+              ? agentTextBuffer.trim()
+              : CURSOR_STALE_AUTH_MESSAGE,
+          };
+        }
+        if (!agentStreaming && agentTextBuffer.length > 0) {
+          await flushAgentMessage(turn.taskCtx, agentTextBuffer);
+        }
+        return { kind: 'ok' };
       }
 
       const update = msg.update;
@@ -727,6 +818,23 @@ export class AcpSubprocess {
         this.cachedCommands = update.availableCommands ?? [];
       } else if (update.sessionUpdate === 'config_option_update') {
         this.rememberConfigOptions(shepawSessionId, update.configOptions);
+      }
+
+      if (update.sessionUpdate === 'agent_message_chunk') {
+        const content = update.content;
+        if (content.type === 'text' && content.text.length > 0) {
+          if (agentStreaming) {
+            await flushAgentMessage(turn.taskCtx, content.text);
+          } else {
+            agentTextBuffer += content.text;
+            if (!isPossibleStaleAuthPrefix(agentTextBuffer)) {
+              await flushAgentMessage(turn.taskCtx, agentTextBuffer);
+              agentTextBuffer = '';
+              agentStreaming = true;
+            }
+          }
+        }
+        continue;
       }
 
       await mapSessionUpdate(update, turn.taskCtx);

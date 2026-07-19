@@ -8,6 +8,19 @@ import type { TaskContext } from 'shepaw-acp-sdk';
 import { log } from './debug.js';
 import { extractCommand, extractPaths } from './permission/format.js';
 
+/** Stream a final (or buffered) agent answer chunk to the app. */
+export async function flushAgentMessage(ctx: TaskContext, text: string): Promise<void> {
+  if (text.length === 0) return;
+  // End any collapsible thinking/tool section so the answer stays visible
+  // while progress is folded into metadata.progress_content on the client.
+  await ctx.sendMessageMetadata({
+    collapsible: false,
+    collapsibleTitle: '',
+    autoCollapse: false,
+  });
+  await ctx.sendText(text);
+}
+
 export async function mapSessionUpdate(
   update: acp.SessionUpdate,
   ctx: TaskContext,
@@ -16,14 +29,7 @@ export async function mapSessionUpdate(
     case 'agent_message_chunk': {
       const content = update.content;
       if (content.type === 'text' && content.text.length > 0) {
-        // End any collapsible thinking/tool section so the answer stays visible
-        // while progress is folded into metadata.progress_content on the client.
-        await ctx.sendMessageMetadata({
-          collapsible: false,
-          collapsibleTitle: '',
-          autoCollapse: false,
-        });
-        await ctx.sendText(content.text);
+        await flushAgentMessage(ctx, content.text);
       }
       break;
     }
