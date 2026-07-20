@@ -41,7 +41,10 @@ export interface AcpChatHandlers {
   onChunk: (content: string) => void;
   onDone: (fullContent: string, metadata?: Record<string, unknown>) => void;
   onError: (message: string) => void;
-  onApproval: (req: ApprovalRequest) => Promise<{ id: string; label?: string }>;
+  /** Verdict of a phone approval. `migrated` means the peer connection flapped
+   * mid-approval — the hub keeps the record pending and delivers the phone's
+   * tap via the deferred relay, so this turn must not relay anything itself. */
+  onApproval: (req: ApprovalRequest) => Promise<{ id: string; label?: string; migrated?: boolean }>;
   /** Relays `ui.messageMetadata` (collapsible thinking/tool sections). */
   onMetadata?: (metadata: Record<string, unknown>) => void;
 }
@@ -77,6 +80,12 @@ export class PeerAcpClient {
   /** Stable session id for this (peer, agent) pair — preserves multi-turn context. */
   private readonly defaultSessionId: string;
   private heartbeat: NodeJS.Timeout | undefined;
+
+  /** Whether any chat turn is still running — the hub's idle reaper checks
+   * this before closing a disconnected peer's clients. */
+  get hasInflightTurns(): boolean {
+    return this.inflight.size > 0;
+  }
 
   constructor(
     private readonly peerIdentity: AgentIdentity,
@@ -160,6 +169,16 @@ export class PeerAcpClient {
     selected: { id: string; label?: string },
   ): Promise<boolean> {
     for (let attempt = 1; attempt <= 3; attempt++) {
+      // Permanently closed (turn error / teardown) — retrying a dead client is
+      // pointless: ensureConnected throws 'client closed' every time, and the
+      // agent never gets the verdict. Fail fast; the deferred relay on a live
+      // client owns recovery.
+      if (this.closed) {
+        this.log(
+          `submitResponse skipped (client closed) task=${taskId} confirmation=${confirmationId}`,
+        );
+        return false;
+      }
       try {
         await this.ensureConnected();
       } catch (err) {
@@ -542,6 +561,16 @@ export class PeerAcpClient {
               `ui.actionConfirmation resolved task=${taskId} confirmation=${confirmationId} ` +
               `selected=${selected.id ?? ''} label=${selected.label ?? ''}`,
             );
+            if (selected.migrated === true) {
+              // Peer WS flapped mid-approval — the hub kept the record pending;
+              // the phone's tap will arrive via the deferred relay on a live
+              // client. Sending a deny from here would be wrong, and this old
+              // turn only needs its bookkeeping unwound (see .finally).
+              this.log(
+                `approval ${confirmationId} migrated to deferred relay (peer reconnect)`,
+              );
+              return;
+            }
             await this.submitResponseToAgent(taskId, confirmationId, selected);
           })
           .catch(async () => {

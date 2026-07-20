@@ -41,6 +41,73 @@ interface InflightChat {
   shouldCancel: boolean;
 }
 
+/** Verdict of a phone approval. `migrated` = peer WS flapped mid-approval; the
+ * hub keeps the record pending and the verdict will arrive via the deferred
+ * relay on a later connection — the (old-connection) turn must NOT relay
+ * anything itself. */
+interface ApprovalVerdict {
+  id: string;
+  label?: string;
+  migrated?: boolean;
+}
+
+/**
+ * Peer-scoped state shared across reconnects. A peer WS flap (phone network
+ * switch, desktop app resume) must not kill agent work: the hub→proxy acp
+ * clients live here rather than in the per-connection closure, so a reconnect
+ * reuses them and in-flight agent turns keep running. Closing the last acp WS
+ * would make the proxy reject every pending confirmation waiter ('Connection
+ * closed') and abort the agent's tasks — that is what stranded agents on
+ * [pending] after a 200ms peer flap.
+ */
+interface PeerSessionState {
+  acpClients: Map<string, PeerAcpClient>;
+  /** Number of peer connections currently bound to this peer (drive enter/exit). */
+  liveConnections: number;
+}
+const peerSessions = new Map<string, PeerSessionState>();
+
+function getPeerSession(peerId: string): PeerSessionState {
+  let s = peerSessions.get(peerId);
+  if (s === undefined) {
+    s = { acpClients: new Map(), liveConnections: 0 };
+    peerSessions.set(peerId, s);
+  }
+  return s;
+}
+
+/**
+ * Close acp clients of peers that have no live connection and no in-flight
+ * turns. Clients whose turns drained after a disconnect would otherwise linger
+ * (one WS + heartbeat per agent) for the lifetime of the daemon.
+ * Exported for tests.
+ */
+export function reapIdlePeerSessions(): void {
+  for (const [peerId, s] of peerSessions) {
+    if (s.liveConnections > 0) continue;
+    for (const [agentId, client] of s.acpClients) {
+      if (client.hasInflightTurns) continue;
+      try { client.close(); } catch { /* ignore */ }
+      s.acpClients.delete(agentId);
+    }
+    if (s.acpClients.size === 0) peerSessions.delete(peerId);
+  }
+}
+
+const reapTimer = setInterval(reapIdlePeerSessions, 60_000);
+reapTimer.unref();
+
+/** Test-only: close every peer session and clear the registry. */
+export function resetPeerSessionsForTest(): void {
+  for (const [, s] of peerSessions) {
+    for (const c of s.acpClients.values()) {
+      try { c.close(); } catch { /* ignore */ }
+    }
+    s.acpClients.clear();
+  }
+  peerSessions.clear();
+}
+
 /**
  * Drive one peer connection. Returns when the WS closes. The NoiseSession
  * must already be `ready` (handshake complete).
@@ -55,12 +122,18 @@ export async function drivePeerConnection(opts: {
   const { ws, session, peerIdentity, peerId, log } = opts;
   const inflight = new Map<string, InflightChat>();
   // Persistent ACP clients per agent id — one WS + session per (peer, agent),
-  // reused across chat turns so connectedClients / acpSessionCount stay flat
-  // and multi-turn context is preserved.
-  const acpClients = new Map<string, PeerAcpClient>();
-  // Pending tool-call approvals: confirmationId → resolver. The phone replies
-  // with agent_approval_resp; on disconnect/timeout we resolve '' (deny).
-  const pendingApprovals = new Map<string, (selected: { id: string; label?: string }) => void>();
+  // reused across chat turns AND across peer reconnects (see peerSessions), so
+  // a peer flap does not abort in-flight agent turns.
+  const peerSession = getPeerSession(peerId);
+  peerSession.liveConnections += 1;
+  const acpClients = peerSession.acpClients;
+  // Pending tool-call approvals: confirmationId → waiter. The phone replies
+  // with agent_approval_resp; a peer disconnect MIGRATES the waiter (kept
+  // pending for reconnect) — only the 20-min timeout resolves with deny.
+  const pendingApprovals = new Map<string, {
+    resolve: (selected: ApprovalVerdict) => void;
+    timer: NodeJS.Timeout;
+  }>();
   // Replies that arrived before requestApproval registered its resolver
   // (loopback race). Consumed when the matching approval_req is set up.
   const earlyApprovalResps = new Map<string, { id: string; label?: string }>();
@@ -96,7 +169,7 @@ export async function drivePeerConnection(opts: {
       actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
       toolKind?: string; toolCallId?: string;
     },
-  ): Promise<{ id: string; label?: string }> => {
+  ): Promise<ApprovalVerdict> => {
     const record = pendingApprovalFromRequest(peerId, chatRequestId, agentId, req);
     try {
       savePendingApproval(record);
@@ -106,7 +179,7 @@ export async function drivePeerConnection(opts: {
     // Register the resolver BEFORE sending to the phone. On loopback / fast
     // auto-approve paths the reply can arrive in the same tick; if we send
     // first, approval_resp hits NO MATCH and Cursor stays on [pending].
-    return new Promise<{ id: string; label?: string }>((resolve) => {
+    return new Promise<ApprovalVerdict>((resolve) => {
       const timer = setTimeout(() => {
         pendingApprovals.delete(req.confirmationId);
         // Mark the persisted record as resolved (deny) — otherwise a reconnect
@@ -116,9 +189,12 @@ export async function drivePeerConnection(opts: {
         log(`approval ${req.confirmationId} timed out → deny`);
         resolve({ id: '' }); // fail closed
       }, APPROVAL_TIMEOUT_MS);
-      pendingApprovals.set(req.confirmationId, (selected) => {
-        clearTimeout(timer);
-        resolve(selected);
+      pendingApprovals.set(req.confirmationId, {
+        timer,
+        resolve: (selected) => {
+          clearTimeout(timer);
+          resolve(selected);
+        },
       });
       // Consume a reply that raced in before the resolver was registered.
       const early = earlyApprovalResps.get(req.confirmationId);
@@ -478,15 +554,15 @@ export async function drivePeerConnection(opts: {
           const sel = obj.selected_action_id as string | undefined;
           const label = obj.selected_action_label as string | undefined;
           if (aid !== undefined) {
-            const resolver = pendingApprovals.get(aid);
-            if (resolver !== undefined) {
+            const waiter = pendingApprovals.get(aid);
+            if (waiter !== undefined) {
               pendingApprovals.delete(aid);
               markPendingApprovalSubmitted(aid, sel ?? '', label);
               log(
                 `approval_resp confirmation=${aid} → ${sel && sel.length > 0 ? 'allow' : 'deny'} ` +
                 `action=${sel ?? ''} label=${label ?? ''} remaining=${pendingApprovals.size}`,
               );
-              resolver({ id: sel ?? '', label });
+              waiter.resolve({ id: sel ?? '', label });
             } else {
               // Buffer briefly in case the reply raced ahead of requestApproval's
               // resolver registration; otherwise fall through to deferred relay.
@@ -537,24 +613,29 @@ export async function drivePeerConnection(opts: {
     const teardown = (): void => {
       closed = true;
       clearInterval(heartbeat);
-      // Fail-closed: resolve every in-memory waiter as deny so PeerAcpClient
-      // can unblock Cursor instead of hanging until APPROVAL_TIMEOUT_MS.
-      // Persisted records still survive for deferred client responses after
-      // reconnect.
-      for (const [id, resolver] of pendingApprovals) {
-        log(`peer disconnect → deny in-flight approval ${id}`);
-        // Also mark the persisted record — the agent has been denied, so this
-        // card must not be re-sent on reconnect (taps on it would be void).
-        try { markPendingApprovalSubmitted(id, ''); } catch { /* ignore */ }
-        try { resolver({ id: '' }); } catch { /* ignore */ }
+      peerSession.liveConnections = Math.max(0, peerSession.liveConnections - 1);
+      // A peer WS flap must NOT kill agent work. The previous behaviour —
+      // resolve every waiter with deny + mark the record submitted + close all
+      // acp clients — destroyed every recovery path at once: late taps hit
+      // NO MATCH / deferred miss, the deny relay always failed on the
+      // just-closed client, and the proxy aborted the agent's tasks when its
+      // last hub WS went away.
+      // Instead, MIGRATE in-memory waiters: resolve with {migrated} so turn
+      // bookkeeping unwinds without sending a verdict; the persisted record
+      // stays 'pending' so a reconnect re-sends the card and the late tap is
+      // delivered via the deferred relay on the still-open acp client. The
+      // acp clients themselves survive (peer-scoped) — the idle reaper closes
+      // them once their turns drain. Fail-closed backstop stays with the
+      // 20-min proxy confirmation timeout + record expiry.
+      for (const [id, waiter] of pendingApprovals) {
+        log(`peer disconnect → migrate approval ${id} (kept pending)`);
+        clearTimeout(waiter.timer);
+        try { waiter.resolve({ id: '', migrated: true }); } catch { /* ignore */ }
       }
       pendingApprovals.clear();
-      earlyApprovalResps.clear();
-      // Close all persistent ACP clients for this peer.
-      for (const c of acpClients.values()) {
-        try { c.close(); } catch { /* ignore */ }
-      }
-      acpClients.clear();
+      // earlyApprovalResps intentionally NOT cleared: its 250ms timers fire
+      // after teardown and route through the deferred relay (shared acp client
+      // is still open), so a verdict that raced the flap is still delivered.
       resolve();
     };
     ws.once('close', () => { log(`peer ${peerId} disconnected`); teardown(); });
