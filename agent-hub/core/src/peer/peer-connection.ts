@@ -8,6 +8,7 @@
  */
 
 import { WebSocket } from 'ws';
+import { randomUUID } from 'node:crypto';
 import { decodeFrame, encodeFrame, NoiseSession, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { getInstance, loadOrCreateHubConfig } from '../config.js';
@@ -36,10 +37,11 @@ const LIVENESS_TIMEOUT_MS = 120_000;
 // In-memory wait must match Cursor's waitForResponse (20 min), not the 24h
 // persistence TTL. A lost verdict otherwise leaves the turn hung for a day.
 const APPROVAL_TIMEOUT_MS = 20 * 60 * 1000;
-
-interface InflightChat {
-  shouldCancel: boolean;
-}
+// Terminal turn results (done/error) stay replayable this long. Aligned with
+// the app's approvalWaitHardCap (25 min): a phone that flapped right as the
+// turn ended can still resume and collect the result instead of a false
+// 'lost' (which would fail an already-computed turn).
+const TURN_RESULT_TTL_MS = 25 * 60 * 1000;
 
 /** Verdict of a phone approval. `migrated` = peer WS flapped mid-approval; the
  * hub keeps the record pending and the verdict will arrive via the deferred
@@ -52,6 +54,44 @@ interface ApprovalVerdict {
 }
 
 /**
+ * Peer-level turn registry entry — survives connection teardown. This is what
+ * makes turn resume possible: the app's request_id ↔ ACP task_id mapping,
+ * the full accumulated stream (resume replays the missing suffix), and the
+ * terminal result (done/error) buffered for replay while the peer is away.
+ */
+interface TurnEntry {
+  agentId: string;
+  taskId: string;
+  status: 'streaming' | 'done' | 'error';
+  /** Mirrors the chunk stream sent to the phone (UTF-16 code units, like JS/Dart String.length). */
+  accumulated: string;
+  done?: { content: string; metadata?: Record<string, unknown> };
+  error?: string;
+  /** Last ui.messageMetadata seen — resume re-sends it so the app's
+   * StreamContentSplitter diversion state survives the flap. */
+  lastMetadata?: Record<string, unknown>;
+  /** When the turn reached a terminal state — TTL base for the reaper. */
+  terminalAt?: number;
+}
+
+/** One live connection's routing endpoints. Turn output and approval cards
+ * always go to the TOP of the stack (the newest connection); teardown splices
+ * its own entry out, so an older connection takes over again (glare-safe). */
+interface LiveRoute {
+  token: object;
+  send: (obj: Record<string, unknown>) => void;
+  approvalHandler: (
+    requestId: string,
+    agentId: string,
+    req: {
+      confirmationId: string; taskId: string; prompt: string;
+      actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
+      toolKind?: string; toolCallId?: string;
+    },
+  ) => Promise<ApprovalVerdict>;
+}
+
+/**
  * Peer-scoped state shared across reconnects. A peer WS flap (phone network
  * switch, desktop app resume) must not kill agent work: the hub→proxy acp
  * clients live here rather than in the per-connection closure, so a reconnect
@@ -60,37 +100,70 @@ interface ApprovalVerdict {
  * closed') and abort the agent's tasks — that is what stranded agents on
  * [pending] after a 200ms peer flap.
  */
-interface PeerSessionState {
+export interface PeerSessionState {
   acpClients: Map<string, PeerAcpClient>;
   /** Number of peer connections currently bound to this peer (drive enter/exit). */
   liveConnections: number;
+  /** request_id → turn registry (see TurnEntry). */
+  turns: Map<string, TurnEntry>;
+  /** Live connection route stack — top = newest. */
+  liveRoutes: LiveRoute[];
+  /** Approvals raised while NO connection was live. The card is persisted and
+   * re-sent on reconnect; the verdict comes back through the deferred relay,
+   * which resolves the parked waiter with {migrated:true}. */
+  detachedApprovals: Map<string, {
+    resolve: (selected: ApprovalVerdict) => void;
+    timer: NodeJS.Timeout;
+  }>;
 }
 const peerSessions = new Map<string, PeerSessionState>();
 
 function getPeerSession(peerId: string): PeerSessionState {
   let s = peerSessions.get(peerId);
   if (s === undefined) {
-    s = { acpClients: new Map(), liveConnections: 0 };
+    s = {
+      acpClients: new Map(),
+      liveConnections: 0,
+      turns: new Map(),
+      liveRoutes: [],
+      detachedApprovals: new Map(),
+    };
     peerSessions.set(peerId, s);
   }
   return s;
 }
 
+/** Route one frame to the peer's current live connection. No live connection
+ * → silently dropped: chunks/metadata are covered by TurnEntry.accumulated /
+ * lastMetadata and replayed on resume; done/error are buffered in the entry. */
+function routeToPeer(peerSession: PeerSessionState, obj: Record<string, unknown>): void {
+  peerSession.liveRoutes.at(-1)?.send(obj);
+}
+
 /**
  * Close acp clients of peers that have no live connection and no in-flight
- * turns. Clients whose turns drained after a disconnect would otherwise linger
- * (one WS + heartbeat per agent) for the lifetime of the daemon.
+ * turns, and expire buffered terminal turn results. Clients whose turns
+ * drained after a disconnect would otherwise linger (one WS + heartbeat per
+ * agent) for the lifetime of the daemon.
  * Exported for tests.
  */
 export function reapIdlePeerSessions(): void {
+  const now = Date.now();
   for (const [peerId, s] of peerSessions) {
+    for (const [rid, entry] of s.turns) {
+      if (entry.terminalAt !== undefined && now - entry.terminalAt > TURN_RESULT_TTL_MS) {
+        s.turns.delete(rid);
+      }
+    }
     if (s.liveConnections > 0) continue;
     for (const [agentId, client] of s.acpClients) {
       if (client.hasInflightTurns) continue;
       try { client.close(); } catch { /* ignore */ }
       s.acpClients.delete(agentId);
     }
-    if (s.acpClients.size === 0) peerSessions.delete(peerId);
+    if (s.acpClients.size === 0 && s.turns.size === 0 && s.detachedApprovals.size === 0) {
+      peerSessions.delete(peerId);
+    }
   }
 }
 
@@ -104,8 +177,20 @@ export function resetPeerSessionsForTest(): void {
       try { c.close(); } catch { /* ignore */ }
     }
     s.acpClients.clear();
+    s.turns.clear();
+    for (const parked of s.detachedApprovals.values()) {
+      clearTimeout(parked.timer);
+    }
+    s.detachedApprovals.clear();
+    s.liveRoutes.length = 0;
+    s.liveConnections = 0;
   }
   peerSessions.clear();
+}
+
+/** Test-only: direct registry access for white-box assertions (TTL sweeps etc.). */
+export function getPeerSessionsForTest(): Map<string, PeerSessionState> {
+  return peerSessions;
 }
 
 /**
@@ -120,7 +205,6 @@ export async function drivePeerConnection(opts: {
   log: (line: string) => void;
 }): Promise<void> {
   const { ws, session, peerIdentity, peerId, log } = opts;
-  const inflight = new Map<string, InflightChat>();
   // Persistent ACP clients per agent id — one WS + session per (peer, agent),
   // reused across chat turns AND across peer reconnects (see peerSessions), so
   // a peer flap does not abort in-flight agent turns.
@@ -227,6 +311,52 @@ export async function drivePeerConnection(opts: {
     });
   };
 
+  /**
+   * Approval raised while NO peer connection is live (peer flap mid-turn).
+   * Registering the waiter on a dead connection's map is fatal: the card can
+   * never be sent, and its 20-min timeout eventually relays a spurious DENY
+   * even if the phone already allowed via the re-sent card (deferred relay).
+   * Instead: persist the record (resendPendingApprovalsForPeer replays the
+   * card on reconnect), park the waiter peer-level, and let the deferred
+   * relay resolve it with {migrated:true} — the turn's bookkeeping unwinds
+   * without relaying anything itself. 20-min timeout = fail-closed backstop.
+   */
+  const detachedApproval = (
+    chatRequestId: string,
+    agentId: string,
+    req: {
+      confirmationId: string; taskId: string; prompt: string;
+      actions: ReadonlyArray<{ id: string; label?: string; style?: string }>;
+      toolKind?: string; toolCallId?: string;
+    },
+  ): Promise<ApprovalVerdict> => {
+    const record = pendingApprovalFromRequest(peerId, chatRequestId, agentId, req);
+    try {
+      savePendingApproval(record);
+    } catch (err) {
+      log(`failed to persist pending approval ${req.confirmationId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    log(
+      `detached approval parked confirmation=${req.confirmationId} chatReq=${chatRequestId} ` +
+      `task=${req.taskId} (no live connection — card replays on reconnect)`,
+    );
+    return new Promise<ApprovalVerdict>((resolve) => {
+      const timer = setTimeout(() => {
+        peerSession.detachedApprovals.delete(req.confirmationId);
+        markPendingApprovalSubmitted(req.confirmationId, '');
+        log(`detached approval ${req.confirmationId} timed out → deny`);
+        resolve({ id: '' }); // fail closed
+      }, APPROVAL_TIMEOUT_MS);
+      peerSession.detachedApprovals.set(req.confirmationId, {
+        timer,
+        resolve: (selected) => {
+          clearTimeout(timer);
+          resolve(selected);
+        },
+      });
+    });
+  };
+
   const handleDeferredApprovalResp = async (
     approvalId: string,
     selectedActionId: string,
@@ -256,6 +386,16 @@ export async function drivePeerConnection(opts: {
     if (ok) {
       markPendingApprovalSubmitted(approvalId, selectedActionId, selectedActionLabel);
       log(`approval_resp deferred relayed confirmation=${approvalId}`);
+      // Wake a parked (detached) waiter, if any — the verdict is delivered,
+      // the turn only needs its bookkeeping unwound ({migrated} skips a
+      // duplicate submitResponse).
+      const parked = peerSession.detachedApprovals.get(approvalId);
+      if (parked !== undefined) {
+        clearTimeout(parked.timer);
+        peerSession.detachedApprovals.delete(approvalId);
+        parked.resolve({ id: selectedActionId, label: selectedActionLabel, migrated: true });
+        log(`detached approval resolved confirmation=${approvalId} action=${selectedActionId}`);
+      }
     }
   };
 
@@ -280,6 +420,16 @@ export async function drivePeerConnection(opts: {
 
   expireStalePendingApprovals();
   resendPendingApprovalsForPeer();
+
+  // Register this connection as the peer's live route — turn output and
+  // approval cards always go to the stack top (newest connection). Teardown
+  // splices this entry out by token (glare-safe).
+  const connToken = {};
+  peerSession.liveRoutes.push({
+    token: connToken,
+    send,
+    approvalHandler: (requestId, agentId, a) => requestApproval(requestId, agentId, a),
+  });
 
   /** App requests the slash-command palette for an agent. */
   const handleAgentCommandsReq = async (params: Record<string, unknown>): Promise<void> => {
@@ -375,8 +525,13 @@ export async function drivePeerConnection(opts: {
       send({ type: 'agent_error', request_id: requestId ?? '', message: 'invalid agent_chat params' });
       return;
     }
-    const state: InflightChat = { shouldCancel: false };
-    inflight.set(requestId, state);
+    if (peerSession.turns.has(requestId)) {
+      // A retried agent_chat with a live request_id must not start a second
+      // ACP turn — the original keeps running and stays resumable.
+      log(`agent_chat duplicate request_id=${requestId} — rejected`);
+      send({ type: 'agent_error', request_id: requestId, message: 'duplicate request_id' });
+      return;
+    }
     const sessionHint = typeof params.session_id === 'string' && params.session_id.length > 0
       ? params.session_id.slice(0, 8)
       : '(default)';
@@ -387,9 +542,29 @@ export async function drivePeerConnection(opts: {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       send({ type: 'agent_error', request_id: requestId, message: msg });
-      inflight.delete(requestId);
       return;
     }
+    // Register the turn in the peer-level registry BEFORE starting it: output
+    // routes through liveRoutes to the current live connection, so a flap
+    // neither loses the stream (accumulated replays on resume) nor the result
+    // (done/error buffered with TTL).
+    const taskId = randomUUID();
+    const entry: TurnEntry = { agentId, taskId, status: 'streaming', accumulated: '' };
+    peerSession.turns.set(requestId, entry);
+    const finishDone = (content: string, metadata?: Record<string, unknown>): void => {
+      entry.status = 'done';
+      entry.done = { content, metadata };
+      entry.terminalAt = Date.now();
+      log(`agent_done req=${requestId}`);
+      routeToPeer(peerSession, { type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) });
+    };
+    const finishError = (msg: string): void => {
+      entry.status = 'error';
+      entry.error = msg;
+      entry.terminalAt = Date.now();
+      log(`agent_error req=${requestId}: ${msg}`);
+      routeToPeer(peerSession, { type: 'agent_error', request_id: requestId, message: msg });
+    };
     try {
       const refs = normalizePeerAttachmentRefs(params.attachments);
       const attachments = resolveAttachmentsForAcp(agentId, refs, storedFiles);
@@ -397,15 +572,29 @@ export async function drivePeerConnection(opts: {
         {
           message,
           sessionId: params.session_id as string | undefined,
-          shouldCancel: () => state.shouldCancel,
+          taskId,
           attachments,
         },
         {
-          onChunk: (content) => send({ type: 'agent_chunk', request_id: requestId, content }),
-          onMetadata: (metadata) => send({ type: 'agent_metadata', request_id: requestId, metadata }),
-          onDone: (content, metadata) => { log(`agent_done req=${requestId}`); send({ type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) }); },
-          onError: (msg) => { log(`agent_error req=${requestId}: ${msg}`); send({ type: 'agent_error', request_id: requestId, message: msg }); },
-          onApproval: (a) => requestApproval(requestId, agentId, a),
+          onChunk: (content) => {
+            entry.accumulated += content;
+            routeToPeer(peerSession, { type: 'agent_chunk', request_id: requestId, content });
+          },
+          onMetadata: (metadata) => {
+            entry.lastMetadata = metadata;
+            routeToPeer(peerSession, { type: 'agent_metadata', request_id: requestId, metadata });
+          },
+          onDone: finishDone,
+          onError: finishError,
+          // Approvals go to the current live connection; with none (peer away),
+          // park them — a dead connection's waiter would eventually relay a
+          // spurious deny (E1).
+          onApproval: (a) => {
+            const live = peerSession.liveRoutes.at(-1);
+            return live !== undefined
+              ? live.approvalHandler(requestId, agentId, a)
+              : detachedApproval(requestId, agentId, a);
+          },
         },
       );
     } catch (err) {
@@ -414,10 +603,62 @@ export async function drivePeerConnection(opts: {
       // Connection/handshake failure — drop the client so the next chat retries.
       acpClients.delete(agentId);
       try { client.close(); } catch { /* ignore */ }
-      send({ type: 'agent_error', request_id: requestId, message: msg });
-    } finally {
-      inflight.delete(requestId);
+      finishError(msg);
     }
+  };
+
+  /**
+   * Resume a turn after a reconnect. MUST stay fully synchronous (no await):
+   * the single-threaded interleaving guarantee is what prevents chunk/done
+   * from racing the response. Delta semantics: accumulated is a UTF-16 code
+   * unit stream byte-aligned with the app's received chunks, so
+   * `slice(known_content_length)` is exactly what the phone missed. The app
+   * additionally drop-prefixes against late live chunks, making duplicate
+   * resume requests idempotent.
+   */
+  const handleTurnResumeReq = (requestId: string, knownContentLength: number): void => {
+    const entry = peerSession.turns.get(requestId);
+    if (entry === undefined) {
+      log(`turn resume req=${requestId} → lost (unknown/expired)`);
+      send({ type: 'agent_turn_resume_resp', request_id: requestId, status: 'lost', message: '对端任务已结束或丢失（hub 重启或已过期）' });
+      return;
+    }
+    const base = Math.max(0, Math.min(knownContentLength, entry.accumulated.length));
+    if (base !== knownContentLength) {
+      log(`turn resume req=${requestId} known=${knownContentLength} out of range — clamped to ${base}`);
+    }
+    const delta = entry.accumulated.slice(base);
+    if (entry.status === 'streaming') {
+      log(`turn resume req=${requestId} → streaming, replaying ${delta.length} units`);
+      send({
+        type: 'agent_turn_resume_resp',
+        request_id: requestId,
+        status: 'streaming',
+        delta,
+        ...(entry.lastMetadata !== undefined ? { stream_metadata: entry.lastMetadata } : {}),
+      });
+      return;
+    }
+    if (entry.status === 'done') {
+      log(`turn resume req=${requestId} → done, replaying ${delta.length} units + result`);
+      send({
+        type: 'agent_turn_resume_resp',
+        request_id: requestId,
+        status: 'done',
+        delta,
+        content: entry.done!.content,
+        ...(entry.done!.metadata !== undefined ? { metadata: entry.done!.metadata } : {}),
+      });
+      return;
+    }
+    log(`turn resume req=${requestId} → error, replaying ${delta.length} units + error`);
+    send({
+      type: 'agent_turn_resume_resp',
+      request_id: requestId,
+      status: 'error',
+      delta,
+      message: entry.error ?? 'agent error',
+    });
   };
 
   const handleFileBegin = (params: Record<string, unknown>): void => {
@@ -543,8 +784,21 @@ export async function drivePeerConnection(opts: {
         case 'agent_cancel': {
           const rid = obj.request_id as string | undefined;
           if (rid !== undefined) {
-            const s = inflight.get(rid);
-            if (s !== undefined) s.shouldCancel = true;
+            // Route via the peer-level turn registry — works from ANY live
+            // connection (the turn may have started on a dead one).
+            const entry = peerSession.turns.get(rid);
+            if (entry !== undefined && entry.status === 'streaming') {
+              log(`agent_cancel req=${rid} → cancelTurn task=${entry.taskId}`);
+              peerSession.acpClients.get(entry.agentId)?.cancelTurn(entry.taskId);
+            }
+          }
+          break;
+        }
+        case 'agent_turn_resume_req': {
+          const rid = obj.request_id as string | undefined;
+          const known = obj.known_content_length;
+          if (rid !== undefined) {
+            handleTurnResumeReq(rid, typeof known === 'number' ? known : 0);
           }
           break;
         }
@@ -614,19 +868,16 @@ export async function drivePeerConnection(opts: {
       closed = true;
       clearInterval(heartbeat);
       peerSession.liveConnections = Math.max(0, peerSession.liveConnections - 1);
-      // A peer WS flap must NOT kill agent work. The previous behaviour —
-      // resolve every waiter with deny + mark the record submitted + close all
-      // acp clients — destroyed every recovery path at once: late taps hit
-      // NO MATCH / deferred miss, the deny relay always failed on the
-      // just-closed client, and the proxy aborted the agent's tasks when its
-      // last hub WS went away.
-      // Instead, MIGRATE in-memory waiters: resolve with {migrated} so turn
-      // bookkeeping unwinds without sending a verdict; the persisted record
-      // stays 'pending' so a reconnect re-sends the card and the late tap is
-      // delivered via the deferred relay on the still-open acp client. The
-      // acp clients themselves survive (peer-scoped) — the idle reaper closes
-      // them once their turns drain. Fail-closed backstop stays with the
-      // 20-min proxy confirmation timeout + record expiry.
+      // Remove this connection from the route stack by token — an older
+      // (glare) connection takes over as the new top.
+      const i = peerSession.liveRoutes.findIndex((r) => r.token === connToken);
+      if (i >= 0) peerSession.liveRoutes.splice(i, 1);
+      // A peer WS flap must NOT kill agent work. In-memory approval waiters
+      // are MIGRATED ({migrated}) so turn bookkeeping unwinds without sending
+      // a verdict; persisted records stay 'pending' — the card replays on
+      // reconnect and the late tap is delivered via the deferred relay on the
+      // still-open acp client. Turn registry entries are untouched: their
+      // stream keeps accumulating and the result is replayable on resume.
       for (const [id, waiter] of pendingApprovals) {
         log(`peer disconnect → migrate approval ${id} (kept pending)`);
         clearTimeout(waiter.timer);

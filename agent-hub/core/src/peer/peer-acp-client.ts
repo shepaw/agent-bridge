@@ -52,7 +52,12 @@ export interface AcpChatHandlers {
 export interface AcpChatRequest {
   readonly message: string;
   readonly sessionId?: string;
-  readonly shouldCancel: () => boolean;
+  /**
+   * Caller-allocated task id. The hub's peer-level turn registry owns the
+   * request_id ↔ task_id mapping (needed for cross-connection turn resume and
+   * cancel routing), so it must know the id BEFORE the turn starts.
+   */
+  readonly taskId: string;
   /** ACP-compatible attachment objects (base64 `data`, `file_name`, …). */
   readonly attachments?: ReadonlyArray<Record<string, unknown>>;
 }
@@ -62,6 +67,11 @@ interface InflightTurn {
   accumulated: string;
   resolve: () => void;
   cancelTimer: NodeJS.Timeout;
+  /** Set via cancelTurn — the 300ms cancelTimer polls this and forwards
+   * `agent.cancelTask` to the proxy. Replaces the old shouldCancel closure so
+   * cancel works from ANY live connection (peer-level turn registry routes
+   * here by taskId). */
+  cancelRequested: boolean;
   /** In-flight phone approvals relayed for this turn (async-confirmation agents). */
   pendingApprovals: number;
   /** Set when `task.completed` arrives before approvals finish. */
@@ -87,6 +97,16 @@ export class PeerAcpClient {
     return this.inflight.size > 0;
   }
 
+  /**
+   * Request cancellation of a running turn. The 300ms cancelTimer forwards
+   * `agent.cancelTask` to the proxy. Called via the peer-level turn registry
+   * (works from any live connection — the registry owns request_id ↔ taskId).
+   */
+  cancelTurn(taskId: string): void {
+    const turn = this.inflight.get(taskId);
+    if (turn !== undefined) turn.cancelRequested = true;
+  }
+
   constructor(
     private readonly peerIdentity: AgentIdentity,
     private readonly instance: InstanceConfig,
@@ -103,11 +123,12 @@ export class PeerAcpClient {
    */
   async chat(req: AcpChatRequest, handlers: AcpChatHandlers): Promise<void> {
     await this.ensureConnected();
-    const taskId = randomUUID();
+    const taskId = req.taskId ?? randomUUID();
     const sessionId = req.sessionId ?? this.defaultSessionId;
 
     const cancelTimer = setInterval(() => {
-      if (req.shouldCancel() && this.inflight.has(taskId)) {
+      const t = this.inflight.get(taskId);
+      if (t !== undefined && t.cancelRequested) {
         try {
           this.send({ jsonrpc: '2.0', id: this.rpcId++, method: 'agent.cancelTask', params: { task_id: taskId } });
         } catch { /* ignore */ }
@@ -119,6 +140,7 @@ export class PeerAcpClient {
       accumulated: '',
       resolve: () => {},
       cancelTimer,
+      cancelRequested: false,
       pendingApprovals: 0,
     };
     this.inflight.set(taskId, turn);
