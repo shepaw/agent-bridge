@@ -3,6 +3,7 @@ import { useInstances } from './hooks/useInstances.js';
 import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
 import { AddInstanceModal } from './components/AddInstanceModal.js';
+import { ConfirmModal } from './components/ConfirmModal.js';
 import { SettingsPage } from './components/SettingsPage.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
 import { filterInstances, uniqueEngines } from './utils/instanceFilters.js';
@@ -34,6 +35,7 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [showAdd, setShowAdd] = useState(false);
+  const [showRestartAllConfirm, setShowRestartAllConfirm] = useState(false);
   const [restartAllBusy, setRestartAllBusy] = useState(false);
   const [restartAllErr, setRestartAllErr] = useState<string | null>(null);
   const [filters, setFilters] = useState<InstanceListFilterState>({
@@ -92,7 +94,6 @@ export function App() {
 
   const restartAll = useCallback(async () => {
     if (running === 0) return;
-    if (!window.confirm(`确定要重启全部 ${running} 个运行中的实例吗？`)) return;
     setRestartAllBusy(true);
     setRestartAllErr(null);
     try {
@@ -109,6 +110,7 @@ export function App() {
       setRestartAllErr(e instanceof Error ? e.message : String(e));
     } finally {
       setRestartAllBusy(false);
+      setShowRestartAllConfirm(false);
     }
   }, [running, reload]);
 
@@ -180,7 +182,7 @@ export function App() {
             <button
               style={restartAllBtn}
               disabled={restartAllBusy || loading}
-              onClick={() => void restartAll()}
+              onClick={() => setShowRestartAllConfirm(true)}
             >
               {restartAllBusy ? '重启中...' : '重启全部'}
             </button>
@@ -263,6 +265,20 @@ export function App() {
           onClose={() => setShowAdd(false)}
           onCreated={reload}
           onOpenEngineSettings={openEngineSettings}
+        />
+      )}
+
+      {showRestartAllConfirm && (
+        <ConfirmModal
+          title="重启全部实例"
+          message={`确定要重启全部 ${running} 个运行中的实例吗？重启期间相关 Agent 将短暂不可用。`}
+          confirmLabel="重启全部"
+          tone="warning"
+          busy={restartAllBusy}
+          onConfirm={() => void restartAll()}
+          onCancel={() => {
+            if (!restartAllBusy) setShowRestartAllConfirm(false);
+          }}
         />
       )}
     </Layout>
