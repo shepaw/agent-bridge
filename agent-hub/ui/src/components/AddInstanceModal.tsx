@@ -7,6 +7,39 @@ const FALLBACK_ENGINES = [
   'opencode', 'openclaw', 'cursor', 'hermes', 'kimi',
 ];
 
+/** Survives modal unmount so closing without submit keeps the draft. */
+interface AddInstanceDraft {
+  id: string;
+  label: string;
+  engine: string;
+  cwd: string;
+  host: string;
+  baseUrl: string;
+  tunnelServer: string;
+  tunnelChannelId: string;
+  tunnelSecret: string;
+  showTunnel: boolean;
+}
+
+const EMPTY_DRAFT: AddInstanceDraft = {
+  id: '',
+  label: '',
+  engine: '',
+  cwd: '',
+  host: '127.0.0.1',
+  baseUrl: '',
+  tunnelServer: '',
+  tunnelChannelId: '',
+  tunnelSecret: '',
+  showTunnel: false,
+};
+
+let draft: AddInstanceDraft = { ...EMPTY_DRAFT };
+
+function clearDraft() {
+  draft = { ...EMPTY_DRAFT };
+}
+
 interface AddInstanceModalProps {
   onClose: () => void;
   onCreated: () => void;
@@ -14,30 +47,50 @@ interface AddInstanceModalProps {
 }
 
 export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: AddInstanceModalProps) {
-  const [id, setId] = useState('');
-  const [label, setLabel] = useState('');
-  const [engine, setEngine] = useState<string>('');
+  const [id, setId] = useState(draft.id);
+  const [label, setLabel] = useState(draft.label);
+  const [engine, setEngine] = useState(draft.engine);
   const [engineOptions, setEngineOptions] = useState<EngineInfo[]>([]);
-  const [cwd, setCwd] = useState('');
-  const [host, setHost] = useState('127.0.0.1');
-  const [baseUrl, setBaseUrl] = useState('');
+  const [cwd, setCwd] = useState(draft.cwd);
+  const [host, setHost] = useState(draft.host);
+  const [baseUrl, setBaseUrl] = useState(draft.baseUrl);
 
-  const [tunnelServer, setTunnelServer] = useState('');
-  const [tunnelChannelId, setTunnelChannelId] = useState('');
-  const [tunnelSecret, setTunnelSecret] = useState('');
-  const [showTunnel, setShowTunnel] = useState(false);
+  const [tunnelServer, setTunnelServer] = useState(draft.tunnelServer);
+  const [tunnelChannelId, setTunnelChannelId] = useState(draft.tunnelChannelId);
+  const [tunnelSecret, setTunnelSecret] = useState(draft.tunnelSecret);
+  const [showTunnel, setShowTunnel] = useState(draft.showTunnel);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
 
+  // Keep draft in sync while editing; reopen restores these values.
+  useEffect(() => {
+    draft = {
+      id,
+      label,
+      engine,
+      cwd,
+      host,
+      baseUrl,
+      tunnelServer,
+      tunnelChannelId,
+      tunnelSecret,
+      showTunnel,
+    };
+  }, [id, label, engine, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showTunnel]);
+
   useEffect(() => {
     api.engines.list()
       .then(({ engines }) => {
         setEngineOptions(engines);
-        const firstAvailable = engines.find((e) => e.available !== false);
-        if (firstAvailable) setEngine(firstAvailable.id);
-        else if (engines.length > 0) setEngine(engines[0]!.id);
+        setEngine((current) => {
+          if (current && engines.some((e) => e.id === current)) return current;
+          const firstAvailable = engines.find((e) => e.available !== false);
+          if (firstAvailable) return firstAvailable.id;
+          if (engines.length > 0) return engines[0]!.id;
+          return current;
+        });
       })
       .catch(() => { /* fallback engine ids below */ });
   }, []);
@@ -85,6 +138,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
         baseUrl: resolvedBaseUrl,
         tunnel,
       });
+      clearDraft();
       onCreated();
       onClose();
     } catch (ex) {
@@ -115,23 +169,65 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Instance" />
 
           <label style={lbl}>Engine <span style={req}>*</span></label>
-          <select
-            style={inp}
-            value={engine}
-            onChange={(e) => setEngine(e.target.value)}
-            required
-          >
-            {engineOptions.length > 0
-              ? engineOptions.map((e) => (
-                <option key={e.id} value={e.id} disabled={e.available === false}>
-                  {e.builtin ? e.displayName : `${e.displayName} (custom)`}
-                  {e.available === false ? ' — 不可用' : ''}
-                </option>
-              ))
-              : FALLBACK_ENGINES.map((id) => (
+          {engineOptions.length > 0 ? (
+            <div style={engineList} role="listbox" aria-label="Engine">
+              {engineOptions.map((e) => {
+                const unavailable = e.available === false;
+                const selected = engine === e.id;
+                const title = e.builtin ? e.displayName : `${e.displayName} (custom)`;
+                return (
+                  <div
+                    key={e.id}
+                    role="option"
+                    aria-selected={selected}
+                    aria-disabled={unavailable}
+                    style={{
+                      ...engineRow,
+                      ...(selected ? engineRowSelected : {}),
+                      ...(unavailable ? engineRowUnavailable : {}),
+                    }}
+                    onClick={() => setEngine(e.id)}
+                  >
+                    <div style={engineRowMain}>
+                      <span style={engineRadio}>{selected ? '●' : '○'}</span>
+                      <div style={engineRowText}>
+                        <span style={{ color: unavailable ? '#a6adc8' : '#cdd6f4' }}>
+                          {title}
+                          {unavailable ? ' — 不可用' : ''}
+                        </span>
+                        {unavailable && e.unavailableReason && (
+                          <span style={engineReason}>{e.unavailableReason}</span>
+                        )}
+                      </div>
+                    </div>
+                    {unavailable && (
+                      <button
+                        type="button"
+                        style={installLinkBtn}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onOpenEngineSettings(e.id);
+                        }}
+                      >
+                        去配置 →
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <select
+              style={inp}
+              value={engine}
+              onChange={(e) => setEngine(e.target.value)}
+              required
+            >
+              {FALLBACK_ENGINES.map((id) => (
                 <option key={id} value={id}>{id}</option>
               ))}
-          </select>
+            </select>
+          )}
 
           {selectedUnavailable && (
             <div style={unavailableBox}>
@@ -143,14 +239,14 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                 style={installLinkBtn}
                 onClick={() => onOpenEngineSettings(engine)}
               >
-                前往引擎设置安装 →
+                前往引擎设置配置 →
               </button>
             </div>
           )}
 
           {!hasAvailableEngine && engineOptions.length > 0 && (
             <p style={{ color: '#fab387', fontSize: 12, margin: '4px 0 0' }}>
-              当前没有可用引擎。请先在「设置 → 引擎管理」中安装并启用至少一个引擎。
+              当前没有可用引擎。请点击上方「去配置」完成安装与凭据设置。
             </p>
           )}
 
@@ -302,6 +398,38 @@ const unavailableBox: React.CSSProperties = {
   padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8,
 };
 const installLinkBtn: React.CSSProperties = {
-  alignSelf: 'flex-start', background: 'transparent', border: '1px solid #89b4fa',
-  color: '#89b4fa', borderRadius: 5, padding: '5px 12px', cursor: 'pointer', fontSize: 13,
+  flexShrink: 0, alignSelf: 'center', background: 'transparent', border: '1px solid #89b4fa',
+  color: '#89b4fa', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 12,
+  whiteSpace: 'nowrap',
+};
+const engineList: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 6,
+  maxHeight: 220, overflowY: 'auto',
+  background: '#11111b', border: '1px solid #45475a', borderRadius: 6, padding: 6,
+};
+const engineRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+  padding: '8px 10px', borderRadius: 5, cursor: 'pointer',
+  border: '1px solid transparent',
+};
+const engineRowSelected: React.CSSProperties = {
+  background: '#313244', border: '1px solid #89b4fa66',
+};
+const engineRowUnavailable: React.CSSProperties = {
+  opacity: 0.92,
+};
+const engineRowMain: React.CSSProperties = {
+  display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0, flex: 1,
+};
+const engineRadio: React.CSSProperties = {
+  color: '#89b4fa', fontSize: 12, lineHeight: '18px', flexShrink: 0,
+};
+const engineRowText: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0,
+  fontSize: 13, lineHeight: 1.35,
+};
+const engineReason: React.CSSProperties = {
+  color: '#6c7086', fontSize: 11, lineHeight: 1.35,
+  overflow: 'hidden', textOverflow: 'ellipsis',
+  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
 };
