@@ -146,42 +146,122 @@ export function detectLocalDirPermissionIssue(): string | null {
   return null;
 }
 
-export function checkCursorInstallStatus(): EngineInstallStatus {
+// ── probe caches (list/settings hit these on every open) ───────────
+
+const INSTALL_STATUS_TTL_MS = 60_000;
+const CURSOR_HEALTH_TTL_MS = 60_000;
+const CURSOR_API_PROBE_TTL_MS = 5 * 60_000;
+
+interface CacheEntry<T> {
+  readonly value: T;
+  readonly expiresAt: number;
+}
+
+const installStatusCache = new Map<string, CacheEntry<EngineInstallStatus>>();
+const cursorHealthCache = new Map<string, CacheEntry<boolean>>();
+const cursorApiProbeCache = new Map<string, CacheEntry<'valid' | 'invalid' | 'unknown'>>();
+
+function cacheGet<T>(map: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const entry = map.get(key);
+  if (entry === undefined) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    map.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function cacheSet<T>(map: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): T {
+  map.set(key, { value, expiresAt: Date.now() + ttlMs });
+  return value;
+}
+
+/** Drop cached install/auth probes (after install or credential changes). */
+export function clearEngineProbeCaches(): void {
+  installStatusCache.clear();
+  cursorHealthCache.clear();
+  cursorApiProbeCache.clear();
+}
+
+export interface EngineProbeOptions {
+  /** Skip `--version` exec (list UI only needs installed/available). */
+  readonly skipVersion?: boolean;
+  /**
+   * Skip live Cursor API key HTTP probe. When a key is present, treat auth as
+   * OK for list UX; create/setup still verify with a full probe.
+   */
+  readonly skipRemoteAuthProbe?: boolean;
+}
+
+export function checkCursorInstallStatus(opts: EngineProbeOptions = {}): EngineInstallStatus {
+  const cacheKey = `cursor:install:${opts.skipVersion === true ? 'nov' : 'v'}`;
+  const cached = cacheGet(installStatusCache, cacheKey);
+  if (cached !== undefined) return cached;
+
   const candidates = cursorCliCandidates();
-  const healthy = candidates.filter((p) => isHealthyCursorCli(p));
-  const binaryPath = healthy[0] ?? candidates[0] ?? null;
+  let healthyPath: string | null = null;
+  for (const p of candidates) {
+    if (isHealthyCursorCli(p)) {
+      healthyPath = p;
+      break;
+    }
+  }
+  const binaryPath = healthyPath ?? candidates[0] ?? null;
   if (binaryPath === null) {
-    return {
-      installed: false,
-      binaryPath: null,
-      version: null,
-      checkError: detectLocalDirPermissionIssue() ?? '未找到 agent 或 cursor-agent 命令',
-    };
+    return cacheSet(
+      installStatusCache,
+      cacheKey,
+      {
+        installed: false,
+        binaryPath: null,
+        version: null,
+        checkError: detectLocalDirPermissionIssue() ?? '未找到 agent 或 cursor-agent 命令',
+      },
+      INSTALL_STATUS_TTL_MS,
+    );
   }
-  if (!isHealthyCursorCli(binaryPath)) {
-    return {
-      installed: false,
-      binaryPath,
-      version: null,
-      checkError:
-        '已找到 cursor-agent 但 CLI 无法正常运行（Homebrew 版本已知有问题）。' +
-        '请运行：curl https://cursor.com/install -fsS | bash',
-    };
+  if (healthyPath === null) {
+    return cacheSet(
+      installStatusCache,
+      cacheKey,
+      {
+        installed: false,
+        binaryPath,
+        version: null,
+        checkError:
+          '已找到 cursor-agent 但 CLI 无法正常运行（Homebrew 版本已知有问题）。' +
+          '请运行：curl https://cursor.com/install -fsS | bash',
+      },
+      INSTALL_STATUS_TTL_MS,
+    );
   }
-  return {
-    installed: true,
-    binaryPath,
-    version: probeVersion(binaryPath, binaryPath.endsWith('cursor-agent') ? 'cursor-agent' : 'agent'),
-    checkError: null,
-  };
+  return cacheSet(
+    installStatusCache,
+    cacheKey,
+    {
+      installed: true,
+      binaryPath: healthyPath,
+      version:
+        opts.skipVersion === true
+          ? null
+          : probeVersion(
+              healthyPath,
+              healthyPath.endsWith('cursor-agent') ? 'cursor-agent' : 'agent',
+            ),
+      checkError: null,
+    },
+    INSTALL_STATUS_TTL_MS,
+  );
 }
 
 const CURSOR_API_PROBE_URL = 'https://api.cursor.com/v0/me';
 
-/** Probe whether a Cursor User API Key is accepted (sync, ~1–3s). */
+/** Probe whether a Cursor User API Key is accepted (sync; cached ~5min). */
 export function probeCursorApiKey(apiKey: string): 'valid' | 'invalid' | 'unknown' {
   const trimmed = apiKey.trim();
   if (trimmed.length === 0) return 'invalid';
+  const cached = cacheGet(cursorApiProbeCache, trimmed);
+  if (cached !== undefined) return cached;
   try {
     const result = spawnSync(
       process.execPath,
@@ -192,33 +272,38 @@ export function probeCursorApiKey(apiKey: string): 'valid' | 'invalid' | 'unknow
       ],
       {
         env: { ...process.env, _CURSOR_PROBE_KEY: trimmed },
-        timeout: 12_000,
+        timeout: 5_000,
         stdio: 'pipe',
       },
     );
-    if (result.status === 0) return 'valid';
-    if (result.status === 1) return 'invalid';
-    return 'unknown';
+    const verdict: 'valid' | 'invalid' | 'unknown' =
+      result.status === 0 ? 'valid' : result.status === 1 ? 'invalid' : 'unknown';
+    return cacheSet(cursorApiProbeCache, trimmed, verdict, CURSOR_API_PROBE_TTL_MS);
   } catch {
-    return 'unknown';
+    return cacheSet(cursorApiProbeCache, trimmed, 'unknown', CURSOR_API_PROBE_TTL_MS);
   }
 }
 
 /** True when the CLI responds cleanly to --version (Homebrew cask builds have regressed). */
 export function isHealthyCursorCli(binaryPath: string): boolean {
+  const cached = cacheGet(cursorHealthCache, binaryPath);
+  if (cached !== undefined) return cached;
   try {
     const result = spawnSync(binaryPath, ['--version'], {
       env: { ...process.env, NO_OPEN_BROWSER: '1', CURSOR_AGENT_DISABLE_DEBUG_LOG: '1' },
       encoding: 'utf8',
-      timeout: 12_000,
+      timeout: 3_000,
       stdio: 'pipe',
     });
     const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-    if (result.status !== 0) return false;
-    if (combined.includes('index.js:')) return false;
-    return combined.trim().length > 0 && combined.length < 120;
+    const ok =
+      result.status === 0 &&
+      !combined.includes('index.js:') &&
+      combined.trim().length > 0 &&
+      combined.length < 120;
+    return cacheSet(cursorHealthCache, binaryPath, ok, CURSOR_HEALTH_TTL_MS);
   } catch {
-    return false;
+    return cacheSet(cursorHealthCache, binaryPath, false, CURSOR_HEALTH_TTL_MS);
   }
 }
 
@@ -243,6 +328,7 @@ export function resolveCursorCliBinary(): string | null {
 function resolveCursorAuthAvailability(
   status: EngineInstallStatus,
   cursorApiKey: string | undefined,
+  opts: EngineProbeOptions = {},
 ): EngineAvailability | null {
   const key = cursorApiKey?.trim();
   if (key === undefined || key.length === 0) {
@@ -252,6 +338,10 @@ function resolveCursorAuthAvailability(
       unavailableReason:
         '未认证：请运行 cursor-agent login，或在引擎设置中配置有效的 CURSOR_API_KEY（Cursor → Settings → Integrations → User API Keys）',
     };
+  }
+  // List UI: presence of a key is enough; avoid blocking on api.cursor.com.
+  if (opts.skipRemoteAuthProbe === true) {
+    return null;
   }
   const probe = probeCursorApiKey(key);
   if (probe === 'invalid') {
@@ -668,22 +758,39 @@ export function resolveBinaryPath(
   return null;
 }
 
-export function checkCustomEngineInstallStatus(command: string): EngineInstallStatus {
+export function checkCustomEngineInstallStatus(
+  command: string,
+  opts: EngineProbeOptions = {},
+): EngineInstallStatus {
+  const cacheKey = `custom:${command}:${opts.skipVersion === true ? 'nov' : 'v'}`;
+  const cached = cacheGet(installStatusCache, cacheKey);
+  if (cached !== undefined) return cached;
+
   const binaryPath = resolveBinaryPath(command, [...SPAWN_PATH_PREFIXES]);
   if (binaryPath === null) {
-    return {
-      installed: false,
-      binaryPath: null,
-      version: null,
-      checkError: `未找到 ${command} 命令`,
-    };
+    return cacheSet(
+      installStatusCache,
+      cacheKey,
+      {
+        installed: false,
+        binaryPath: null,
+        version: null,
+        checkError: `未找到 ${command} 命令`,
+      },
+      INSTALL_STATUS_TTL_MS,
+    );
   }
-  return {
-    installed: true,
-    binaryPath,
-    version: probeVersion(binaryPath, command),
-    checkError: null,
-  };
+  return cacheSet(
+    installStatusCache,
+    cacheKey,
+    {
+      installed: true,
+      binaryPath,
+      version: opts.skipVersion === true ? null : probeVersion(binaryPath, command),
+      checkError: null,
+    },
+    INSTALL_STATUS_TTL_MS,
+  );
 }
 
 /**
@@ -691,11 +798,21 @@ export function checkCustomEngineInstallStatus(command: string): EngineInstallSt
  */
 export function resolveEngineAvailability(
   engineId: string,
-  opts: { disabled?: boolean; customCommand?: string; cursorApiKey?: string } = {},
+  opts: {
+    disabled?: boolean;
+    customCommand?: string;
+    cursorApiKey?: string;
+    skipVersion?: boolean;
+    skipRemoteAuthProbe?: boolean;
+  } = {},
 ): EngineAvailability {
+  const probeOpts: EngineProbeOptions = {
+    skipVersion: opts.skipVersion,
+    skipRemoteAuthProbe: opts.skipRemoteAuthProbe,
+  };
   const status = opts.customCommand !== undefined
-    ? checkCustomEngineInstallStatus(opts.customCommand)
-    : checkEngineInstallStatus(engineId);
+    ? checkCustomEngineInstallStatus(opts.customCommand, probeOpts)
+    : checkEngineInstallStatus(engineId, detectHubPlatform(), probeOpts);
 
   if (opts.disabled === true) {
     return {
@@ -712,7 +829,7 @@ export function resolveEngineAvailability(
     };
   }
   if (engineId === 'cursor') {
-    const authBlock = resolveCursorAuthAvailability(status, opts.cursorApiKey);
+    const authBlock = resolveCursorAuthAvailability(status, opts.cursorApiKey, probeOpts);
     if (authBlock !== null) return authBlock;
   }
   return {
@@ -726,13 +843,19 @@ export function enrichEngineInfo(
   info: EngineInfo,
   customEngines: readonly CustomEngineDefinition[],
   disabled: boolean,
-  opts: { cursorApiKey?: string } = {},
+  opts: {
+    cursorApiKey?: string;
+    /** Fast path for GET /engines list — skip version + remote auth HTTP probe. */
+    listFastPath?: boolean;
+  } = {},
 ): EngineInfo {
   const custom = findCustomEngine(customEngines, info.id);
   const avail = resolveEngineAvailability(info.id, {
     disabled,
     customCommand: custom?.command,
     cursorApiKey: info.id === 'cursor' ? opts.cursorApiKey : undefined,
+    skipVersion: opts.listFastPath === true,
+    skipRemoteAuthProbe: opts.listFastPath === true,
   });
   return {
     ...info,
@@ -744,14 +867,24 @@ export function enrichEngineInfo(
 export function checkEngineInstallStatus(
   engineId: string,
   platform: HubPlatform = detectHubPlatform(),
+  opts: EngineProbeOptions = {},
 ): EngineInstallStatus {
   if (engineId === 'cursor') {
-    return checkCursorInstallStatus();
+    return checkCursorInstallStatus(opts);
   }
+
+  const cacheKey = `engine:${engineId}:${platform}:${opts.skipVersion === true ? 'nov' : 'v'}`;
+  const cached = cacheGet(installStatusCache, cacheKey);
+  if (cached !== undefined) return cached;
 
   const guide = getEngineSetupGuide(engineId, platform);
   if (guide.checkBinary.length === 0) {
-    return { installed: false, binaryPath: null, version: null, checkError: null };
+    return cacheSet(
+      installStatusCache,
+      cacheKey,
+      { installed: false, binaryPath: null, version: null, checkError: null },
+      INSTALL_STATUS_TTL_MS,
+    );
   }
 
   const binaryPath = resolveBinaryPath(guide.checkBinary, [
@@ -760,21 +893,31 @@ export function checkEngineInstallStatus(
   ]);
 
   if (binaryPath === null) {
-    return {
-      installed: false,
-      binaryPath: null,
-      version: null,
-      checkError: `未找到 ${guide.checkBinary} 命令`,
-    };
+    return cacheSet(
+      installStatusCache,
+      cacheKey,
+      {
+        installed: false,
+        binaryPath: null,
+        version: null,
+        checkError: `未找到 ${guide.checkBinary} 命令`,
+      },
+      INSTALL_STATUS_TTL_MS,
+    );
   }
 
-  const version = probeVersion(binaryPath, guide.checkBinary);
-  return {
-    installed: true,
-    binaryPath,
-    version,
-    checkError: null,
-  };
+  const version = opts.skipVersion === true ? null : probeVersion(binaryPath, guide.checkBinary);
+  return cacheSet(
+    installStatusCache,
+    cacheKey,
+    {
+      installed: true,
+      binaryPath,
+      version,
+      checkError: null,
+    },
+    INSTALL_STATUS_TTL_MS,
+  );
 }
 
 export function runEngineInstall(
@@ -807,6 +950,7 @@ export function runEngineInstall(
     stderr = err instanceof Error ? err.message : String(err);
   }
 
+  clearEngineProbeCaches();
   const status = checkEngineInstallStatus(engineId, platform);
   let combinedStderr = stderr;
   if (engineId === 'cursor' && !status.installed) {

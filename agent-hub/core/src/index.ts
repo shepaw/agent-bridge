@@ -181,6 +181,7 @@ export {
   isHealthyCursorCli,
   checkCursorInstallStatus,
   checkEngineInstallStatus,
+  clearEngineProbeCaches,
   enrichEngineInfo,
   detectHubPlatform,
   hubPlatformLabel,

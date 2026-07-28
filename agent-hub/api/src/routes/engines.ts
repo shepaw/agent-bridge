@@ -17,6 +17,7 @@ import { Router, type Request, type Response } from 'express';
 import {
   addCustomEngineToHub,
   clearEngineApproval,
+  clearEngineProbeCaches,
   CustomEngineExistsError,
   CustomEngineInUseError,
   CustomEngineNotFoundError,
@@ -33,7 +34,6 @@ import {
   listEngineInfos,
   loadOrCreateHubConfig,
   removeCustomEngineFromHub,
-  resolveEngineAvailability,
   resolveEngineEnvVars,
   runEngineInstall,
   setEngineEnvVar,
@@ -70,6 +70,7 @@ enginesRouter.get('/', (_req: Request, res: Response) => {
       const engineEnv = resolveEngineEnvVars(cfg, info.id);
       const enriched = enrichEngineInfo(info, cfg.customEngines, disabled, {
         cursorApiKey: info.id === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
+        listFastPath: true,
       });
       return {
         ...enriched,
@@ -294,6 +295,7 @@ enginesRouter.put('/:id/envvars/:key', (req: Request, res: Response) => {
     }
     const cfg = loadOrCreateHubConfig();
     setEngineEnvVar(cfg, req.params.id!, req.params.key!, value);
+    clearEngineProbeCaches();
     res.json({ ok: true, key: req.params.key });
   } catch (err) {
     if (err instanceof CustomEngineNotFoundError) {
@@ -310,6 +312,7 @@ enginesRouter.delete('/:id/envvars/:key', (req: Request, res: Response) => {
     requireKnownEngine(req.params.id!);
     const cfg = loadOrCreateHubConfig();
     deleteEngineEnvVar(cfg, req.params.id!, req.params.key!);
+    clearEngineProbeCaches();
     res.json({ ok: true });
   } catch (err) {
     if (err instanceof CustomEngineNotFoundError) {

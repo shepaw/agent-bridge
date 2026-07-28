@@ -12,6 +12,8 @@ import {
   augmentSpawnPath,
   checkCursorInstallStatus,
   checkEngineInstallStatus,
+  clearEngineProbeCaches,
+  enrichEngineInfo,
   getEngineSetupGuide,
   detectHubPlatform,
   hubPlatformLabel,
@@ -131,9 +133,32 @@ describe('engine-setup', () => {
   });
 
   it('resolveEngineAvailability blocks cursor with invalid API key', () => {
-    if (!existsSync('/opt/homebrew/bin/cursor-agent')) return;
+    if (!existsSync('/opt/homebrew/bin/cursor-agent') && !existsSync('/Users/edenzou/.local/bin/agent')) {
+      return;
+    }
+    clearEngineProbeCaches();
     const avail = resolveEngineAvailability('cursor', { cursorApiKey: 'invalid-test-key' });
     expect(avail.available).toBe(false);
     expect(avail.unavailableReason).toMatch(/无效|401/);
+  });
+
+  it('listFastPath skips remote Cursor API probe when key is present', () => {
+    clearEngineProbeCaches();
+    const info = {
+      id: 'cursor',
+      displayName: 'Cursor',
+      acpCommand: 'agent acp',
+      builtin: true,
+    };
+    const t0 = Date.now();
+    const enriched = enrichEngineInfo(info, [], false, {
+      cursorApiKey: 'sk-not-validated-on-list',
+      listFastPath: true,
+    });
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeLessThan(2000);
+    if (enriched.available === false) {
+      expect(enriched.unavailableReason ?? '').not.toMatch(/401|无效/);
+    }
   });
 });

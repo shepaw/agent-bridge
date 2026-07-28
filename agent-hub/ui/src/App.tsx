@@ -136,7 +136,7 @@ export function App() {
 
   if (showSettings) {
     return (
-      <Layout>
+      <Layout wide>
         <div style={topbar}>
           <div>
             <h1 style={title}>设置</h1>

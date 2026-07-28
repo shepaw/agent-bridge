@@ -53,6 +53,29 @@ type DrainTurnResult =
   | { readonly kind: 'ok' }
   | { readonly kind: 'stale_auth'; readonly text: string };
 
+/**
+ * Upstream ACP CLIs (esp. Cursor) sometimes die idle or get SIGTERM'd by the
+ * OS / parent. Exit 143 = 128+SIGTERM. Detect so we can respawn + retry instead
+ * of surfacing a one-shot failure that a manual resend would "fix".
+ */
+export function isAcpAgentExitedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /ACP agent exited\b/i.test(msg);
+}
+
+/** How many times to respawn after an unexpected upstream exit within one turn. */
+const ACP_EXIT_RETRIES = 2;
+
+function isSignalTermination(code: number | null, signal: NodeJS.Signals | null): boolean {
+  return (
+    signal === 'SIGTERM' ||
+    signal === 'SIGKILL' ||
+    // Node reports signal deaths as 128+N on some paths
+    code === 143 ||
+    code === 137
+  );
+}
+
 export interface TurnContext {
   readonly taskCtx: TaskContext;
   readonly signal: AbortSignal;
@@ -287,10 +310,25 @@ export class AcpSubprocess {
   /** Start the subprocess and initialize the ACP connection. */
   async start(): Promise<void> {
     if (this.initPromise !== undefined) {
-      return this.initPromise;
+      // Exit handler normally clears initPromise; if we observe a dead child
+      // first (race), drop the stale promise and respawn.
+      if (this.isUpstreamDead()) {
+        this.initPromise = undefined;
+        this.connection = undefined;
+        this.child = undefined;
+        this.disposeSessions();
+      } else {
+        return this.initPromise;
+      }
     }
     this.initPromise = this.doStart();
     return this.initPromise;
+  }
+
+  /** True when we still hold a child handle that has already exited/been killed. */
+  private isUpstreamDead(): boolean {
+    if (this.child === undefined) return false;
+    return this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null;
   }
 
   private async doStart(): Promise<void> {
@@ -332,10 +370,13 @@ export class AcpSubprocess {
     });
 
     const exitError = (code: number | null, signal: NodeJS.Signals | null): Error => {
-      const hint =
-        this.spec.id === 'cursor'
-          ? ' — check CURSOR_API_KEY or run cursor-agent login'
-          : '';
+      // 143/SIGTERM is process death, not auth — don't blame CURSOR_API_KEY.
+      let hint = '';
+      if (isSignalTermination(code, signal)) {
+        hint = ' — upstream agent process was terminated';
+      } else if (this.spec.id === 'cursor') {
+        hint = ' — check CURSOR_API_KEY or run cursor-agent login';
+      }
       const detail = stderrTail.trim().length > 0 ? ` stderr: ${summarizeStderr(stderrTail)}` : '';
       return new Error(`ACP agent exited (${code ?? signal})${hint}${detail}`);
     };
@@ -416,7 +457,12 @@ export class AcpSubprocess {
       );
     } catch (err) {
       const base = err instanceof Error ? err : new Error(String(err));
-      if (this.spec.id === 'cursor' && !base.message.includes('cursor-agent login')) {
+      // Don't re-tag signal deaths / already-hinted exits as auth failures.
+      if (
+        this.spec.id === 'cursor' &&
+        !base.message.includes('cursor-agent login') &&
+        !isAcpAgentExitedError(base)
+      ) {
         throw new Error(`${base.message} (Cursor: invalid API key or run cursor-agent login)`);
       }
       throw base;
@@ -497,8 +543,9 @@ export class AcpSubprocess {
       throw new Error('ACP connection not established');
     }
 
-    // Cursor ACP may emit stale-auth as assistant text; restart + retry a few
-    // times before surfacing it and ending the turn.
+    // Cursor ACP may emit stale-auth as assistant text; long-lived agents may
+    // also die idle (SIGTERM/143). Restart + retry a few times before surfacing.
+    let exitRetries = 0;
     for (let retry = 0; ; retry++) {
       this.currentTurn = turn;
       try {
@@ -524,6 +571,19 @@ export class AcpSubprocess {
         );
         this.forgetShepawSession(shepawSessionId, opts);
         await this.restartUpstreamAgent();
+      } catch (err) {
+        if (isAcpAgentExitedError(err) && exitRetries < ACP_EXIT_RETRIES) {
+          exitRetries += 1;
+          log(
+            'ACP agent exited during turn (retry %d/%d); restarting subprocess',
+            exitRetries,
+            ACP_EXIT_RETRIES,
+          );
+          this.forgetShepawSession(shepawSessionId, opts);
+          await this.restartUpstreamAgent();
+          continue;
+        }
+        throw err;
       } finally {
         this.currentTurn = undefined;
       }
