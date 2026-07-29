@@ -216,3 +216,13 @@ export {
   validateCustomEngineId,
 } from './engines.js';
 export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo, EngineOverrideInstanceion } from './engines.js';
+export {
+  BUILTIN_ENGINE_AVATARS,
+  GENERIC_DEFAULT_AVATAR,
+  defaultAvatarForEngine,
+  engineAvatarMarker,
+  listBundledEngineAvatarIds,
+  loadEngineAvatarPayload,
+  resolveEngineAvatarFile,
+} from './engine-avatars.js';
+export type { EngineAvatarPayload } from './engine-avatars.js';

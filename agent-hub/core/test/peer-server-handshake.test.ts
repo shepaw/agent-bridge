@@ -233,5 +233,10 @@ describe('peer pairing handshake', () => {
     expect(agents).toHaveLength(1);
     expect(agents[0]!.id).toBe('alpha');
     expect(agents[0]!.capabilities).toEqual(['chat']);
+    expect(agents[0]!.engine).toBe('claude-code');
+    expect(agents[0]!.avatar).toBe('engine-avatar:claude-code');
+    expect(typeof agents[0]!.avatar_data).toBe('string');
+    expect((agents[0]!.avatar_data as string).length).toBeGreaterThan(20);
+    expect(agents[0]!.avatar_ext).toBe('svg');
   });
 });
