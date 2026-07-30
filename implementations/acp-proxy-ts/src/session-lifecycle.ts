@@ -28,6 +28,18 @@ export function supportsSessionLoad(caps: acp.InitializeResponse | undefined): b
   return caps?.agentCapabilities?.loadSession === true;
 }
 
+/**
+ * Whether chat can restore a persisted upstream session after the live handle
+ * is gone (process idle death, gateway restart, etc.).
+ *
+ * Prefer `session/resume`; fall back to `session/load`. Cursor historically hung
+ * on load during chat restore — callers must still enforce a restore timeout —
+ * but skipping load entirely caused silent session/new amnesia.
+ */
+export function canRestorePersistedSession(caps: acp.InitializeResponse | undefined): boolean {
+  return supportsSessionResume(caps) || supportsSessionLoad(caps);
+}
+
 export function supportsSessionList(caps: acp.InitializeResponse | undefined): boolean {
   return caps?.agentCapabilities?.sessionCapabilities?.list !== undefined
     && caps?.agentCapabilities?.sessionCapabilities?.list !== null;

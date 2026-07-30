@@ -27,6 +27,7 @@ import { log } from './debug.js';
 import { flushAgentMessage, mapSessionUpdate } from './session-mapper.js';
 import {
   attachActiveSession,
+  canRestorePersistedSession,
   discardLoadReplayUpdates,
   supportsSessionDelete,
   supportsSessionList,
@@ -569,6 +570,7 @@ export class AcpSubprocess {
           retry + 1,
           CURSOR_STALE_AUTH_RETRIES,
         );
+        // Fresh upstream session after re-auth — do not resume a stale-auth id.
         this.forgetShepawSession(shepawSessionId, opts);
         await this.restartUpstreamAgent();
       } catch (err) {
@@ -579,7 +581,9 @@ export class AcpSubprocess {
             exitRetries,
             ACP_EXIT_RETRIES,
           );
-          this.forgetShepawSession(shepawSessionId, opts);
+          // Keep SessionStore mapping: after respawn, getOrCreateSession should
+          // resume/load the same upstream ACP session instead of session/new.
+          this.dropLiveShepawSession(shepawSessionId);
           await this.restartUpstreamAgent();
           continue;
         }
@@ -627,14 +631,19 @@ export class AcpSubprocess {
     return await Promise.race([run, abortPromise]);
   }
 
-  /** Drop live + persisted mapping so the next turn opens a fresh ACP session. */
-  private forgetShepawSession(shepawSessionId: string, opts: RunPromptTurnOptions): void {
+  /** Drop in-memory session state without clearing the persisted Shepaw→ACP map. */
+  private dropLiveShepawSession(shepawSessionId: string): void {
     const session = this.sessions.get(shepawSessionId);
     if (session !== undefined) {
       session.dispose();
       this.sessions.delete(shepawSessionId);
     }
     this.configByShepawSession.delete(shepawSessionId);
+  }
+
+  /** Drop live + persisted mapping so the next turn opens a fresh ACP session. */
+  private forgetShepawSession(shepawSessionId: string, opts: RunPromptTurnOptions): void {
+    this.dropLiveShepawSession(shepawSessionId);
     opts.onRestoreFailed?.(shepawSessionId);
   }
 
@@ -684,20 +693,25 @@ export class AcpSubprocess {
     const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
 
     if (storedId !== undefined && storedId.length > 0) {
-      const skipLoadRestore = this.spec.id === 'cursor' && !supportsSessionResume(this.agentCaps);
-      let restored: acp.ActiveSession | undefined;
-      if (!skipLoadRestore) {
-        restored = await this.tryRestoreSession(agent, shepawSessionId, storedId);
-      } else {
-        log('skip session/load restore for %s on cursor (use live session/new)', shepawSessionId);
-      }
-      if (restored !== undefined) {
-        this.sessions.set(shepawSessionId, restored);
-        opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
-        if (this.preferredModelValue !== undefined) {
-          await this.applyModelToSession(restored, shepawSessionId, this.preferredModelValue);
+      // Prefer resume, else load (incl. Cursor load-only). RESTORE_TIMEOUT_MS
+      // kills/restarts a hung upstream so we restore after idle death instead of
+      // silently opening session/new (amnesia). Skip only when neither cap exists.
+      if (canRestorePersistedSession(this.agentCaps)) {
+        const restored = await this.tryRestoreSession(agent, shepawSessionId, storedId);
+        if (restored !== undefined) {
+          this.sessions.set(shepawSessionId, restored);
+          opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
+          if (this.preferredModelValue !== undefined) {
+            await this.applyModelToSession(restored, shepawSessionId, this.preferredModelValue);
+          }
+          return restored;
         }
-        return restored;
+      } else {
+        log(
+          'upstream has no session resume/load; cannot restore %s for shepaw %s',
+          storedId,
+          shepawSessionId,
+        );
       }
       log('stored ACP session %s unavailable; creating new session', storedId);
       opts.onRestoreFailed?.(shepawSessionId);

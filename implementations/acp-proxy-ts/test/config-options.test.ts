@@ -6,7 +6,11 @@ import {
   flattenSelectOptions,
   mergeConfigOptions,
 } from '../src/config-options.js';
-import { supportsSessionLoad, supportsSessionResume } from '../src/session-lifecycle.js';
+import {
+  canRestorePersistedSession,
+  supportsSessionLoad,
+  supportsSessionResume,
+} from '../src/session-lifecycle.js';
 
 describe('config-options', () => {
   it('maps model config options to Shepaw models list', () => {
@@ -64,5 +68,28 @@ describe('session-lifecycle', () => {
         agentCapabilities: { loadSession: true },
       }),
     ).toBe(true);
+  });
+
+  it('allows restore for Cursor-style load-only agents (no resume)', () => {
+    // Regression: skipping load when resume was absent caused session/new amnesia
+    // after cursor-agent idle death, even though SessionStore still had the id.
+    expect(
+      canRestorePersistedSession({
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true },
+      }),
+    ).toBe(true);
+    expect(
+      canRestorePersistedSession({
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      }),
+    ).toBe(true);
+    expect(
+      canRestorePersistedSession({
+        protocolVersion: 1,
+        agentCapabilities: {},
+      }),
+    ).toBe(false);
   });
 });

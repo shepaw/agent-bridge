@@ -5,8 +5,11 @@ Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
 
 ## Phase 2 capabilities
 
-- **Session resume** — after gateway restart, restores upstream ACP sessions via
-  `session/resume` (preferred) or `session/load`, using `sessions.json` mappings
+- **Session resume** — after gateway restart or upstream idle death, restores
+  upstream ACP sessions via `session/resume` (preferred) or `session/load`
+  (incl. Cursor load-only), using `sessions.json` mappings. Hung restores are
+  bounded by a timeout that restarts the upstream agent before falling back to
+  `session/new`.
 - **Model picker** — maps ACP `configOptions` (category `model`) to Shepaw
   `agent.models.list` / `agent.models.setCurrent` via `session/set_config_option`
 - **Terminal proxy** — runs shell commands on the gateway host when agents request
