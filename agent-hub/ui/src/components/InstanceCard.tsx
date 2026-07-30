@@ -1,6 +1,7 @@
 import type { Instance } from '../api/types.js';
 import { api } from '../api/client.js';
 import { availabilityColor, busyColor, busyLabel, formatRuntimeSummary } from '../utils/runtimeStatus.js';
+import { EngineIcon } from './EngineIcon.js';
 import { useState } from 'react';
 
 interface InstanceCardProps {
@@ -34,6 +35,7 @@ export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardPr
     <div style={card}>
       <div style={cardHeader}>
         <span style={dot(p.status)} />
+        <EngineIcon engineId={p.engine} size={28} />
         <strong style={{ flex: 1, cursor: 'pointer' }} onClick={() => onSelect(p.id)}>
           {p.label}
         </strong>
@@ -42,7 +44,7 @@ export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardPr
             {busyLabel(p.status)}
           </code>
         )}
-        <code style={badge}>{p.engine}</code>
+        <code style={badge} title="Engine">{p.engine}</code>
       </div>
 
       <div style={meta}>

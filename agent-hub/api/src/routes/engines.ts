@@ -9,6 +9,7 @@
  * DELETE /api/engines/:id/approval          — clear per-engine approval (inherit)
  * GET    /api/engines/:id/envvars           — list engine-default env var keys (masked)
  * PUT    /api/engines/:id/envvars/:key      — set one engine-default env var
+ * GET    /api/engines/:id/icon              — engine logo (SVG/PNG)
  * GET    /api/engines/:id/setup             — setup guide + install status
  * POST   /api/engines/:id/install           — one-click install + enable
  */
@@ -41,6 +42,7 @@ import {
   updateCustomEngineInHub,
   findCustomEngine,
   formatShellCommand,
+  resolveEngineAvatarFile,
 } from '@shepaw/agent-hub-core';
 import { hubRoot } from '@shepaw/agent-hub-core';
 import { parseApprovalBody } from './approval.js';
@@ -104,6 +106,19 @@ enginesRouter.post('/', (req: Request, res: Response) => {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
   }
+});
+
+/** GET /api/engines/:id/icon — bundled engine logo for the dashboard. */
+enginesRouter.get('/:id/icon', (req: Request, res: Response) => {
+  const file = resolveEngineAvatarFile(req.params.id!);
+  if (!file) {
+    res.status(404).end();
+    return;
+  }
+  const contentType = file.endsWith('.png') ? 'image/png' : 'image/svg+xml';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(file);
 });
 
 enginesRouter.get('/:id/setup', (req: Request, res: Response) => {
