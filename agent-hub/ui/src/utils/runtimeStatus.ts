@@ -32,7 +32,11 @@ export function availabilityColor(status: InstanceStatus): string {
 
 export function busyLabel(status: InstanceStatus): string | null {
   if (status.busyLevel === null) return null;
-  return BUSY_LABELS[status.busyLevel];
+  const label = BUSY_LABELS[status.busyLevel];
+  if (status.activeTasks !== null && status.activeTasks > 0) {
+    return `${label} · ${status.activeTasks} 任务`;
+  }
+  return label;
 }
 
 export function busyColor(status: InstanceStatus): string {

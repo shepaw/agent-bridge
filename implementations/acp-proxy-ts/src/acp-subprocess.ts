@@ -67,6 +67,33 @@ export function isAcpAgentExitedError(err: unknown): boolean {
 /** How many times to respawn after an unexpected upstream exit within one turn. */
 const ACP_EXIT_RETRIES = 2;
 
+/**
+ * ACP SDK `RequestError` often uses the opaque message "Internal error" while
+ * putting the real cause in `.data` / nested `.cause`. Expand that for logs + UI.
+ */
+export function formatAcpError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts: string[] = [err.message];
+  const data = (err as { data?: unknown }).data;
+  if (data !== undefined && data !== null) {
+    try {
+      const s = typeof data === 'string' ? data : JSON.stringify(data);
+      if (s.length > 0 && s !== '{}' && !parts[0]?.includes(s)) {
+        parts.push(s.length > 500 ? `${s.slice(0, 500)}…` : s);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message.length > 0 && !parts[0]?.includes(cause.message)) {
+    parts.push(cause.message);
+  } else if (typeof cause === 'string' && cause.length > 0) {
+    parts.push(cause);
+  }
+  return parts.join(' — ');
+}
+
 function isSignalTermination(code: number | null, signal: NodeJS.Signals | null): boolean {
   return (
     signal === 'SIGTERM' ||
@@ -604,12 +631,27 @@ export class AcpSubprocess {
       throw new Error('ACP connection not established');
     }
 
-    const session = await this.getOrCreateSession(shepawSessionId, opts);
+    let session: acp.ActiveSession;
+    try {
+      session = await this.getOrCreateSession(shepawSessionId, opts);
+    } catch (err) {
+      // ACP SDK often wraps upstream failures as RequestError(-32603, "Internal error")
+      // with details only in `.data` — surface them so peer/app aren't left guessing.
+      const detail = formatAcpError(err);
+      log('getOrCreateSession failed for %s: %s', shepawSessionId, detail);
+      console.error('[acp-proxy] getOrCreateSession failed:', detail, err);
+      throw new Error(detail);
+    }
 
     const promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
       ? [...prompt]
       : (prompt as string | acp.ContentBlock);
-    const promptPromise = session.prompt(promptArg);
+    const promptPromise = session.prompt(promptArg).catch((err: unknown) => {
+      const detail = formatAcpError(err);
+      log('session.prompt failed for %s: %s', shepawSessionId, detail);
+      console.error('[acp-proxy] session.prompt failed:', detail, err);
+      throw new Error(detail);
+    });
     const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
 
     const abortPromise = new Promise<never>((_, reject) => {
@@ -1044,13 +1086,31 @@ function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     '/opt/homebrew/bin',
     '/usr/local/bin',
   ].filter((d) => existsSync(d));
-  const withPath =
+  let next: NodeJS.ProcessEnv =
     extras.length === 0 || current.split(sep).some((p) => extras.includes(p))
-      ? env
+      ? { ...env }
       : { ...env, [pathKey]: `${extras.join(sep)}${sep}${current}` };
-  // Hub runs headless; avoid cursor-agent trying to open a browser for login.
-  if (withPath.NO_OPEN_BROWSER === undefined) {
-    return { ...withPath, NO_OPEN_BROWSER: '1' };
+
+  // Claude Code reads ANTHROPIC_API_KEY. An *empty* API_KEY in the env blocks
+  // Claude's normal CLI login (~/.claude) and yields opaque ACP "Internal error".
+  // Hub often stores OpenRouter-style keys only under ANTHROPIC_AUTH_TOKEN — copy
+  // when present; otherwise drop the empty key so keychain/CLI auth can work.
+  const apiKey = next.ANTHROPIC_API_KEY;
+  const authToken = next.ANTHROPIC_AUTH_TOKEN;
+  if (apiKey === undefined || apiKey.length === 0) {
+    if (typeof authToken === 'string' && authToken.length > 0) {
+      next = { ...next, ANTHROPIC_API_KEY: authToken };
+      log('ANTHROPIC_API_KEY empty; using ANTHROPIC_AUTH_TOKEN for upstream Claude ACP');
+    } else if (apiKey !== undefined) {
+      const { ANTHROPIC_API_KEY: _drop, ...rest } = next;
+      next = rest;
+      log('ANTHROPIC_API_KEY was empty string; unset so Claude CLI login can apply');
+    }
   }
-  return withPath;
+
+  // Hub runs headless; avoid cursor-agent trying to open a browser for login.
+  if (next.NO_OPEN_BROWSER === undefined) {
+    next = { ...next, NO_OPEN_BROWSER: '1' };
+  }
+  return next;
 }
