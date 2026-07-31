@@ -66,6 +66,8 @@ export function InstanceDetail({
   const [envEditing, setEnvEditing] = useState<Record<string, string>>({});
   const [envBusy, setEnvBusy] = useState<Record<string, boolean>>({});
   const [envErr, setEnvErr] = useState<string | null>(null);
+  const [envDrafts, setEnvDrafts] = useState<{ key: string; value: string }[]>([{ key: '', value: '' }]);
+  const [envAddBusy, setEnvAddBusy] = useState(false);
   const [showAddPeer, setShowAddPeer] = useState(false);
   const [addPeerPubkey, setAddPeerPubkey] = useState('');
   const [addPeerLabel, setAddPeerLabel] = useState('');
@@ -93,14 +95,11 @@ export function InstanceDetail({
       setInstance(p);
       setPeers(ps);
 
-      if ((p.envVarKeys ?? []).length > 0) {
-        const envvars = await api.envvars.list(instanceId).catch(() => [] as { key: string; value: string }[]);
-        const masked: Record<string, string> = {};
-        for (const { key, value } of envvars) masked[key] = value;
-        setEnvMasked(masked);
-      } else {
-        setEnvMasked({});
-      }
+      // Always load env vars so the config tab can add/edit even when empty.
+      const envvars = await api.envvars.list(instanceId).catch(() => [] as { key: string; value: string }[]);
+      const masked: Record<string, string> = {};
+      for (const { key, value } of envvars) masked[key] = value;
+      setEnvMasked(masked);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -205,6 +204,10 @@ export function InstanceDetail({
     }
   };
 
+  // Sentinels for "value not changed" — used for tunnel secret and env var fields.
+  const TUNNEL_SECRET_UNCHANGED = '\x00unchanged';
+  const ENV_UNCHANGED = '\x00unchanged';
+
   const saveEnvVar = async (key: string) => {
     const value = envEditing[key];
     if (value === undefined) return;
@@ -239,9 +242,33 @@ export function InstanceDetail({
     }
   };
 
-  // Sentinels for "value not changed" — used for tunnel secret and env var fields.
-  const TUNNEL_SECRET_UNCHANGED = '\x00unchanged';
-  const ENV_UNCHANGED = '\x00unchanged';
+  const saveEnvDrafts = async () => {
+    const rows = envDrafts
+      .map((r) => ({ key: r.key.trim(), value: r.value }))
+      .filter((r) => r.key.length > 0);
+    if (rows.length === 0) {
+      setEnvErr('请至少填写一个变量名。');
+      return;
+    }
+    const keys = rows.map((r) => r.key);
+    if (new Set(keys).size !== keys.length) {
+      setEnvErr('草稿中存在重复的变量名。');
+      return;
+    }
+    setEnvAddBusy(true);
+    setEnvErr(null);
+    try {
+      for (const row of rows) {
+        await api.envvars.set(instanceId, row.key, row.value);
+      }
+      setEnvDrafts([{ key: '', value: '' }]);
+      await load();
+    } catch (e) {
+      setEnvErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEnvAddBusy(false);
+    }
+  };
 
   const openEdit = (p: typeof instance) => {
     if (!p) return;
@@ -726,11 +753,10 @@ export function InstanceDetail({
                 </form>
               )}
 
-              {(instance.envVarKeys ?? []).length > 0 && (
-                <>
-                  <h4 style={sectionTitle}>Environment Variables</h4>
+              <>
+                  <h4 style={sectionTitle}>环境变量</h4>
                   <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-                    Legacy per-instance env injection. New ACP deployments normally do not need these.
+                    实例级覆盖；未设置的键会继承引擎默认环境变量。可添加任意自定义键值。
                   </p>
                   {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
                   <div style={credTable}>
@@ -785,9 +811,51 @@ export function InstanceDetail({
                         </div>
                       );
                     })}
+                    {(instance.envVarKeys ?? []).length === 0 && (
+                      <p style={{ color: '#6c7086', fontSize: 12, margin: 0 }}>尚未设置实例级环境变量。</p>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                    {envDrafts.map((row, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <input
+                          style={credInput}
+                          placeholder="变量名"
+                          value={row.key}
+                          onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
+                        />
+                        <input
+                          style={{ ...credInput, flex: 2, minWidth: 160 }}
+                          type="password"
+                          placeholder="值"
+                          value={row.value}
+                          onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
+                        />
+                        {envDrafts.length > 1 && (
+                          <button
+                            style={credCancelBtn}
+                            disabled={envAddBusy}
+                            onClick={() => setEnvDrafts((prev) => prev.filter((_, i) => i !== idx))}
+                          >
+                            移除
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        style={credEditBtn}
+                        disabled={envAddBusy}
+                        onClick={() => setEnvDrafts((prev) => [...prev, { key: '', value: '' }])}
+                      >
+                        再加一行
+                      </button>
+                      <button style={credSaveBtn} disabled={envAddBusy} onClick={() => void saveEnvDrafts()}>
+                        {envAddBusy ? '保存中…' : '保存环境变量'}
+                      </button>
+                    </div>
                   </div>
                 </>
-              )}
 
               {instance.tunnel && (
                 <>

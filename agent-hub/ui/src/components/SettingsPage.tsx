@@ -70,7 +70,7 @@ export function SettingsPage({
         {tab === 'engines' && (
           <section style={card}>
             <h3 style={cardTitle}>引擎管理</h3>
-            <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认凭据与审核策略。</p>
+            <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认环境变量与审核策略。</p>
             <EngineManager
               focusEngineId={focusEngineId}
               onFocusEngineHandled={onFocusEngineHandled}

@@ -494,20 +494,39 @@ function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatf
     case 'claude-code':
       return {
         engineId: 'claude-code',
-        summary: `通过 npx 拉取 Claude Code 官方 ACP 适配器（${hubPlatformLabel(platform)}）。需要 Node.js 与 Anthropic 凭据。`,
+        summary: `通过 npx 拉取社区 Claude ACP 适配器 @agentclientprotocol/claude-agent-acp（${hubPlatformLabel(platform)}）。需要 Node.js；直连 Anthropic 或自定义网关时配置下方环境变量。`,
         acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['claude-code'],
         docsUrl: 'https://agentclientprotocol.com',
         checkBinary: 'npx',
         installable: true,
         installCommand: 'npx -y @agentclientprotocol/claude-agent-acp@latest --version',
         requiredEnvVars: [
-          { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API Key（或在下方凭据区配置）' },
+          {
+            key: 'ANTHROPIC_AUTH_TOKEN',
+            description: '认证 Token（OpenRouter / 自定义网关常用；亦可用 ANTHROPIC_API_KEY）',
+          },
+          {
+            key: 'ANTHROPIC_BASE_URL',
+            description: 'API Base URL（自定义网关 / 代理端点）',
+            optional: true,
+          },
+          {
+            key: 'ANTHROPIC_MODEL',
+            description: '默认模型 ID（如 anthropic/claude-sonnet-4）',
+            optional: true,
+          },
+          {
+            key: 'ANTHROPIC_API_KEY',
+            description: 'Anthropic 官方 API Key（与 AUTH_TOKEN 二选一即可）',
+            optional: true,
+          },
         ],
         steps: [
           nodeInstallStep(platform),
           {
-            title: '配置 Anthropic 凭据',
-            description: '在下方「默认凭据」添加 ANTHROPIC_API_KEY，或在实例环境变量中覆盖。',
+            title: '配置 Anthropic / 网关凭据',
+            description:
+              '在下方「默认环境变量」按需添加 ANTHROPIC_AUTH_TOKEN、ANTHROPIC_BASE_URL、ANTHROPIC_MODEL（或 ANTHROPIC_API_KEY）。可继续添加任意自定义键值；实例侧也可覆盖。',
           },
           {
             title: '预热 ACP 包（可选）',
@@ -548,10 +567,13 @@ function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatf
         checkBinary: 'npx',
         installable: true,
         installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
-        requiredEnvVars: [{ key: 'OPENAI_API_KEY', description: 'OpenAI API Key' }],
+        requiredEnvVars: [
+          { key: 'OPENAI_API_KEY', description: 'OpenAI API Key' },
+          { key: 'OPENAI_BASE_URL', description: '自定义 API Base URL', optional: true },
+        ],
         steps: [
           nodeInstallStep(platform),
-          { title: '配置 OPENAI_API_KEY', description: '在默认凭据区或实例环境变量中设置。' },
+          { title: '配置凭据', description: '在默认凭据区添加 OPENAI_API_KEY；如使用代理可另加 OPENAI_BASE_URL。亦可添加任意自定义环境变量。' },
           {
             title: '预热适配器',
             command: 'npx -y @zed-industries/codex-acp@latest --version',
@@ -679,8 +701,8 @@ const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {
       description: '在「引擎命令」中填写完整 spawn 命令，例如 /usr/local/bin/my-cli --acp。',
     },
     {
-      title: '配置凭据（如需要）',
-      description: '在下方默认凭据区添加该 CLI 所需的环境变量。',
+      title: '配置环境变量（如需要）',
+      description: '在下方默认环境变量区添加该 CLI 所需的任意键值（可多条）。',
     },
   ],
 };

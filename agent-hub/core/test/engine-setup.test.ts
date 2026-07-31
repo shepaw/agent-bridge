@@ -53,6 +53,17 @@ describe('engine-setup', () => {
     expect(guide.steps[0]?.title).toBe('安装 Node.js');
   });
 
+  it('claude-code guide lists Anthropic gateway env vars', () => {
+    const guide = getEngineSetupGuide('claude-code', 'darwin');
+    const keys = (guide.requiredEnvVars ?? []).map((v) => v.key);
+    expect(keys).toEqual(expect.arrayContaining([
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_API_KEY',
+    ]));
+  });
+
   it('detectHubPlatform normalizes node platform', () => {
     expect(detectHubPlatform('darwin')).toBe('darwin');
     expect(detectHubPlatform('win32')).toBe('win32');

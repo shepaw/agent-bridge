@@ -2,12 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import type {
   ApprovalPolicy,
+  EngineEnvVarHint,
   EngineInfo,
   EngineInstallStatus,
   EngineSetupGuide,
   MaskedEnvVar,
 } from '../api/types.js';
 import { ApprovalPolicyEditor, emptyApprovalPolicy } from './ApprovalPolicyEditor.js';
+
+type EnvDraft = { key: string; value: string };
+
+function emptyEnvDraft(): EnvDraft {
+  return { key: '', value: '' };
+}
 
 /**
  * Engine management: list every engine (built-in + custom) and configure
@@ -75,7 +82,7 @@ export function EngineManager({
 
       <h4 style={{ ...sectionTitle, marginTop: 20 }}>引擎列表（{engines.length}）</h4>
       <p style={hint}>
-        每个引擎可单独设置默认凭据与审核策略。审核策略优先级：实例覆盖 {'>'} 引擎默认 {'>'} 全局默认。
+        每个引擎可单独设置默认环境变量与审核策略。审核策略优先级：实例覆盖 {'>'} 引擎默认 {'>'} 全局默认。环境变量支持任意自定义键值。
       </p>
 
       <div style={listCol}>
@@ -124,8 +131,9 @@ function EngineRow({
 
   // Env vars
   const [envVars, setEnvVars] = useState<MaskedEnvVar[]>([]);
-  const [envKey, setEnvKey] = useState('');
-  const [envVal, setEnvVal] = useState('');
+  const [envDrafts, setEnvDrafts] = useState<EnvDraft[]>([emptyEnvDraft()]);
+  const [envHints, setEnvHints] = useState<EngineEnvVarHint[]>([]);
+  const [envEditing, setEnvEditing] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setDisplayName(engine.displayName);
@@ -214,12 +222,47 @@ function EngineRow({
     }
   };
 
-  const addEnv = async () => {
-    setBusy(true); setErr(null);
+  const saveEnvDrafts = async () => {
+    const rows = envDrafts
+      .map((r) => ({ key: r.key.trim(), value: r.value }))
+      .filter((r) => r.key.length > 0);
+    if (rows.length === 0) {
+      setErr('请至少填写一个变量名。');
+      return;
+    }
+    const keys = rows.map((r) => r.key);
+    if (new Set(keys).size !== keys.length) {
+      setErr('草稿中存在重复的变量名。');
+      return;
+    }
+    setBusy(true); setErr(null); setNotice(null);
     try {
-      if (!envKey.trim()) throw new Error('请填写变量名。');
-      await api.engines.envvars.set(engine.id, envKey.trim(), envVal);
-      setEnvKey(''); setEnvVal('');
+      for (const row of rows) {
+        await api.engines.envvars.set(engine.id, row.key, row.value);
+      }
+      setEnvDrafts([emptyEnvDraft()]);
+      setNotice(`已保存 ${rows.length} 个环境变量。`);
+      await loadEnv();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateExistingEnv = async (key: string) => {
+    const value = envEditing[key];
+    if (value === undefined) return;
+    setBusy(true); setErr(null); setNotice(null);
+    try {
+      await api.engines.envvars.set(engine.id, key, value);
+      setEnvEditing((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setNotice(`已更新 ${key}。`);
       await loadEnv();
       onChanged();
     } catch (e) {
@@ -230,7 +273,7 @@ function EngineRow({
   };
 
   const removeEnv = async (key: string) => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setNotice(null);
     try {
       await api.engines.envvars.remove(engine.id, key);
       await loadEnv();
@@ -241,6 +284,20 @@ function EngineRow({
       setBusy(false);
     }
   };
+
+  const applySuggestedKey = (key: string) => {
+    setEnvDrafts((prev) => {
+      if (prev.some((r) => r.key.trim() === key)) return prev;
+      const blankIdx = prev.findIndex((r) => r.key.trim() === '');
+      if (blankIdx >= 0) {
+        return prev.map((r, i) => (i === blankIdx ? { ...r, key } : r));
+      }
+      return [...prev, { key, value: '' }];
+    });
+  };
+
+  const existingKeys = new Set(envVars.map((v) => v.key));
+  const missingHints = envHints.filter((h) => !existingKeys.has(h.key));
 
   const removeEngine = async () => {
     if (!confirm(`删除自定义引擎 "${engine.displayName}"？使用该引擎的实例需先改换引擎。`)) return;
@@ -295,6 +352,7 @@ function EngineRow({
             onChanged={onChanged}
             onError={setErr}
             onNotice={setNotice}
+            onEnvHints={setEnvHints}
           />
 
           {!engine.builtin && (
@@ -312,21 +370,122 @@ function EngineRow({
           )}
 
           <div style={subSection}>
-            <h5 style={subTitle}>默认凭据（使用该引擎的实例自动继承，实例可覆盖）</h5>
+            <h5 style={subTitle}>默认环境变量（使用该引擎的实例自动继承，实例可覆盖）</h5>
+            <p style={hint}>
+              可添加任意数量的自定义环境变量（如 ANTHROPIC_BASE_URL、API Key、代理地址等）。下方建议键可一键填入草稿。
+            </p>
             <div style={envList}>
-              {envVars.map((v) => (
-                <div key={v.key} style={envRow}>
-                  <code style={{ color: '#f9e2af' }}>{v.key}</code>
-                  <span style={{ color: '#6c7086', fontSize: 12 }}>{v.value}</span>
-                  <button style={dangerBtn} disabled={busy} onClick={() => void removeEnv(v.key)}>删除</button>
+              {envVars.map((v) => {
+                const editing = envEditing[v.key] !== undefined;
+                return (
+                  <div key={v.key} style={envRow}>
+                    <code style={{ color: '#f9e2af' }}>{v.key}</code>
+                    {editing ? (
+                      <input
+                        style={{ ...input, flex: 2, minWidth: 140 }}
+                        type="password"
+                        value={envEditing[v.key] ?? ''}
+                        onChange={(e) => setEnvEditing((prev) => ({ ...prev, [v.key]: e.target.value }))}
+                        placeholder="新值"
+                        autoFocus
+                      />
+                    ) : (
+                      <span style={{ color: '#6c7086', fontSize: 12, flex: 1 }}>{v.value}</span>
+                    )}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {editing ? (
+                        <>
+                          <button style={primaryBtn} disabled={busy} onClick={() => void updateExistingEnv(v.key)}>保存</button>
+                          <button
+                            style={secondaryBtn}
+                            disabled={busy}
+                            onClick={() => setEnvEditing((prev) => {
+                              const next = { ...prev };
+                              delete next[v.key];
+                              return next;
+                            })}
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            style={smallBtn}
+                            disabled={busy}
+                            onClick={() => setEnvEditing((prev) => ({ ...prev, [v.key]: '' }))}
+                          >
+                            更新
+                          </button>
+                          <button style={dangerBtn} disabled={busy} onClick={() => void removeEnv(v.key)}>删除</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {envVars.length === 0 && <p style={hint}>尚未设置默认环境变量。</p>}
+            </div>
+
+            {missingHints.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <span style={{ color: '#6c7086', fontSize: 12 }}>建议添加：</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                  {missingHints.map((h) => (
+                    <button
+                      key={h.key}
+                      type="button"
+                      style={hintChip}
+                      title={h.description}
+                      disabled={busy}
+                      onClick={() => applySuggestedKey(h.key)}
+                    >
+                      {h.key}{h.optional ? '（可选）' : ''}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {envDrafts.map((row, idx) => (
+                <div key={idx} style={addRow}>
+                  <input
+                    style={input}
+                    placeholder="变量名"
+                    value={row.key}
+                    onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
+                  />
+                  <input
+                    style={{ ...input, flex: 2 }}
+                    type="password"
+                    placeholder="值"
+                    value={row.value}
+                    onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
+                  />
+                  {envDrafts.length > 1 && (
+                    <button
+                      style={secondaryBtn}
+                      disabled={busy}
+                      onClick={() => setEnvDrafts((prev) => prev.filter((_, i) => i !== idx))}
+                    >
+                      移除
+                    </button>
+                  )}
                 </div>
               ))}
-              {envVars.length === 0 && <p style={hint}>未设置默认凭据。</p>}
-            </div>
-            <div style={addRow}>
-              <input style={input} placeholder="变量名（如 ANTHROPIC_API_KEY）" value={envKey} onChange={(e) => setEnvKey(e.target.value)} />
-              <input style={{ ...input, flex: 2 }} type="password" placeholder="值" value={envVal} onChange={(e) => setEnvVal(e.target.value)} />
-              <button style={primaryBtn} disabled={busy} onClick={() => void addEnv()}>添加</button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  style={secondaryBtn}
+                  disabled={busy}
+                  onClick={() => setEnvDrafts((prev) => [...prev, emptyEnvDraft()])}
+                >
+                  再加一行
+                </button>
+                <button style={primaryBtn} disabled={busy} onClick={() => void saveEnvDrafts()}>
+                  {busy ? '保存中…' : '保存环境变量'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -354,11 +513,13 @@ function EngineSetupSection({
   onChanged,
   onError,
   onNotice,
+  onEnvHints,
 }: {
   engine: EngineInfo;
   onChanged: () => void;
   onError: (msg: string | null) => void;
   onNotice: (msg: string | null) => void;
+  onEnvHints?: (hints: EngineEnvVarHint[]) => void;
 }) {
   const [guide, setGuide] = useState<EngineSetupGuide | null>(null);
   const [status, setStatus] = useState<EngineInstallStatus | null>(null);
@@ -377,8 +538,10 @@ function EngineSetupSection({
       setStatus(data.status);
       setDisabled(data.disabled);
       setPlatformLabel(data.platformLabel);
+      onEnvHints?.(data.guide.requiredEnvVars ?? []);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      onEnvHints?.([]);
     } finally {
       setLoading(false);
     }
@@ -501,7 +664,7 @@ function EngineSetupSection({
 
       {guide.requiredEnvVars && guide.requiredEnvVars.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <span style={{ color: '#6c7086', fontSize: 12 }}>所需环境变量（可在下方「默认凭据」配置）</span>
+          <span style={{ color: '#6c7086', fontSize: 12 }}>所需环境变量（可在下方「默认环境变量」配置）</span>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: '#a6adc8', fontSize: 13 }}>
             {guide.requiredEnvVars.map((v) => (
               <li key={v.key}>
@@ -581,7 +744,11 @@ const tag: React.CSSProperties = {
 const envList: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 };
 const envRow: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
-  background: '#11111b', border: '1px solid #313244', borderRadius: 6, padding: '6px 10px',
+  background: '#11111b', border: '1px solid #313244', borderRadius: 6, padding: '6px 10px', flexWrap: 'wrap',
+};
+const hintChip: React.CSSProperties = {
+  background: '#1e1e2e', color: '#f9e2af', border: '1px solid #45475a',
+  borderRadius: 999, padding: '3px 10px', cursor: 'pointer', fontSize: 12, fontFamily: 'monospace',
 };
 const setupBlock: React.CSSProperties = {
   marginBottom: 16, padding: 12, background: '#11111b',
