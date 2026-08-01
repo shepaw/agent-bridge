@@ -64,7 +64,9 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     id: 'codex',
     displayName: 'Codex',
     command: 'npx',
-    args: ['-y', '@zed-industries/codex-acp@latest'],
+    // Official ACP adapter (Codex App Server). Replaces deprecated
+    // @zed-industries/codex-acp, which cannot parse newer ~/.codex/models.json.
+    args: ['-y', '@agentclientprotocol/codex-acp@latest'],
     defaultAgentName: 'Codex',
   },
   opencode: {
@@ -183,8 +185,8 @@ function isHealthyCursorCli(binaryPath: string): boolean {
   }
 }
 
-function resolveCursorCliBinary(): string | null {
-  const dirs = [
+function commonCliDirs(): string[] {
+  return [
     join(homedir(), '.local', 'bin'),
     ...(process.platform === 'darwin' ? ['/opt/homebrew/bin', '/usr/local/bin'] : []),
     ...(process.platform === 'win32'
@@ -195,24 +197,52 @@ function resolveCursorCliBinary(): string | null {
         ].filter((p) => p.length > 0)
       : []),
   ];
+}
+
+function whichBinary(name: string): string | null {
+  const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], {
+    encoding: 'utf8',
+  });
+  if (which.status !== 0) return null;
+  const line = which.stdout.trim().split(/\r?\n/)[0]?.trim();
+  return line && line.length > 0 ? line : null;
+}
+
+function resolveCursorCliBinary(): string | null {
+  const dirs = commonCliDirs();
   const candidates: string[] = [];
   for (const name of ['agent', 'cursor-agent']) {
     for (const dir of dirs) {
       const full = join(dir, name);
       if (existsSync(full)) candidates.push(full);
     }
-    const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], {
-      encoding: 'utf8',
-    });
-    if (which.status === 0) {
-      const line = which.stdout.trim().split(/\r?\n/)[0]?.trim();
-      if (line) candidates.push(line);
-    }
+    const found = whichBinary(name);
+    if (found !== null) candidates.push(found);
   }
   const unique = [...new Set(candidates)];
   const healthy = unique.filter((p) => isHealthyCursorCli(p));
   if (healthy.length > 0) return healthy[0]!;
   return unique[0] ?? null;
+}
+
+/**
+ * Prefer a real Codex CLI on PATH / common install dirs.
+ * `@agentclientprotocol/codex-acp` uses CODEX_PATH when set; otherwise it falls
+ * back to a bundled `@openai/codex` that often fails under `npx` (missing
+ * optional platform binary).
+ */
+export function resolveCodexCliBinary(): string | null {
+  const found = whichBinary('codex');
+  if (found !== null) return found;
+  for (const dir of commonCliDirs()) {
+    const full = join(dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+    if (existsSync(full)) return full;
+    if (process.platform === 'win32') {
+      const exe = join(dir, 'codex.exe');
+      if (existsSync(exe)) return exe;
+    }
+  }
+  return null;
 }
 
 /** Resolve npx on Windows (.cmd shim); resolve Cursor CLI binary at spawn time. */

@@ -125,7 +125,10 @@ export interface EngineOverridePatch {
 
 export interface MaskedEnvVar {
   key: string;
+  /** Masked for secrets; plaintext for non-sensitive keys (URL, model, …). */
   value: string;
+  /** True when the key looks like a secret (KEY / TOKEN / SECRET / …). */
+  sensitive: boolean;
 }
 
 export interface EngineSetupStep {

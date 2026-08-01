@@ -86,6 +86,7 @@ export {
 } from './peer/peer-file-store.js';
 
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
+export { isSensitiveEnvVarKey } from './env-var-sensitivity.js';
 
 export { detectLanIPv4, resolvePublicHost } from './network.js';
 

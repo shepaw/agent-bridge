@@ -59,6 +59,7 @@ import {
   instancePaths,
   InstanceExistsError,
   InstanceNotFoundError,
+  isSensitiveEnvVarKey,
   listPeerAttachments,
   deletePeerAttachment,
   clearPeerAttachments,
@@ -543,21 +544,22 @@ instancesRouter.post('/:id/stop', async (req: Request, res: Response) => {
 
 // ── envvars ────────────────────────────────────────────────────────
 
-/** GET /api/instances/:id/envvars — list keys with masked values (first/last chars visible) */
+/** GET /api/instances/:id/envvars — list keys; secrets masked, non-secrets plaintext */
 instancesRouter.get('/:id/envvars', (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const p = getInstance(cfg, req.params.id!);
     const root = hubRoot();
     const result = Object.entries(p.envVars ?? {}).map(([key, encrypted]) => {
-      let masked = '••••••••';
+      const sensitive = isSensitiveEnvVarKey(key);
+      let value = sensitive ? '••••••••' : '';
       try {
         const plain = decryptValue(encrypted, root);
-        masked = maskSecretValue(plain);
+        value = sensitive ? maskSecretValue(plain) : plain;
       } catch {
-        // decryption failed — fall back to generic mask
+        // decryption failed — fall back to generic mask / empty
       }
-      return { key, value: masked };
+      return { key, value, sensitive };
     });
     res.json(result);
   } catch (err) {

@@ -32,6 +32,7 @@ import {
   getEngineSetupGuide,
   hubPlatformLabel,
   isKnownEngineForOverrides,
+  isSensitiveEnvVarKey,
   listEngineInfos,
   loadOrCreateHubConfig,
   removeCustomEngineFromHub,
@@ -273,7 +274,7 @@ enginesRouter.delete('/:id/approval', (req: Request, res: Response) => {
 
 // ── engine-default env vars ───────────────────────────────────────
 
-/** GET /api/engines/:id/envvars — list engine-default env var keys with masked values. */
+/** GET /api/engines/:id/envvars — list engine-default env vars (secrets masked). */
 enginesRouter.get('/:id/envvars', (req: Request, res: Response) => {
   try {
     requireKnownEngine(req.params.id!);
@@ -281,13 +282,15 @@ enginesRouter.get('/:id/envvars', (req: Request, res: Response) => {
     const root = hubRoot();
     const ov = cfg.engineOverrides?.[req.params.id!];
     const result = Object.entries(ov?.envVars ?? {}).map(([key, encrypted]) => {
-      let masked = '••••••••';
+      const sensitive = isSensitiveEnvVarKey(key);
+      let value = sensitive ? '••••••••' : '';
       try {
-        masked = maskSecretValue(decryptValue(encrypted, root));
+        const plain = decryptValue(encrypted, root);
+        value = sensitive ? maskSecretValue(plain) : plain;
       } catch {
-        // fall back to generic mask
+        // fall back to generic mask / empty
       }
-      return { key, value: masked };
+      return { key, value, sensitive };
     });
     res.json(result);
   } catch (err) {

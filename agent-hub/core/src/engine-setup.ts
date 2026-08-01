@@ -89,7 +89,7 @@ export interface EngineInstallResult {
 export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = {
   'claude-code': 'npx -y @agentclientprotocol/claude-agent-acp@latest',
   codebuddy: 'codebuddy --acp',
-  codex: 'npx -y @zed-industries/codex-acp@latest',
+  codex: 'npx -y @agentclientprotocol/codex-acp@latest',
   opencode: 'npx -y opencode-ai@latest acp',
   openclaw: 'npx -y openclaw acp',
   cursor: 'agent acp',
@@ -562,22 +562,35 @@ function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatf
     case 'codex':
       return {
         engineId: 'codex',
-        summary: `通过 npx 运行 Codex ACP 适配器（${hubPlatformLabel(platform)}）；需要 Node.js 与 OpenAI 凭据。`,
+        summary: `通过官方 @agentclientprotocol/codex-acp（Codex App Server）对接（${hubPlatformLabel(platform)}）；需要本机 Codex CLI，可用 ChatGPT 登录或 API Key。`,
         acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.codex,
-        checkBinary: 'npx',
+        // Runtime needs a real `codex` binary (injected as CODEX_PATH). npx alone
+        // is not enough — the adapter's bundled optional platform package often fails.
+        checkBinary: 'codex',
         installable: true,
-        installCommand: 'npx -y @zed-industries/codex-acp@latest --version',
+        installCommand: 'npm install -g @openai/codex@latest',
         requiredEnvVars: [
-          { key: 'OPENAI_API_KEY', description: 'OpenAI API Key' },
+          { key: 'OPENAI_API_KEY', description: 'OpenAI API Key（已用 codex login 时可省略）', optional: true },
+          { key: 'CODEX_API_KEY', description: 'Codex API Key（优先于 OPENAI_API_KEY）', optional: true },
           { key: 'OPENAI_BASE_URL', description: '自定义 API Base URL', optional: true },
+          { key: 'CODEX_PATH', description: '自定义 Codex 可执行文件路径（默认自动探测）', optional: true },
         ],
         steps: [
           nodeInstallStep(platform),
-          { title: '配置凭据', description: '在默认凭据区添加 OPENAI_API_KEY；如使用代理可另加 OPENAI_BASE_URL。亦可添加任意自定义环境变量。' },
           {
-            title: '预热适配器',
-            command: 'npx -y @zed-industries/codex-acp@latest --version',
-            description: '一键安装会预先下载 Codex ACP 包。',
+            title: '安装 Codex CLI',
+            command: 'npm install -g @openai/codex@latest',
+            description: 'Hub 会把本机 `codex` 注入为 CODEX_PATH，供官方 ACP 适配器调用。',
+          },
+          {
+            title: '配置凭据',
+            description:
+              '优先使用本机 `codex login`（ChatGPT）。也可用默认凭据区配置 OPENAI_API_KEY / CODEX_API_KEY；代理可另加 OPENAI_BASE_URL。',
+          },
+          {
+            title: '预热 ACP 适配器',
+            command: 'npx -y @agentclientprotocol/codex-acp@latest --version',
+            description: '预先下载官方 Codex ACP 包（@agentclientprotocol/codex-acp）。',
           },
         ],
       };

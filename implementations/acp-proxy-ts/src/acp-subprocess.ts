@@ -15,7 +15,7 @@ import { TaskCancelledError } from 'shepaw-acp-sdk';
 import type { ModelsListResult, ModelsSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
-import { spawnCommand } from './engines.js';
+import { resolveCodexCliBinary, spawnCommand } from './engines.js';
 import { loadUpstreamSessionTranscript } from './session-history.js';
 import {
   buildSetModelResult,
@@ -360,10 +360,24 @@ export class AcpSubprocess {
   }
 
   private async doStart(): Promise<void> {
-    const { command, args } = spawnCommand(this.spec, {
+    const mergedEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.extraEnv,
-    });
+    };
+    // Official codex-acp prefers CODEX_PATH over its bundled @openai/codex.
+    // npx installs often omit the optional platform package; point at a real CLI.
+    if (
+      this.spec.id === 'codex' &&
+      (mergedEnv.CODEX_PATH === undefined || mergedEnv.CODEX_PATH.length === 0)
+    ) {
+      const codexBin = resolveCodexCliBinary();
+      if (codexBin !== null) {
+        mergedEnv.CODEX_PATH = codexBin;
+        log('CODEX_PATH unset; using local Codex CLI: %s', codexBin);
+      }
+    }
+
+    const { command, args } = spawnCommand(this.spec, mergedEnv);
     log('spawning ACP agent: %s %s (cwd=%s)', command, args.join(' '), this.cwd);
 
     let stderrTail = '';
@@ -371,10 +385,7 @@ export class AcpSubprocess {
     const child = spawn(command, args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: augmentAgentEnv({
-        ...process.env,
-        ...this.extraEnv,
-      }),
+      env: augmentAgentEnv(mergedEnv),
     });
 
     child.on('error', (err) => {
@@ -404,6 +415,9 @@ export class AcpSubprocess {
         hint = ' — upstream agent process was terminated';
       } else if (this.spec.id === 'cursor') {
         hint = ' — check CURSOR_API_KEY or run cursor-agent login';
+      } else if (this.spec.id === 'codex') {
+        hint =
+          ' — install Codex CLI (`npm i -g @openai/codex`) or set CODEX_PATH; run `codex login` if needed';
       }
       const detail = stderrTail.trim().length > 0 ? ` stderr: ${summarizeStderr(stderrTail)}` : '';
       return new Error(`ACP agent exited (${code ?? signal})${hint}${detail}`);

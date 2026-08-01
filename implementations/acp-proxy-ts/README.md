@@ -48,7 +48,7 @@ Custom engines are stored in `hub.json` under `customEngines` and appear in the 
 |-------------|------------------|
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp@latest` |
 | `codebuddy`   | `codebuddy --acp` |
-| `codex`       | `npx -y @zed-industries/codex-acp@latest` |
+| `codex`       | `npx -y @agentclientprotocol/codex-acp@latest` |
 | `opencode`    | `npx opencode-ai@latest acp` |
 | `openclaw`    | `npx openclaw acp` |
 | `cursor`      | `agent acp` |

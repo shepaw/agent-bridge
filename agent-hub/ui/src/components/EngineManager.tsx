@@ -9,6 +9,7 @@ import type {
   MaskedEnvVar,
 } from '../api/types.js';
 import { ApprovalPolicyEditor, emptyApprovalPolicy } from './ApprovalPolicyEditor.js';
+import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
 
 type EnvDraft = { key: string; value: string };
 
@@ -377,20 +378,29 @@ function EngineRow({
             <div style={envList}>
               {envVars.map((v) => {
                 const editing = envEditing[v.key] !== undefined;
+                const sensitive = v.sensitive ?? isSensitiveEnvVarKey(v.key);
                 return (
                   <div key={v.key} style={envRow}>
                     <code style={{ color: '#f9e2af' }}>{v.key}</code>
                     {editing ? (
                       <input
                         style={{ ...input, flex: 2, minWidth: 140 }}
-                        type="password"
+                        type={sensitive ? 'password' : 'text'}
                         value={envEditing[v.key] ?? ''}
                         onChange={(e) => setEnvEditing((prev) => ({ ...prev, [v.key]: e.target.value }))}
-                        placeholder="新值"
+                        placeholder={sensitive ? '新值' : '新值'}
                         autoFocus
                       />
                     ) : (
-                      <span style={{ color: '#6c7086', fontSize: 12, flex: 1 }}>{v.value}</span>
+                      <span style={{
+                        color: sensitive ? '#6c7086' : '#a6e3a1',
+                        fontSize: 12,
+                        flex: 1,
+                        fontFamily: 'monospace',
+                        wordBreak: 'break-all',
+                      }}>
+                        {v.value}
+                      </span>
                     )}
                     <div style={{ display: 'flex', gap: 6 }}>
                       {editing ? (
@@ -413,7 +423,11 @@ function EngineRow({
                           <button
                             style={smallBtn}
                             disabled={busy}
-                            onClick={() => setEnvEditing((prev) => ({ ...prev, [v.key]: '' }))}
+                            onClick={() => setEnvEditing((prev) => ({
+                              ...prev,
+                              // Prefill non-secrets so URLs/models are easy to tweak; secrets stay blank.
+                              [v.key]: sensitive ? '' : v.value,
+                            }))}
                           >
                             更新
                           </button>
@@ -448,32 +462,35 @@ function EngineRow({
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {envDrafts.map((row, idx) => (
-                <div key={idx} style={addRow}>
-                  <input
-                    style={input}
-                    placeholder="变量名"
-                    value={row.key}
-                    onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
-                  />
-                  <input
-                    style={{ ...input, flex: 2 }}
-                    type="password"
-                    placeholder="值"
-                    value={row.value}
-                    onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
-                  />
-                  {envDrafts.length > 1 && (
-                    <button
-                      style={secondaryBtn}
-                      disabled={busy}
-                      onClick={() => setEnvDrafts((prev) => prev.filter((_, i) => i !== idx))}
-                    >
-                      移除
-                    </button>
-                  )}
-                </div>
-              ))}
+              {envDrafts.map((row, idx) => {
+                const sensitive = isSensitiveEnvVarKey(row.key);
+                return (
+                  <div key={idx} style={addRow}>
+                    <input
+                      style={input}
+                      placeholder="变量名"
+                      value={row.key}
+                      onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
+                    />
+                    <input
+                      style={{ ...input, flex: 2 }}
+                      type={sensitive ? 'password' : 'text'}
+                      placeholder={sensitive ? '敏感值（将加密存储）' : '值'}
+                      value={row.value}
+                      onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
+                    />
+                    {envDrafts.length > 1 && (
+                      <button
+                        style={secondaryBtn}
+                        disabled={busy}
+                        onClick={() => setEnvDrafts((prev) => prev.filter((_, i) => i !== idx))}
+                      >
+                        移除
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
                   style={secondaryBtn}

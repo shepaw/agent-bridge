@@ -9,6 +9,7 @@ import { SessionsPanel } from './SessionsPanel.js';
 import { AttachmentsPanel } from './AttachmentsPanel.js';
 import { InstanceApprovalSection } from './InstanceApprovalSection.js';
 import { maskSecret } from '../utils/maskSecret.js';
+import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
 import {
   availabilityColor,
   busyColor,
@@ -763,6 +764,7 @@ export function InstanceDetail({
                     {(instance.envVarKeys ?? []).map((key) => {
                       const isEditing = envEditing[key] !== undefined;
                       const isBusy = envBusy[key] === true;
+                      const sensitive = isSensitiveEnvVarKey(key);
                       return (
                         <div key={key} style={credRow}>
                           <code style={{ fontSize: 11, color: '#6c7086' }}>{key}</code>
@@ -771,14 +773,18 @@ export function InstanceDetail({
                               <>
                                 <input
                                   style={credInput}
-                                  type="password"
+                                  type={sensitive ? 'password' : 'text'}
                                   value={envEditing[key] === ENV_UNCHANGED
-                                    ? (envMasked[key] ?? '••••••••')
+                                    ? (envMasked[key] ?? (sensitive ? '••••••••' : ''))
                                     : envEditing[key]}
                                   onChange={(e) => setEnvEditing((prev) => ({ ...prev, [key]: e.target.value }))}
                                   onFocus={() => {
-                                    if (envEditing[key] === ENV_UNCHANGED)
-                                      setEnvEditing((prev) => ({ ...prev, [key]: '' }));
+                                    if (envEditing[key] === ENV_UNCHANGED) {
+                                      setEnvEditing((prev) => ({
+                                        ...prev,
+                                        [key]: sensitive ? '' : (envMasked[key] ?? ''),
+                                      }));
+                                    }
                                   }}
                                   placeholder="Enter new value"
                                   autoFocus
@@ -792,8 +798,13 @@ export function InstanceDetail({
                               </>
                             ) : (
                               <>
-                                <code style={{ fontSize: 12, color: '#a6e3a1', fontFamily: 'monospace' }}>
-                                  {envMasked[key] ?? '••••••••'}
+                                <code style={{
+                                  fontSize: 12,
+                                  color: sensitive ? '#6c7086' : '#a6e3a1',
+                                  fontFamily: 'monospace',
+                                  wordBreak: 'break-all',
+                                }}>
+                                  {envMasked[key] ?? (sensitive ? '••••••••' : '')}
                                 </code>
                                 <button
                                   style={credEditBtn}
@@ -816,7 +827,9 @@ export function InstanceDetail({
                     )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-                    {envDrafts.map((row, idx) => (
+                    {envDrafts.map((row, idx) => {
+                      const sensitive = isSensitiveEnvVarKey(row.key);
+                      return (
                       <div key={idx} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <input
                           style={credInput}
@@ -826,8 +839,8 @@ export function InstanceDetail({
                         />
                         <input
                           style={{ ...credInput, flex: 2, minWidth: 160 }}
-                          type="password"
-                          placeholder="值"
+                          type={sensitive ? 'password' : 'text'}
+                          placeholder={sensitive ? '敏感值' : '值'}
                           value={row.value}
                           onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
                         />
@@ -841,7 +854,8 @@ export function InstanceDetail({
                           </button>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <button
                         style={credEditBtn}

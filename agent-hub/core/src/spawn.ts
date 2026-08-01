@@ -46,7 +46,14 @@ import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
 import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
-import { augmentSpawnPath, getCursorAcpCommand, resolveCursorCliBinary, resolveEngineAvailability } from './engine-setup.js';
+import {
+  augmentSpawnPath,
+  getCursorAcpCommand,
+  resolveBinaryPath,
+  resolveCursorCliBinary,
+  resolveEngineAvailability,
+  SPAWN_PATH_PREFIXES,
+} from './engine-setup.js';
 import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand, isKnownEngine } from './engines.js';
@@ -196,6 +203,18 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       args.push('--acp-command', getCursorAcpCommand());
     }
 
+    const instanceEnv = decryptEnvVars(instance.envVars ?? {}, hubRoot());
+    // Official @agentclientprotocol/codex-acp reads CODEX_PATH; without it the
+    // bundled @openai/codex under npx often fails (missing optional platform bin).
+    const codexPath =
+      instance.engine === 'codex'
+        ? (instanceEnv.CODEX_PATH ??
+          engineEnv.CODEX_PATH ??
+          process.env.CODEX_PATH ??
+          resolveBinaryPath('codex', [...SPAWN_PATH_PREFIXES]) ??
+          undefined)
+        : undefined;
+
     const child = nodeSpawn(process.execPath, args, {
       // Detached so the child survives the hub CLI exiting. On Windows this
       // also requires `windowsHide: true` to avoid a black console popping
@@ -214,7 +233,8 @@ export async function startInstance(instance: InstanceConfig): Promise<{
         // Per-instance credentials (ANTHROPIC_API_KEY, CODEBUDDY_API_KEY, etc.).
         // Decrypted from hub.json's envVars at spawn time; never appear in
         // argv or hub.json in plaintext. Instance values override engine defaults.
-        ...decryptEnvVars(instance.envVars ?? {}, hubRoot()),
+        ...instanceEnv,
+        ...(codexPath !== undefined && codexPath.length > 0 ? { CODEX_PATH: codexPath } : {}),
         // Redirect SDK file-resolution to this instance's isolated dir.
         // These three vars are the entire integration surface between hub
         // and the unmodified gateway binaries.
