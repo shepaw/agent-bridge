@@ -42,6 +42,26 @@ node dist/cli.js serve --engine my-agent --engine-display-name "My Agent" \
 Custom engines are stored in `hub.json` under `customEngines` and appear in the Hub UI
 **Custom Engines** dialog and project engine picker.
 
+## Nexuspouch store tools (M1.5)
+
+`src/store-tools.ts` provides a self-contained Nexuspouch HTTP client
+(`StoreToolsClient`) with `store_write` / `store_read` / `store_meta` /
+`store_list` tool definitions and a `executeStoreTool` dispatcher
+(sha256-verified write path over the store frame API). It is ready to be
+injected into the gateway tool pipeline; until that hook lands, agents reach
+the same tools through the agent-side MCP config in `examples/mcp/`.
+
+```ts
+import { StoreToolsClient, executeStoreTool } from './src/store-tools.js';
+const client = new StoreToolsClient('http://127.0.0.1:8787', '<token>', '<device>');
+const out = await executeStoreTool('store_write',
+  { filename: 't-1/out.md', content: '...', space: 'artifacts' }, client);
+```
+
+`npm test` (vitest) covers the write→read roundtrip and error mapping; the
+project's pinned vite has a Node 24 startup incompatibility, so on this host
+run `npx tsc --noEmit` plus `test/store-tools.test.ts` in CI instead.
+
 ## Supported upstream agents
 
 | `--engine`   | Upstream command |

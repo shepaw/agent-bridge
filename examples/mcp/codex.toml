@@ -1,0 +1,4 @@
+# ~/.codex/config.toml — append this block
+[mcp_servers.nexuspouch]
+command = "nexuspouch"
+args = ["mcp", "--root", "/var/lib/nexuspouch", "--token", "<scoped-token>"]

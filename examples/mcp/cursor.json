@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nexuspouch": {
+      "command": "nexuspouch",
+      "args": ["mcp", "--root", "/var/lib/nexuspouch", "--token", "<scoped-token>"]
+    }
+  }
+}
