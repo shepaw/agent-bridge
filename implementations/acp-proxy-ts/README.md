@@ -58,9 +58,9 @@ const out = await executeStoreTool('store_write',
   { filename: 't-1/out.md', content: '...', space: 'artifacts' }, client);
 ```
 
-`npm test` (vitest) covers the write→read roundtrip and error mapping; the
-project's pinned vite has a Node 24 startup incompatibility, so on this host
-run `npx tsc --noEmit` plus `test/store-tools.test.ts` in CI instead.
+`npm test` (vitest) covers the write→read roundtrip and error mapping.
+Recommended Node is 20 (see repo `.nvmrc` / Docker `node:20`); vitest 2.1 +
+vite 5.4 also starts on Node 22. Prefer `nvm use` / Node 20 for local runs.
 
 ## Supported upstream agents
 

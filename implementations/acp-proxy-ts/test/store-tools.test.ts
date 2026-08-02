@@ -49,9 +49,11 @@ describe('store tools (Nexuspouch HTTP)', () => {
         });
         return;
       }
+      // store://<space>/<device>/<path...> → path after device
+      const pathFromUri = (uri: string) => uri.split('/').slice(4).join('/');
       if (url.pathname === '/api/v1/uri/resolve') {
         const uri = url.searchParams.get('uri') ?? '';
-        const path = uri.split('/').slice(3).join('/');
+        const path = pathFromUri(uri);
         const bytes = files.get(path);
         if (!bytes) return send(400, { error: 'not_found', message: 'no such file' });
         return send(200, {
@@ -61,7 +63,7 @@ describe('store tools (Nexuspouch HTTP)', () => {
       }
       if (url.pathname === '/api/v1/read') {
         const uri = url.searchParams.get('uri') ?? '';
-        const path = uri.split('/').slice(3).join('/');
+        const path = pathFromUri(uri);
         const bytes = files.get(path);
         if (!bytes) return send(400, { error: 'not_found', message: 'no such file' });
         res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
