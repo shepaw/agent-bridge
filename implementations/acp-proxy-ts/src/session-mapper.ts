@@ -6,7 +6,7 @@ import type * as acp from '@agentclientprotocol/sdk';
 import type { TaskContext } from 'shepaw-acp-sdk';
 
 import { log } from './debug.js';
-import { extractCommand, extractPaths } from './permission/format.js';
+import { formatPlanText, formatToolCallUpdateText } from './permission/format.js';
 
 /** Stream a final (or buffered) agent answer chunk to the app. */
 export async function flushAgentMessage(ctx: TaskContext, text: string): Promise<void> {
@@ -57,16 +57,8 @@ export async function mapSessionUpdate(
       // Surface enough of the tool call (command, affected files) that a
       // reviewer can follow along — the thin `[status] title` alone hides
       // exactly what the agent is about to do.
-      const lines = [`[${update.status}] ${title}`];
-      const command = extractCommand(update);
-      if (command.length > 0 && command !== title) {
-        lines.push('```', command.slice(0, 2000), '```');
-      }
-      const paths = extractPaths(update);
-      if (paths.length > 0) {
-        lines.push(`Files: ${paths.slice(0, 12).join(', ')}${paths.length > 12 ? ' …' : ''}`);
-      }
-      await ctx.sendText(`${lines.join('\n')}\n`);
+      const text = formatToolCallUpdateText(update);
+      if (text !== undefined) await ctx.sendText(text);
       break;
     }
 
@@ -77,31 +69,21 @@ export async function mapSessionUpdate(
         // (in_progress / completed) — not a fresh agent_message_chunk. Stream
         // those so the phone UI shows progress instead of looking frozen
         // until the next permission card or final text.
-        const title = update.title ?? update.kind ?? update.toolCallId ?? 'Tool';
-        const lines = [`[${update.status}] ${title}`];
-        const command = extractCommand(update);
-        if (command.length > 0 && command !== title) {
-          lines.push('```', command.slice(0, 2000), '```');
-        }
-        const paths = extractPaths(update);
-        if (paths.length > 0) {
-          lines.push(`Files: ${paths.slice(0, 12).join(', ')}${paths.length > 12 ? ' …' : ''}`);
-        }
-        await ctx.sendText(`${lines.join('\n')}\n`);
+        const text = formatToolCallUpdateText(update);
+        if (text !== undefined) await ctx.sendText(text);
       }
       break;
     }
 
     case 'plan': {
-      const entries = update.entries ?? [];
-      if (entries.length > 0) {
+      const text = formatPlanText(update);
+      if (text !== undefined) {
         await ctx.sendMessageMetadata({
           collapsible: true,
           collapsibleTitle: 'Plan',
           autoCollapse: false,
         });
-        const lines = entries.map((e, i) => `${i + 1}. ${e.content ?? ''}`);
-        await ctx.sendText(`${lines.join('\n')}\n`);
+        await ctx.sendText(text);
       }
       break;
     }

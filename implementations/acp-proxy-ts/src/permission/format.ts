@@ -54,6 +54,57 @@ function truncate(text: string, max: number): string {
 }
 
 /**
+ * Render one tool call as the compact text block the chat bubble shows:
+ * `[status] title` plus an optional fenced command and affected files.
+ *
+ * Shared by the live stream (session-mapper) and history reconstruction
+ * (disk-history loaders + session/load replay) so a synced bubble carries the
+ * same tool-call text the live bubble had.
+ */
+export function formatToolLines(
+  status: string,
+  title: string,
+  command?: string,
+  paths?: ReadonlyArray<string>,
+): string {
+  const lines = [`[${status}] ${title}`];
+  const cmd = (command ?? '').trim();
+  if (cmd.length > 0 && cmd !== title) {
+    lines.push('```', cmd.slice(0, MAX_COMMAND_CHARS), '```');
+  }
+  if (paths !== undefined && paths.length > 0) {
+    lines.push(`Files: ${paths.slice(0, 12).join(', ')}${paths.length > 12 ? ' …' : ''}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** Live-stream text for an ACP `tool_call` / `tool_call_update` notification. */
+export function formatToolCallUpdateText(
+  update: acp.SessionUpdate,
+): string | undefined {
+  if (update.sessionUpdate === 'tool_call') {
+    const title = update.title ?? update.kind ?? 'Tool';
+    const status = update.status ?? 'completed';
+    return formatToolLines(status, title, extractCommand(update), extractPaths(update));
+  }
+  if (update.sessionUpdate === 'tool_call_update') {
+    if (update.status === undefined || update.status === null) return undefined;
+    const title = update.title ?? update.kind ?? update.toolCallId ?? 'Tool';
+    return formatToolLines(update.status, title, extractCommand(update), extractPaths(update));
+  }
+  return undefined;
+}
+
+/** Live-stream text for an ACP `plan` notification (`1. …` lines), if any. */
+export function formatPlanText(update: acp.SessionUpdate): string | undefined {
+  if (update.sessionUpdate !== 'plan') return undefined;
+  const entries = update.entries ?? [];
+  if (entries.length === 0) return undefined;
+  const lines = entries.map((e, i) => `${i + 1}. ${e.content ?? ''}`);
+  return `${lines.join('\n')}\n`;
+}
+
+/**
  * Best-effort extraction of the "command" a tool wants to run, used both for
  * display and for policy pattern matching. Handles the common `rawInput`
  * shapes across Claude Code / Codex / CodeBuddy (command/cmd/script as string

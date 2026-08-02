@@ -230,6 +230,17 @@ export interface SessionHistoryMessage {
    * truth for bubble / session-list timestamps.
    */
   created_at?: string;
+  /**
+   * Pre-split progress section for agent turns (thinking / tool calls / plan),
+   * reconstructed from the engine transcript. The app folds it into the same
+   * collapsible block it uses for the live stream (`metadata.progress_content`),
+   * so a synced bubble looks like the live one instead of dropping progress.
+   */
+  progress_content?: string;
+  /** Collapsible section title — mirrors the live stream's last section title. */
+  progress_title?: string;
+  /** Whether the progress block starts collapsed (default true). */
+  progress_auto_collapse?: boolean;
 }
 
 /** `agent.sessions.history` request params. */

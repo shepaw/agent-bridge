@@ -44,7 +44,7 @@ export async function loadHermesHistory(sessionId: string): Promise<DiskHistoryM
       if (row.role !== 'user' && row.role !== 'assistant' && row.role !== 'agent') continue;
       const role = row.role === 'user' ? 'user' : 'agent';
       const createdAt = toIsoFromUnknown(row.timestamp);
-      pushTurn(out, role, String(row.content ?? ''), createdAt);
+      pushTurn(out, { role, content: String(row.content ?? ''), createdAt });
     }
     return out.length > 0 ? out : null;
   } catch {

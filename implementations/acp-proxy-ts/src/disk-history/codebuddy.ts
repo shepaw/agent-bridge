@@ -13,7 +13,7 @@ import {
   codebuddyProjectSlug,
   homePath,
   pushTurn,
-  textFromContentBlocks,
+  splitAnthropicBlocks,
   toIsoFromUnknown,
   type DiskHistoryMessage,
 } from './util.js';
@@ -37,15 +37,20 @@ async function parseMessageJsonl(path: string): Promise<DiskHistoryMessage[] | n
     const roleRaw = obj.role;
     if (roleRaw !== 'user' && roleRaw !== 'assistant') continue;
     if (obj.type !== undefined && obj.type !== 'message') continue;
-    const content = textFromContentBlocks(obj.content);
+    const { answer, progress, progressTitle } = splitAnthropicBlocks(obj.content);
     const role = roleRaw === 'user' ? 'user' : 'agent';
-    const createdAt = toIsoFromUnknown(obj.timestamp);
-    const messageId = typeof obj.uuid === 'string'
-      ? obj.uuid
-      : typeof obj.id === 'string'
-        ? obj.id
-        : undefined;
-    pushTurn(out, role, content, createdAt, messageId);
+    pushTurn(out, {
+      role,
+      content: answer,
+      progress: role === 'agent' ? progress : undefined,
+      progressTitle: role === 'agent' ? progressTitle : undefined,
+      createdAt: toIsoFromUnknown(obj.timestamp),
+      messageId: typeof obj.uuid === 'string'
+        ? obj.uuid
+        : typeof obj.id === 'string'
+          ? obj.id
+          : undefined,
+    });
   }
   return out.length > 0 ? out : null;
 }

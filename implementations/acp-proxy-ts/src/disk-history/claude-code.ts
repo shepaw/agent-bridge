@@ -9,7 +9,7 @@ import {
   claudeProjectSlug,
   homePath,
   pushTurn,
-  textFromContentBlocks,
+  splitAnthropicBlocks,
   toIsoFromUnknown,
   type DiskHistoryMessage,
 } from './util.js';
@@ -38,16 +38,21 @@ export async function loadClaudeCodeHistory(
     const type = obj.type;
     if (type !== 'user' && type !== 'assistant') continue;
     const message = obj.message;
-    let content = '';
-    if (message !== null && typeof message === 'object') {
-      content = textFromContentBlocks((message as Record<string, unknown>).content);
-    } else {
-      content = textFromContentBlocks(obj.content);
-    }
+    const blocks =
+      message !== null && typeof message === 'object'
+        ? (message as Record<string, unknown>).content
+        : obj.content;
+    const { answer, progress, progressTitle } = splitAnthropicBlocks(blocks);
     const role = type === 'user' ? 'user' : 'agent';
-    const createdAt = toIsoFromUnknown(obj.timestamp);
-    const messageId = typeof obj.uuid === 'string' ? obj.uuid : undefined;
-    pushTurn(out, role, content, createdAt, messageId);
+    pushTurn(out, {
+      role,
+      content: answer,
+      // Tool calls / thinking only make sense on the agent side.
+      progress: role === 'agent' ? progress : undefined,
+      progressTitle: role === 'agent' ? progressTitle : undefined,
+      createdAt: toIsoFromUnknown(obj.timestamp),
+      messageId: typeof obj.uuid === 'string' ? obj.uuid : undefined,
+    });
   }
   return out.length > 0 ? out : null;
 }
