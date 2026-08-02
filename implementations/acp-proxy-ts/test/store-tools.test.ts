@@ -32,10 +32,20 @@ describe('store tools (Nexuspouch HTTP)', () => {
             files.set(payload.upload_id.replace('u-', ''), Buffer.concat([cur, part]));
             return send(200, { op: 'result', data: { received: payload.offset + part.length } });
           }
-          if (op === 'commit') {
+          if (op === 'commit' || op === 'handoff.create') {
             const path = (payload.upload_ids as string[])[0].replace('u-', '');
             const bytes = files.get(path) ?? Buffer.alloc(0);
             const sha = createHash('sha256').update(bytes).digest('hex');
+            if (op === 'handoff.create') {
+              return send(200, {
+                op: 'result',
+                data: {
+                  committed: [{ path, sha256: sha, size: bytes.length }],
+                  handoff_uri: `store://artifacts/aaaaaaaaaaaaaaaa/${path}`,
+                  state: 'published',
+                },
+              });
+            }
             return send(200, {
               op: 'result',
               data: {
@@ -99,6 +109,24 @@ describe('store tools (Nexuspouch HTTP)', () => {
     const read = await executeStoreTool('store_read', { uri }, client);
     expect(read.ok).toBe(true);
     expect((read.data as { encoding: string; content: string }).content).toBe('hello store tools');
+  });
+
+  it('store_write with context uses handoff.create', async () => {
+    const client = new StoreToolsClient(base, 'tok', 'aaaaaaaaaaaaaaaa');
+    const written = await executeStoreTool(
+      'store_write',
+      {
+        filename: 't-2/out.txt',
+        content: 'handoff me',
+        space: 'artifacts',
+        context: 'please review',
+        to_agent: 'agent-b',
+      },
+      client,
+    );
+    expect(written.ok).toBe(true);
+    expect((written.data as { state: string }).state).toBe('published');
+    expect((written.data as { uri: string }).uri).toContain('t-2/out.txt');
   });
 
   it('unknown tool and missing file error mapping', async () => {

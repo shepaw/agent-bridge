@@ -43,6 +43,14 @@ export const storeToolDefs: StoreToolDef[] = [
           default: 'artifacts',
         },
         task: { type: 'string', description: 'Optional task folder prefix' },
+        context: {
+          type: 'string',
+          description: 'If set (or to_agent), commit via handoff.create (M3)',
+        },
+        to_agent: {
+          type: 'string',
+          description: 'Optional handoff recipient agent id',
+        },
       },
       required: ['filename', 'content'],
     },
@@ -153,8 +161,37 @@ export class StoreToolsClient {
           data: Buffer.from(chunk).toString('base64'),
         });
       }
-      await this.storeOp('commit', { space, upload_ids: [uploadId] });
+      const context =
+        typeof args.context === 'string' && args.context.trim()
+          ? String(args.context)
+          : undefined;
+      const toAgent =
+        typeof args.to_agent === 'string' && args.to_agent.trim()
+          ? String(args.to_agent)
+          : undefined;
       const uri = `store://${space}/${this.device}/${path}`;
+      if (context || toAgent) {
+        const handoffPayload: Record<string, unknown> = {
+          space,
+          upload_ids: [uploadId],
+        };
+        if (context) handoffPayload.context = context;
+        if (toAgent) handoffPayload.to_agent = toAgent;
+        const handoff = await this.storeOp('handoff.create', handoffPayload);
+        return {
+          ok: true,
+          data: {
+            uri: String(handoff.handoff_uri ?? uri),
+            space,
+            path,
+            size: bytes.length,
+            sha256: sha,
+            state: handoff.state ?? 'published',
+            handoff,
+          },
+        };
+      }
+      await this.storeOp('commit', { space, upload_ids: [uploadId] });
       return { ok: true, data: { uri, space, path, size: bytes.length, sha256: sha } };
     } catch (e) {
       return toResultError(e);
