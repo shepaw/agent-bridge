@@ -4,10 +4,12 @@ import { filterListedSessions, shouldExposeListedSession } from '../src/sessions
 
 const ctx = (overrides: Partial<{
   disposable: string[];
+  orphaned: string[];
   preserve: string[];
   active: string[];
 }> = {}) => ({
   disposableUpstreamIds: new Set(overrides.disposable ?? []),
+  orphanedUpstreamIds: new Set(overrides.orphaned ?? []),
   preserveUpstreamIds: new Set(overrides.preserve ?? []),
   activeUpstreamIds: new Set(overrides.active ?? []),
 });
@@ -18,6 +20,17 @@ describe('shouldExposeListedSession', () => {
       shouldExposeListedSession(
         { sessionId: 'warm-1', cwd: '/tmp' },
         ctx({ disposable: ['warm-1'] }),
+      ),
+    ).toBe(false);
+  });
+
+  it('drops orphaned fork sessions even when titled', () => {
+    // Regression: a conversation that forked to a new upstream session left the
+    // old one agent-side; sync adopted it as a duplicate app session.
+    expect(
+      shouldExposeListedSession(
+        { sessionId: 'fork-old', cwd: '/tmp', title: 'Earlier half of chat' },
+        ctx({ orphaned: ['fork-old'] }),
       ),
     ).toBe(false);
   });

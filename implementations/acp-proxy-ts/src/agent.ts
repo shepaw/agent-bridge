@@ -142,6 +142,9 @@ export class AcpProxyAgent extends ACPAgentServer {
         onRestoreFailed: (id) => {
           this.sessionStore.delete(id);
         },
+        onAbandonedAcpSessionId: (acpId) => {
+          this.sessionStore.markOrphaned(acpId);
+        },
       },
     );
   }
@@ -163,6 +166,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     await this.subprocess.ensureCommandsWarm();
     const upstream = await this.subprocess.listSessions(params.cwd, {
       preserveUpstreamIds: this.sessionStore.establishedSdkSessionIds(),
+      orphanedUpstreamIds: this.sessionStore.orphanedSdkSessionIds(),
     });
     const sessions: SessionInfo[] = upstream.map((s) => {
       // If the app already has a mapping to this upstream session, surface it
@@ -220,6 +224,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     try {
       const listed = await this.subprocess.listSessions(undefined, {
         preserveUpstreamIds: this.sessionStore.establishedSdkSessionIds(),
+        orphanedUpstreamIds: this.sessionStore.orphanedSdkSessionIds(),
       });
       const match = listed.find((s) => {
         const knownShepawId = this.sessionStore.findShepawIdBySdkId(s.sessionId);

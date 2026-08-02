@@ -23,12 +23,23 @@ interface PersistedShape {
   version: 1;
   /** shepaw session_id → agent-sdk session_id */
   map: Record<string, string>;
+  /**
+   * Agent-sdk session ids that were abandoned when their Shepaw conversation
+   * forked to a fresh upstream session (restore failed / stale auth). They
+   * still exist agent-side but must never resurface in session/list sync —
+   * otherwise the app adopts the orphaned half as a duplicate session.
+   */
+  orphanedSdkIds?: string[];
 }
 
 export class SessionStore {
   private readonly path: string;
   private readonly mapping = new Map<string, string>();
+  private readonly orphaned = new Set<string>();
   private writeTimer: NodeJS.Timeout | undefined;
+
+  /** Bound orphan-set growth; oldest entries drop first (insertion order). */
+  private static readonly MAX_ORPHANED = 1000;
 
   constructor(opts: SessionStoreOptions = {}) {
     if (opts.path !== undefined) {
@@ -51,7 +62,17 @@ export class SessionStore {
         for (const [k, v] of Object.entries(data.map)) {
           if (typeof v === 'string') this.mapping.set(k, v);
         }
-        log.gateway('SessionStore loaded %d entries from %s', this.mapping.size, this.path);
+        if (Array.isArray(data.orphanedSdkIds)) {
+          for (const id of data.orphanedSdkIds) {
+            if (typeof id === 'string' && id.length > 0) this.orphaned.add(id);
+          }
+        }
+        log.gateway(
+          'SessionStore loaded %d entries (%d orphaned) from %s',
+          this.mapping.size,
+          this.orphaned.size,
+          this.path,
+        );
       }
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
@@ -99,9 +120,39 @@ export class SessionStore {
   }
 
   set(shepawSessionId: string, sdkSessionId: string): void {
-    if (this.mapping.get(shepawSessionId) === sdkSessionId) return;
+    // (Re)establishing a mapping to an id revives it — it is no longer orphaned.
+    const deorphaned = this.orphaned.delete(sdkSessionId);
+    if (this.mapping.get(shepawSessionId) === sdkSessionId) {
+      if (deorphaned) this.schedulePersist();
+      return;
+    }
     this.mapping.set(shepawSessionId, sdkSessionId);
     this.schedulePersist();
+  }
+
+  /**
+   * Record an upstream agent-sdk session id whose Shepaw conversation forked
+   * to a new upstream session. Orphans are excluded from session/list sync so
+   * the app never adopts the abandoned half as a duplicate session.
+   */
+  markOrphaned(sdkSessionId: string): void {
+    if (sdkSessionId.length === 0 || this.orphaned.has(sdkSessionId)) return;
+    this.orphaned.add(sdkSessionId);
+    while (this.orphaned.size > SessionStore.MAX_ORPHANED) {
+      const oldest = this.orphaned.values().next().value;
+      if (oldest === undefined) break;
+      this.orphaned.delete(oldest);
+    }
+    this.schedulePersist();
+  }
+
+  isOrphaned(sdkSessionId: string): boolean {
+    return this.orphaned.has(sdkSessionId);
+  }
+
+  /** All orphaned upstream agent-sdk session ids (for session-list filtering). */
+  orphanedSdkSessionIds(): ReadonlySet<string> {
+    return new Set(this.orphaned);
   }
 
   delete(shepawSessionId: string): void {
@@ -131,6 +182,7 @@ export class SessionStore {
     const data: PersistedShape = {
       version: 1,
       map: Object.fromEntries(this.mapping),
+      orphanedSdkIds: [...this.orphaned],
     };
     const tmp = `${this.path}.tmp`;
     await writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');

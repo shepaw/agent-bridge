@@ -11,6 +11,12 @@ import type * as acp from '@agentclientprotocol/sdk';
 export interface SessionsListFilterContext {
   /** Warmup / disposable session ids — never sync these. */
   readonly disposableUpstreamIds: ReadonlySet<string>;
+  /**
+   * Upstream ids abandoned when their Shepaw conversation forked to a fresh
+   * upstream session — never sync these either; the app would adopt the
+   * orphaned half as a duplicate session.
+   */
+  readonly orphanedUpstreamIds?: ReadonlySet<string>;
   /** Upstream ids with a persisted Shepaw mapping (real conversations). */
   readonly preserveUpstreamIds: ReadonlySet<string>;
   /** Upstream ids currently live in the serving subprocess. */
@@ -23,6 +29,7 @@ export function shouldExposeListedSession(
 ): boolean {
   const id = session.sessionId;
   if (ctx.disposableUpstreamIds.has(id)) return false;
+  if (ctx.orphanedUpstreamIds?.has(id)) return false;
   if (ctx.preserveUpstreamIds.has(id)) return true;
   if (ctx.activeUpstreamIds.has(id)) return true;
 
