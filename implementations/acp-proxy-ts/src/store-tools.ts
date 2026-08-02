@@ -39,7 +39,7 @@ export const storeToolDefs: StoreToolDef[] = [
         content: { type: 'string' },
         space: {
           type: 'string',
-          enum: ['artifacts', 'files', 'attachments', 'backups'],
+          enum: ['artifacts', 'files', 'attachments', 'backups', 'memory', 'sessions'],
           default: 'artifacts',
         },
         task: { type: 'string', description: 'Optional task folder prefix' },

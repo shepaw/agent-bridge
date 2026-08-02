@@ -37,6 +37,10 @@ import {
 import { filterListedSessions } from './sessions-filter.js';
 import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
 import {
+  promptToPlainText,
+  SessionTranscriptSink,
+} from './session-transcript-sink.js';
+import {
   CURSOR_STALE_AUTH_MESSAGE,
   CURSOR_STALE_AUTH_RETRIES,
   isPossibleStaleAuthPrefix,
@@ -151,6 +155,8 @@ export class AcpSubprocess {
   private readonly extraEnv: Record<string, string | undefined>;
   private readonly policy: PermissionPolicy;
   private readonly agentDisplayName: string;
+  /** Optional Nexuspouch sessions transcript bypass (P3). */
+  private readonly transcriptSink: SessionTranscriptSink | null;
 
   private child: ChildProcess | undefined;
   private connection: acp.ClientConnection | undefined;
@@ -192,6 +198,11 @@ export class AcpSubprocess {
     this.extraEnv = opts.env ?? {};
     this.policy = opts.policy ?? new PermissionPolicy();
     this.agentDisplayName = opts.agentDisplayName ?? opts.spec.defaultAgentName ?? 'The agent';
+    const agentKey = opts.spec.id || this.agentDisplayName;
+    this.transcriptSink = SessionTranscriptSink.fromEnv(process.env, agentKey);
+    if (this.transcriptSink) {
+      log('nexuspouch transcript sink enabled for agent=%s', agentKey);
+    }
   }
 
   get capabilities(): acp.InitializeResponse | undefined {
@@ -683,6 +694,10 @@ export class AcpSubprocess {
     const promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
       ? [...prompt]
       : (prompt as string | acp.ContentBlock);
+    const userText = promptToPlainText(promptArg as string | acp.ContentBlock | acp.ContentBlock[]);
+    if (userText) {
+      this.transcriptSink?.append(shepawSessionId, 'user', userText);
+    }
     const promptPromise = session.prompt(promptArg).catch((err: unknown) => {
       const detail = formatAcpError(err);
       log('session.prompt failed for %s: %s', shepawSessionId, detail);
@@ -1004,6 +1019,11 @@ export class AcpSubprocess {
         if (!agentStreaming && agentTextBuffer.length > 0) {
           await flushAgentMessage(turn.taskCtx, agentTextBuffer);
         }
+        // Capture full assistant turn (buffered + already-streamed pieces via buffer).
+        if (agentTextBuffer.trim().length > 0 && !isStaleAuthMessage(agentTextBuffer)) {
+          this.transcriptSink?.append(shepawSessionId, 'assistant', agentTextBuffer);
+        }
+        void this.transcriptSink?.flush(shepawSessionId);
         return { kind: 'ok' };
       }
 
@@ -1018,12 +1038,12 @@ export class AcpSubprocess {
         const content = update.content;
         if (content.type === 'text' && content.text.length > 0) {
           if (agentStreaming) {
+            agentTextBuffer += content.text;
             await flushAgentMessage(turn.taskCtx, content.text);
           } else {
             agentTextBuffer += content.text;
             if (!isPossibleStaleAuthPrefix(agentTextBuffer)) {
               await flushAgentMessage(turn.taskCtx, agentTextBuffer);
-              agentTextBuffer = '';
               agentStreaming = true;
             }
           }

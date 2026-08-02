@@ -50,6 +50,12 @@ Custom engines are stored in `hub.json` under `customEngines` and appear in the 
 agents get `store_*` tools without per-agent MCP config. Disable with
 `NEXUSPOUCH_MCP=off`. See `src/nexuspouch-mcp.ts`.
 
+**Session transcript bypass (P3):** with a running Nexuspouch HTTP API, set
+`NEXUSPOUCH_URL` (default `http://127.0.0.1:8787` when `NEXUSPOUCH_ROOT` is set),
+`NEXUSPOUCH_DEVICE`, and `NEXUSPOUCH_ADMIN_TOKEN`. Each chat turn is debounced
+(5s) into `store://sessions/<device>/<engine>/<session>.jsonl`. Disable with
+`NEXUSPOUCH_TRANSCRIPT=off`.
+
 **HTTP helper (optional):** `src/store-tools.ts` provides `StoreToolsClient` +
 `executeStoreTool` for in-process HTTP against `/api/v1` (tests / custom hooks).
 
