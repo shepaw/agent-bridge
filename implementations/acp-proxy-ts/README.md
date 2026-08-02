@@ -42,25 +42,21 @@ node dist/cli.js serve --engine my-agent --engine-display-name "My Agent" \
 Custom engines are stored in `hub.json` under `customEngines` and appear in the Hub UI
 **Custom Engines** dialog and project engine picker.
 
-## Nexuspouch store tools (M1.5)
+## Nexuspouch store tools
 
-`src/store-tools.ts` provides a self-contained Nexuspouch HTTP client
-(`StoreToolsClient`) with `store_write` / `store_read` / `store_meta` /
-`store_list` tool definitions and a `executeStoreTool` dispatcher
-(sha256-verified write path over the store frame API). It is ready to be
-injected into the gateway tool pipeline; until that hook lands, agents reach
-the same tools through the agent-side MCP config in `examples/mcp/`.
+**Gateway MCP injection (preferred):** set `NEXUSPOUCH_ROOT` (and optional
+`NEXUSPOUCH_ADMIN_TOKEN`) on the acp-proxy process. Session `new` / `resume` /
+`load` then inject a stdio MCP server running `nexuspouch mcp`, so upstream
+agents get `store_*` tools without per-agent MCP config. Disable with
+`NEXUSPOUCH_MCP=off`. See `src/nexuspouch-mcp.ts`.
 
-```ts
-import { StoreToolsClient, executeStoreTool } from './src/store-tools.js';
-const client = new StoreToolsClient('http://127.0.0.1:8787', '<token>', '<device>');
-const out = await executeStoreTool('store_write',
-  { filename: 't-1/out.md', content: '...', space: 'artifacts' }, client);
-```
+**HTTP helper (optional):** `src/store-tools.ts` provides `StoreToolsClient` +
+`executeStoreTool` for in-process HTTP against `/api/v1` (tests / custom hooks).
 
-`npm test` (vitest) covers the write→read roundtrip and error mapping.
-Recommended Node is 20 (see repo `.nvmrc` / Docker `node:20`); vitest 2.1 +
-vite 5.4 also starts on Node 22. Prefer `nvm use` / Node 20 for local runs.
+Agents can still use the agent-side MCP examples in `examples/mcp/`.
+
+`npm test` (vitest) covers store-tools roundtrip and MCP injection env parsing.
+Recommended Node is 20 (see repo `.nvmrc` / Docker `node:20`).
 
 ## Supported upstream agents
 

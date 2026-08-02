@@ -35,6 +35,7 @@ import {
   supportsSessionResume,
 } from './session-lifecycle.js';
 import { filterListedSessions } from './sessions-filter.js';
+import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
 import {
   CURSOR_STALE_AUTH_MESSAGE,
   CURSOR_STALE_AUTH_RETRIES,
@@ -53,6 +54,17 @@ import { PermissionPolicy } from './permission/policy.js';
 type DrainTurnResult =
   | { readonly kind: 'ok' }
   | { readonly kind: 'stale_auth'; readonly text: string };
+
+/**
+ * Outcome of one restore attempt against the upstream agent. `timed_out`
+ * means the agent was killed + restarted mid-attempt, so a retry on the fresh
+ * connection is worthwhile; `failed` means resume/load answered with an error
+ * (session gone or rejected) so retrying immediately is futile.
+ */
+type RestoreAttempt =
+  | { readonly kind: 'restored'; readonly session: acp.ActiveSession }
+  | { readonly kind: 'failed' }
+  | { readonly kind: 'timed_out' };
 
 /**
  * Upstream ACP CLIs (esp. Cursor) sometimes die idle or get SIGTERM'd by the
@@ -114,6 +126,13 @@ export interface RunPromptTurnOptions {
   readonly onAcpSessionId?: (shepawSessionId: string, acpSessionId: string) => void;
   /** Called when a persisted upstream mapping cannot be restored (stale / hung). */
   readonly onRestoreFailed?: (shepawSessionId: string) => void;
+  /**
+   * Called with the upstream session id that a conversation is abandoning
+   * (restore failed → fork, stale-auth retry, etc.). The id still exists
+   * agent-side; callers persist it so session/list sync never surfaces the
+   * orphaned half as a new app session.
+   */
+  readonly onAbandonedAcpSessionId?: (acpSessionId: string) => void;
 }
 
 export interface AcpSubprocessOptions {
@@ -311,7 +330,7 @@ export class AcpSubprocess {
    */
   async listSessions(
     cwd?: string,
-    opts?: { preserveUpstreamIds?: Iterable<string> },
+    opts?: { preserveUpstreamIds?: Iterable<string>; orphanedUpstreamIds?: Iterable<string> },
   ): Promise<acp.SessionInfo[]> {
     await this.start();
     if (this.connection === undefined) return [];
@@ -324,8 +343,12 @@ export class AcpSubprocess {
       const preserveUpstreamIds = opts?.preserveUpstreamIds === undefined
         ? new Set<string>()
         : new Set(opts.preserveUpstreamIds);
+      const orphanedUpstreamIds = opts?.orphanedUpstreamIds === undefined
+        ? new Set<string>()
+        : new Set(opts.orphanedUpstreamIds);
       return filterListedSessions(raw, {
         disposableUpstreamIds: this.disposableUpstreamSessionIds,
+        orphanedUpstreamIds,
         preserveUpstreamIds,
         activeUpstreamIds: this.getActiveUpstreamSessionIds(),
       });
@@ -699,6 +722,12 @@ export class AcpSubprocess {
 
   /** Drop live + persisted mapping so the next turn opens a fresh ACP session. */
   private forgetShepawSession(shepawSessionId: string, opts: RunPromptTurnOptions): void {
+    const session = this.sessions.get(shepawSessionId);
+    if (session !== undefined) {
+      // The abandoned upstream session stays on the agent; mark it orphaned so
+      // session/list sync never adopts it as a duplicate app session.
+      opts.onAbandonedAcpSessionId?.(session.sessionId);
+    }
     this.dropLiveShepawSession(shepawSessionId);
     opts.onRestoreFailed?.(shepawSessionId);
   }
@@ -745,7 +774,6 @@ export class AcpSubprocess {
       return existing;
     }
 
-    const agent = this.connection!.agent;
     const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
 
     if (storedId !== undefined && storedId.length > 0) {
@@ -753,8 +781,18 @@ export class AcpSubprocess {
       // kills/restarts a hung upstream so we restore after idle death instead of
       // silently opening session/new (amnesia). Skip only when neither cap exists.
       if (canRestorePersistedSession(this.agentCaps)) {
-        const restored = await this.tryRestoreSession(agent, shepawSessionId, storedId);
-        if (restored !== undefined) {
+        let attempt = await this.tryRestoreSession(this.connection!.agent, shepawSessionId, storedId);
+        if (attempt.kind === 'timed_out') {
+          // The timeout path already killed + restarted the upstream agent, so
+          // the hang cause (wedged process, idle death) is gone. Retry once on
+          // the FRESH connection before forking — this is what stops one app
+          // session from splitting across two upstream sessions whenever a
+          // restore is merely slow rather than impossible.
+          log('retrying session restore for %s on restarted upstream', storedId);
+          attempt = await this.tryRestoreSession(this.connection!.agent, shepawSessionId, storedId);
+        }
+        if (attempt.kind === 'restored') {
+          const restored = attempt.session;
           this.sessions.set(shepawSessionId, restored);
           opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
           if (this.preferredModelValue !== undefined) {
@@ -770,10 +808,16 @@ export class AcpSubprocess {
         );
       }
       log('stored ACP session %s unavailable; creating new session', storedId);
+      // The conversation forks here: the old upstream session still exists
+      // agent-side with the earlier history. Mark it orphaned so session/list
+      // sync filters it out instead of adopting it as a duplicate app session.
+      opts.onAbandonedAcpSessionId?.(storedId);
       opts.onRestoreFailed?.(shepawSessionId);
     }
 
-    const session = await agent.buildSession(this.cwd).start();
+    // Use the CURRENT connection — tryRestoreSession may have restarted the
+    // upstream agent above, and a stale handle would fail or hang session/new.
+    const session = await this.startSessionWithMcp();
     this.sessions.set(shepawSessionId, session);
     opts.onAcpSessionId?.(shepawSessionId, session.sessionId);
     this.rememberConfigOptions(shepawSessionId, session.newSessionResponse.configOptions);
@@ -790,18 +834,21 @@ export class AcpSubprocess {
     agent: acp.ClientContext,
     shepawSessionId: string,
     storedId: string,
-  ): Promise<acp.ActiveSession | undefined> {
+  ): Promise<RestoreAttempt> {
     if (this.disposableUpstreamSessionIds.has(storedId)) {
       log('skip restore for disposable upstream session %s', storedId);
-      return undefined;
+      return { kind: 'failed' };
     }
 
     let timedOut = false;
-    const restoreWork = this.doTryRestoreSession(agent, shepawSessionId, storedId);
-    const timeout = new Promise<undefined>((resolve) => {
+    const restoreWork = this.doTryRestoreSession(agent, shepawSessionId, storedId).then(
+      (session): RestoreAttempt =>
+        session === undefined ? { kind: 'failed' } : { kind: 'restored', session },
+    );
+    const timeout = new Promise<RestoreAttempt>((resolve) => {
       setTimeout(() => {
         timedOut = true;
-        resolve(undefined);
+        resolve({ kind: 'timed_out' });
       }, AcpSubprocess.RESTORE_TIMEOUT_MS);
     });
 
@@ -813,9 +860,26 @@ export class AcpSubprocess {
         storedId,
       );
       await this.restartUpstreamAgent();
-      return undefined;
+      return { kind: 'timed_out' };
     }
     return result;
+  }
+
+  /** Inject Nexuspouch MCP when NEXUSPOUCH_ROOT is configured. */
+  private mcpServers(): acp.McpServer[] {
+    return resolveNexuspouchMcpServers();
+  }
+
+  private async startSessionWithMcp(): Promise<acp.ActiveSession> {
+    const servers = this.mcpServers();
+    let builder = this.connection!.agent.buildSession(this.cwd);
+    for (const server of servers) {
+      builder = builder.withMcpServer(server);
+    }
+    if (servers.length > 0) {
+      log('injecting %d MCP server(s) into session/new (nexuspouch)', servers.length);
+    }
+    return builder.start();
   }
 
   private async doTryRestoreSession(
@@ -823,7 +887,7 @@ export class AcpSubprocess {
     shepawSessionId: string,
     storedId: string,
   ): Promise<acp.ActiveSession | undefined> {
-    const mcpServers: acp.McpServer[] = [];
+    const mcpServers = this.mcpServers();
 
     if (supportsSessionResume(this.agentCaps)) {
       try {

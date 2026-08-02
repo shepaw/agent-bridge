@@ -56,8 +56,10 @@ node mcp-client.mjs --root /var/lib/nexuspouch --token <scoped-token>
 ## 与 acp-proxy 的关系
 
 `acp-proxy-ts` 网关把 ShePaw App 接到 ACP agent（Claude Code / Codex / Cursor 等）。
-这些 agent 自身支持 MCP，因此**当前推荐**在 agent 侧直接挂上述 MCP 配置即可获得
-store 工具。网关侧原生注入 `store_*` 工具（无需 agent 单独配置）列为 M1.5 后续项。
+在网关进程设置 `NEXUSPOUCH_ROOT`（可选 `NEXUSPOUCH_ADMIN_TOKEN`）后，
+session `new`/`resume`/`load` 会自动注入 `nexuspouch mcp`（见
+`implementations/acp-proxy-ts/src/nexuspouch-mcp.ts`）。也可继续在 agent 侧
+单独挂本目录示例配置。
 
 ## 说明
 
