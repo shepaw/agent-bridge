@@ -50,6 +50,28 @@ Custom engines are stored in `hub.json` under `customEngines` and appear in the 
 agents get `store_*` tools without per-agent MCP config. Disable with
 `NEXUSPOUCH_MCP=off`. See `src/nexuspouch-mcp.ts`.
 
+**Hub peer store (paired devices, no Nexuspouch required):** when
+`shepaw-hub` peer service is running, it exposes the same `/api/v1/*` store
+HTTP surface on the peer port (default `18792`) and serves `store.*` frames
+over the Noise peer channel. Point tools at the hub with:
+
+```bash
+export SHEPAW_HUB_STORE_URL=http://127.0.0.1:18792
+# or
+export SHEPAW_PEER_STORE=1
+```
+
+Gateway sessions then inject a stdio MCP (`shepaw-peer-store` →
+`dist/peer-store-mcp.js`) so upstream agents get `store_read` / `store_list` /
+`store_meta` / `store_write` automatically (skipped if `NEXUSPOUCH_ROOT` is
+already set; force both with `SHEPAW_PEER_STORE_FORCE=1`).
+
+`StoreToolsClient` (`src/store-tools.ts`) + `resolveHubStoreBase`
+(`src/hub-store-env.ts`) talk to that API. Agents should pass `store://`
+URIs verbatim (`store://files/<device-id>/…`); after pairing, remote device
+spaces are readable over the shared peer channel (live owner preferred,
+master mirror as backup).
+
 **Session transcript bypass (P3):** with a running Nexuspouch HTTP API, set
 `NEXUSPOUCH_URL` (default `http://127.0.0.1:8787` when `NEXUSPOUCH_ROOT` is set),
 `NEXUSPOUCH_DEVICE`, and `NEXUSPOUCH_ADMIN_TOKEN`. Each chat turn is debounced

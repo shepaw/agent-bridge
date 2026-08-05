@@ -41,6 +41,8 @@ import {
 } from './peer-pairing.js';
 import { upsertPairedPeer, loadPairedPeers, type PairedPeer } from './peer-store.js';
 import { drivePeerConnection } from './peer-connection.js';
+import { handleStoreHttp } from './peer-store-http.js';
+import { getPeerLocalStore } from './peer-local-store.js';
 
 export interface PeerServerOptions {
   host?: string;
@@ -70,12 +72,28 @@ export class PeerServer {
 
   /** Start the WS server. Resolves when listening. */
   async start(): Promise<void> {
-    this.httpServer = createServer();
+    // Ensure store root exists so mirror backup / agent tools have a home.
+    getPeerLocalStore();
+    this.httpServer = createServer((req, res) => {
+      void handleStoreHttp(req, res).then((handled) => {
+        if (!handled) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('not found');
+        }
+      }).catch((err) => {
+        this.log(`store http error: ${err instanceof Error ? err.message : String(err)}`);
+        try {
+          res.writeHead(500);
+          res.end('internal');
+        } catch { /* ignore */ }
+      });
+    });
     this.wss = new WebSocketServer({ noServer: true });
     this.httpServer.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket as Duplex, head));
     await new Promise<void>((resolve) => {
       this.httpServer!.listen(this.port, this.host, () => {
         this.log(`peer service listening on ${this.host}:${this.port}/peer/ws (fp=${this.fingerprint})`);
+        this.log(`store http on ${this.host}:${this.port}/api/v1/* (root=${getPeerLocalStore().root})`);
         resolve();
       });
     });

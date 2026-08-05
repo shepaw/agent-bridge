@@ -36,6 +36,7 @@ import {
 } from './session-lifecycle.js';
 import { filterListedSessions } from './sessions-filter.js';
 import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
+import { resolvePeerStoreMcpServers } from './peer-store-mcp-resolve.js';
 import {
   promptToPlainText,
   SessionTranscriptSink,
@@ -880,9 +881,12 @@ export class AcpSubprocess {
     return result;
   }
 
-  /** Inject Nexuspouch MCP when NEXUSPOUCH_ROOT is configured. */
+  /** Inject Nexuspouch MCP and/or hub peer-store MCP when configured. */
   private mcpServers(): acp.McpServer[] {
-    return resolveNexuspouchMcpServers();
+    return [
+      ...resolveNexuspouchMcpServers(),
+      ...resolvePeerStoreMcpServers(),
+    ];
   }
 
   private async startSessionWithMcp(): Promise<acp.ActiveSession> {
@@ -892,7 +896,7 @@ export class AcpSubprocess {
       builder = builder.withMcpServer(server);
     }
     if (servers.length > 0) {
-      log('injecting %d MCP server(s) into session/new (nexuspouch)', servers.length);
+      log('injecting %d MCP server(s) into session/new (store)', servers.length);
     }
     return builder.start();
   }

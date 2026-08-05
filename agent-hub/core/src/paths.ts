@@ -104,6 +104,11 @@ export function peerDevicesPath(root: string = hubRoot()): string {
   return join(root, 'peer-devices.json');
 }
 
+/** Device-directory store root (`<device_id>/{files,artifacts,…}`). */
+export function peerStoreRoot(root: string = hubRoot()): string {
+  return join(root, 'store');
+}
+
 /** Pending peer tool-call approvals (hub-side, Phase C). */
 export function peerPendingApprovalsPath(root: string = hubRoot()): string {
   return join(root, 'peer-pending-approvals.json');

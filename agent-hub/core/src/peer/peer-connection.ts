@@ -31,6 +31,8 @@ import {
   pendingApprovalFromRequest,
   savePendingApproval,
 } from './peer-pending-approvals.js';
+import { loadPairedPeers } from './peer-store.js';
+import { handleInboundStoreFrame } from './peer-store-protocol.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
@@ -138,6 +140,14 @@ function getPeerSession(peerId: string): PeerSessionState {
  * lastMetadata and replayed on resume; done/error are buffered in the entry. */
 function routeToPeer(peerSession: PeerSessionState, obj: Record<string, unknown>): void {
   peerSession.liveRoutes.at(-1)?.send(obj);
+}
+
+/** Public send helper for store.* outbound RPC (and other control frames). */
+export function sendToPeer(peerId: string, obj: Record<string, unknown>): boolean {
+  const s = peerSessions.get(peerId);
+  if (!s || s.liveRoutes.length === 0) return false;
+  routeToPeer(s, obj);
+  return true;
 }
 
 /**
@@ -838,6 +848,16 @@ export async function drivePeerConnection(opts: {
         case 'ack':
           // Phase 1: no chat persistence; acknowledged but ignored.
           break;
+        case 'store': {
+          const paired = loadPairedPeers().find((p) => p.id === peerId);
+          const callerDeviceId = paired?.fingerprint ?? peerId;
+          const resp = handleInboundStoreFrame(obj, {
+            peerId,
+            callerDeviceId,
+          });
+          if (resp !== null) send(resp);
+          break;
+        }
         default:
           log(`unknown peer message type: ${String(type)}`);
       }

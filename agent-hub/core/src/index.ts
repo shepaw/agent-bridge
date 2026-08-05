@@ -70,6 +70,19 @@ export type { MintPairingResult } from './peer/peer-process.js';
 export { loadPairedPeers, removePairedPeer, type PairedPeer } from './peer/peer-store.js';
 export { listAgents } from './peer/peer-agent-host.js';
 export { PeerAcpClient } from './peer/peer-acp-client.js';
+export { sendToPeer } from './peer/peer-connection.js';
+export {
+  getPeerLocalStore,
+  PeerLocalStore,
+  resetPeerLocalStoreForTest,
+} from './peer/peer-local-store.js';
+export {
+  callStoreOnDevice,
+  callStoreOnPeerId,
+  executeLocalStoreOp,
+  handleInboundStoreFrame,
+  parseStoreUri,
+} from './peer/peer-store-protocol.js';
 export {
   assertSafeAttachmentName,
   clearPeerAttachments,
@@ -100,6 +113,7 @@ export {
   normalizeCwd,
   instancePaths,
   peerAttachmentsDir,
+  peerStoreRoot,
   validateInstanceId,
 } from './paths.js';
 export type { InstancePaths } from './paths.js';

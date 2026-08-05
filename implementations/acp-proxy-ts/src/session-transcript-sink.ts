@@ -11,6 +11,7 @@
  */
 
 import { StoreToolsClient } from './store-tools.js';
+import { resolveHubStoreBase } from './hub-store-env.js';
 import { log } from './debug.js';
 
 export type TranscriptRole = 'user' | 'assistant' | 'tool';
@@ -62,23 +63,43 @@ export class SessionTranscriptSink {
     const flag = (env.NEXUSPOUCH_TRANSCRIPT ?? '').trim().toLowerCase();
     if (flag === '0' || flag === 'false' || flag === 'off') return null;
 
-    const device = (env.NEXUSPOUCH_DEVICE ?? '').trim();
-    const token = (env.NEXUSPOUCH_ADMIN_TOKEN ?? env.NEXUSPOUCH_TOKEN ?? '').trim();
-    // Need a running node HTTP API. ROOT-only (MCP stdio) is not enough.
-    const url = (env.NEXUSPOUCH_URL ?? '').trim() ||
-      ((env.NEXUSPOUCH_ROOT || env.NEXUSPOUCH_MCP_ROOT) ? 'http://127.0.0.1:8787' : '');
-    if (!url || !device || !token) {
+    const hubBase = resolveHubStoreBase(env);
+    const device = (
+      env.NEXUSPOUCH_DEVICE ??
+      env.SHEPAW_HUB_STORE_DEVICE ??
+      ''
+    ).trim();
+    const token = (
+      env.NEXUSPOUCH_ADMIN_TOKEN ??
+      env.NEXUSPOUCH_TOKEN ??
+      env.SHEPAW_HUB_STORE_TOKEN ??
+      (hubBase ? 'local' : '')
+    ).trim();
+    // Prefer explicit Nexuspouch URL; else hub peer store HTTP; else ROOT default.
+    const url =
+      (env.NEXUSPOUCH_URL ?? '').trim() ||
+      hubBase ||
+      ((env.NEXUSPOUCH_ROOT || env.NEXUSPOUCH_MCP_ROOT)
+        ? 'http://127.0.0.1:8787'
+        : '');
+    if (!url || !device) {
       if (env.NEXUSPOUCH_TRANSCRIPT === '1' || env.NEXUSPOUCH_TRANSCRIPT === 'true') {
         log(
-          'transcript sink requested but missing NEXUSPOUCH_URL/DEVICE/TOKEN; disabled',
+          'transcript sink requested but missing store URL/DEVICE; disabled',
         );
+      }
+      return null;
+    }
+    if (!token && !hubBase) {
+      if (env.NEXUSPOUCH_TRANSCRIPT === '1' || env.NEXUSPOUCH_TRANSCRIPT === 'true') {
+        log('transcript sink requested but missing TOKEN; disabled');
       }
       return null;
     }
 
     const debounce = Number(env.NEXUSPOUCH_TRANSCRIPT_DEBOUNCE_MS ?? '5000');
     return new SessionTranscriptSink({
-      client: new StoreToolsClient(url.replace(/\/$/, ''), token, device),
+      client: new StoreToolsClient(url.replace(/\/$/, ''), token || 'local', device),
       agent: agentName,
       debounceMs: Number.isFinite(debounce) && debounce >= 0 ? debounce : 5_000,
     });

@@ -31,7 +31,8 @@ export const storeToolDefs: StoreToolDef[] = [
   {
     name: 'store_write',
     description:
-      'Write a file to a Nexuspouch space and return its store:// URI (local-first, mirrored to master).',
+      'Write a file to the local store pouch and return its store:// URI ' +
+      '(store://<space>/<device>/<path>). Local-first; when a master is set, mirrored over the peer channel.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -57,7 +58,10 @@ export const storeToolDefs: StoreToolDef[] = [
   },
   {
     name: 'store_read',
-    description: 'Read a file by store:// URI (text or base64).',
+    description:
+      'Read a file by store:// URI (store://<space>/<device>/<path>). ' +
+      'Pass URIs verbatim. After device pairing, remote device IDs are readable over the peer channel ' +
+      '(prefer live owner; fall back to master mirror).',
     inputSchema: {
       type: 'object',
       properties: { uri: { type: 'string' } },
@@ -66,7 +70,8 @@ export const storeToolDefs: StoreToolDef[] = [
   },
   {
     name: 'store_meta',
-    description: 'Resolve a store:// URI and return metadata (kind, size, sha256).',
+    description:
+      'Resolve a store:// URI and return metadata (kind, size, sha256). Pass URIs verbatim.',
     inputSchema: {
       type: 'object',
       properties: { uri: { type: 'string' } },
@@ -75,7 +80,9 @@ export const storeToolDefs: StoreToolDef[] = [
   },
   {
     name: 'store_list',
-    description: 'List a directory by store:// URI.',
+    description:
+      'List a directory by store:// URI (store://<space>/<device>/<prefix>). ' +
+      'Paired remote devices are readable over the shared peer channel.',
     inputSchema: {
       type: 'object',
       properties: { uri: { type: 'string' } },
