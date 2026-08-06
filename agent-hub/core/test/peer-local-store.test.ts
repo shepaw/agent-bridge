@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -93,5 +93,63 @@ describe('PeerLocalStore', () => {
     );
     expect(resp?.op).toBe('error');
     expect((resp as { code?: string }).code).toBe('acl_denied');
+  });
+
+  it('list with depth=1 returns agent dirs for layer-by-layer browse', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'dddddddddddddddd';
+    const agentA = '11111111-1111-1111-1111-111111111111';
+    const agentB = '22222222-2222-2222-2222-222222222222';
+    // Seed agents/<uuid>/note.txt under each agent folder.
+    for (const agent of [agentA, agentB]) {
+      const content = Buffer.from(`hi ${agent}`);
+      const sha = createHash('sha256').update(content).digest('hex');
+      const begin = store.writeBegin({
+        deviceId: device,
+        space: 'agents',
+        path: `${agent}/note.txt`,
+        size: content.length,
+        sha256: sha,
+      });
+      store.writeChunk(device, begin.upload_id, 0, content);
+      store.commit(device, 'agents', [begin.upload_id]);
+    }
+
+    const root = store.list(device, 'agents', undefined, 1000, 1);
+    expect(root).toHaveLength(2);
+    expect(root.every((e) => e.kind === 'dir')).toBe(true);
+    expect(root.map((e) => e.path).sort()).toEqual([agentA, agentB].sort());
+
+    const one = store.list(device, 'agents', agentA, 1000, 1);
+    expect(one).toHaveLength(1);
+    expect(one[0]!.kind).toBe('file');
+    expect(one[0]!.path).toBe(`${agentA}/note.txt`);
+  });
+
+  it('list depth via inbound frame', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'eeeeeeeeeeeeeeee';
+    mkdirSync(join(dir, device, 'agents', 'agent-x'), { recursive: true });
+    const resp = handleInboundStoreFrame(
+      {
+        type: 'store',
+        ns: 'store',
+        op: 'list',
+        v: 1,
+        req_id: 'r3',
+        space: 'agents',
+        device,
+        depth: 1,
+      },
+      { peerId: 'peer-1', callerDeviceId: device, store },
+    );
+    expect(resp?.op).toBe('result');
+    const entries = (resp as { data?: { entries?: Array<{ path: string; kind?: string }> } })
+      .data?.entries;
+    expect(entries).toEqual([
+      expect.objectContaining({ path: 'agent-x', kind: 'dir' }),
+    ]);
   });
 });

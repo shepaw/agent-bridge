@@ -41,6 +41,8 @@ export interface StoreEntryJson {
   size: number;
   sha256: string;
   mtime: number;
+  /** Present when listing with finite `depth` (dirs included). */
+  kind?: 'file' | 'dir';
 }
 
 interface StagingMeta {
@@ -111,20 +113,90 @@ export class PeerLocalStore {
     writeFileSync(this.cursorsPath(), JSON.stringify(map, null, 2));
   }
 
-  list(deviceId: string, space: string, prefix?: string, limit = 1000): StoreEntryJson[] {
+  /**
+   * List entries under a device/space.
+   *
+   * - `depth` omitted / ≤0: legacy recursive file list (no dir rows).
+   * - `depth` ≥1: layer-limited listing from `prefix` as the start directory;
+   *   includes `kind: 'dir'` so agents can traverse one folder at a time
+   *   (e.g. `agents/<uuid>/…`, `workspaces/…`).
+   */
+  list(
+    deviceId: string,
+    space: string,
+    prefix?: string,
+    limit = 1000,
+    depth?: number,
+  ): StoreEntryJson[] {
     if (!ALL_SPACES.has(space)) {
       throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
     }
     const base = resolveUnder(this.root, deviceId, space);
     if (!existsSync(base)) return [];
     const out: StoreEntryJson[] = [];
+    const maxDepth = typeof depth === 'number' && depth > 0 ? depth : 0;
+
+    if (maxDepth > 0) {
+      const startRel = (prefix ?? '').replace(/^\/+|\/+$/g, '');
+      if (startRel && !isSafeRelPath(startRel)) {
+        throw Object.assign(new Error('bad_path'), { code: 'bad_path' });
+      }
+      const startDir = startRel
+        ? resolveUnder(this.root, deviceId, space, ...startRel.split('/'))
+        : base;
+      if (!existsSync(startDir) || !statSync(startDir).isDirectory()) {
+        return [];
+      }
+      const walkShallow = (dir: string, rel: string, remaining: number): void => {
+        if (out.length >= limit || remaining < 1) return;
+        for (const name of readdirSync(dir)) {
+          if (out.length >= limit) return;
+          if (name.startsWith('.')) continue;
+          const abs = join(dir, name);
+          const childRel = rel ? `${rel}/${name}` : name;
+          let st;
+          try {
+            st = statSync(abs);
+          } catch {
+            continue;
+          }
+          if (st.isDirectory()) {
+            out.push({
+              path: childRel,
+              size: 0,
+              sha256: '',
+              mtime: st.mtimeMs,
+              kind: 'dir',
+            });
+            if (remaining > 1) walkShallow(abs, childRel, remaining - 1);
+          } else if (st.isFile()) {
+            const bytes = readFileSync(abs);
+            out.push({
+              path: childRel,
+              size: st.size,
+              sha256: createHash('sha256').update(bytes).digest('hex'),
+              mtime: st.mtimeMs,
+              kind: 'file',
+            });
+          }
+        }
+      };
+      walkShallow(startDir, startRel, maxDepth);
+      return out;
+    }
+
     const walk = (dir: string, rel: string): void => {
       if (out.length >= limit) return;
       for (const name of readdirSync(dir)) {
         if (name.startsWith('.')) continue;
         const abs = join(dir, name);
         const childRel = rel ? `${rel}/${name}` : name;
-        const st = statSync(abs);
+        let st;
+        try {
+          st = statSync(abs);
+        } catch {
+          continue;
+        }
         if (st.isDirectory()) {
           walk(abs, childRel);
         } else if (st.isFile()) {

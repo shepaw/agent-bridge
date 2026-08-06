@@ -81,11 +81,27 @@ export const storeToolDefs: StoreToolDef[] = [
   {
     name: 'store_list',
     description:
-      'List a directory by store:// URI (store://<space>/<device>/<prefix>). ' +
-      'Paired remote devices are readable over the shared peer channel.',
+      'List a store directory by store:// URI (store://<space>/<device>/<prefix>). ' +
+      'Use depth=1 (default) to browse one folder level at a time — required for ' +
+      'cross-agent trees such as store://agents/<device>/ then store://agents/<device>/<agent-uuid>/. ' +
+      'Pass depth=0 for a full recursive file listing. Paired remote devices are readable over the peer channel.',
     inputSchema: {
       type: 'object',
-      properties: { uri: { type: 'string' } },
+      properties: {
+        uri: {
+          type: 'string',
+          description:
+            'Directory URI. Space root: store://agents/<device> ; agent folder: store://agents/<device>/<agent-uuid>/',
+        },
+        depth: {
+          type: 'integer',
+          description:
+            'Max folder levels to return below the URI (1 = immediate children only, includes kind:dir). ' +
+            '0 = full recursive files-only. Default 1 for layer-by-layer browse.',
+          default: 1,
+          minimum: 0,
+        },
+      },
       required: ['uri'],
     },
   },
@@ -255,7 +271,18 @@ export class StoreToolsClient {
     try {
       const uri = String(args.uri ?? '');
       if (!uri) return { ok: false, code: 'bad_op', error: 'uri required' };
-      return { ok: true, data: await this.json(`/api/v1/list?uri=${encodeURIComponent(uri)}`) };
+      const depthRaw = args.depth;
+      // Tool default: one level (cross-agent / folder browse). Explicit 0 = full recursive.
+      const depth =
+        depthRaw === undefined || depthRaw === null || depthRaw === ''
+          ? 1
+          : Number(depthRaw);
+      const qs = new URLSearchParams({ uri });
+      if (Number.isFinite(depth)) qs.set('depth', String(depth));
+      return {
+        ok: true,
+        data: await this.json(`/api/v1/list?${qs.toString()}`),
+      };
     } catch (e) {
       return toResultError(e);
     }

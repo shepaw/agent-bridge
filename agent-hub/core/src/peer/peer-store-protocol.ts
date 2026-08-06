@@ -71,9 +71,11 @@ function errorFrame(
 }
 
 function parseUri(uri: string): { space: string; device: string; path: string } | null {
-  const m = /^store:\/\/([^/]+)\/([a-f0-9]{16})\/(.+)$/i.exec(uri.trim());
+  // Allow space root: store://<space>/<device> or store://<space>/<device>/
+  const m = /^store:\/\/([^/]+)\/([a-f0-9]{16})(?:\/(.*))?$/i.exec(uri.trim());
   if (!m) return null;
-  return { space: m[1]!, device: m[2]!.toLowerCase(), path: m[3]! };
+  const path = (m[3] ?? '').replace(/\/+$/, '');
+  return { space: m[1]!, device: m[2]!.toLowerCase(), path };
 }
 
 /**
@@ -140,7 +142,19 @@ function dispatchLocal(
       assertReadable(space, device, callerDeviceId);
       const prefix = typeof frame.path === 'string' ? frame.path : undefined;
       const limit = typeof frame.limit === 'number' ? frame.limit : 1000;
-      const entries = store.list(device, space, prefix, limit);
+      const depth =
+        typeof frame.depth === 'number'
+          ? frame.depth
+          : typeof frame.depth === 'string' && frame.depth.trim()
+            ? Number(frame.depth)
+            : undefined;
+      const entries = store.list(
+        device,
+        space,
+        prefix,
+        limit,
+        Number.isFinite(depth) ? depth : undefined,
+      );
       return { entries, next_cursor: null };
     }
     case 'meta': {

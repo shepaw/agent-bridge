@@ -171,18 +171,19 @@ export async function handleStoreHttp(
       sendJson(res, 400, { error: 'bad_uri', message: 'invalid store:// URI' });
       return true;
     }
-    // list URI path is treated as prefix under the device/space.
-    let data = executeLocalStoreOp(
-      'list',
-      { space: parsed.space, device: parsed.device, path: parsed.path || undefined },
-      self,
-    );
+    const depthRaw = url.searchParams.get('depth');
+    const depth =
+      depthRaw != null && depthRaw !== '' ? Number(depthRaw) : undefined;
+    // list URI path is treated as prefix / start directory under the device/space.
+    const payload: Record<string, unknown> = {
+      space: parsed.space,
+      device: parsed.device,
+      path: parsed.path || undefined,
+    };
+    if (Number.isFinite(depth)) payload.depth = depth;
+    let data = executeLocalStoreOp('list', payload, self);
     if (data._error && parsed.device !== self) {
-      data = await callStoreOnDevice(parsed.device, 'list', {
-        space: parsed.space,
-        device: parsed.device,
-        path: parsed.path || undefined,
-      });
+      data = await callStoreOnDevice(parsed.device, 'list', payload);
     }
     if (data._error) {
       sendJson(res, 404, { error: data._error, message: data.message });
