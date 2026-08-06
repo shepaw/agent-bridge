@@ -23,7 +23,7 @@ import {
 import { dirname, join, normalize, relative, sep } from 'node:path';
 import { peerStoreRoot } from '../paths.js';
 
-export const SHARED_SPACES = new Set(['artifacts', 'files']);
+export const SHARED_SPACES = new Set(['artifacts', 'files', 'workspaces']);
 export const ALL_SPACES = new Set([
   'artifacts',
   'files',
@@ -31,6 +31,8 @@ export const ALL_SPACES = new Set([
   'backups',
   'memory',
   'sessions',
+  'workspaces',
+  'agents',
 ]);
 export const MAX_CHUNK = 64 * 1024;
 
@@ -58,7 +60,9 @@ function isSafeRelPath(rel: string): boolean {
   if (!rel || rel.startsWith('/') || rel.includes('\0')) return false;
   const parts = rel.replace(/\\/g, '/').split('/');
   for (const part of parts) {
-    if (part === '' || part === '.' || part === '..' || part.startsWith('.')) {
+    // Allow `.hidden`-style segments (common in workspace abs paths) but
+    // still reject `.` / `..` and empty parts (path traversal).
+    if (part === '' || part === '.' || part === '..') {
       return false;
     }
   }

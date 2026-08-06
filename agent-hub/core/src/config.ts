@@ -29,11 +29,16 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 import { resolveEngineAvailability } from './engine-setup.js';
 import { hubConfigPath, validateInstanceId, normalizeCwd, hubRoot } from './paths.js';
 import { encryptEnvVars, encryptValue, decryptValue, decryptEnvVars } from './crypto.js';
+import {
+  ensureAgentStoreMappings,
+  remapAgentWorkspace,
+} from './peer/agent-store-mapping.js';
 import {
   addCustomEngine,
   BUILTIN_ENGINE_IDS,
@@ -164,7 +169,11 @@ export interface ApprovalPolicyConfig {
 }
 
 export interface InstanceConfig {
-  /** User-chosen identifier. Validated against `paths.validateInstanceId`. */
+  /**
+   * Stable agent UUID. Auto-generated at creation (`crypto.randomUUID`);
+   * collision-checked against existing instances. Advertised to the Shepaw
+   * app as `agent_id` via peer `agent_list` — the app must reuse this id.
+   */
   readonly id: string;
   /** Display name shown in `shepaw-hub status`. Free-form string. */
   readonly label: string;
@@ -603,9 +612,27 @@ function stripEngineOverride(
 }
 
 /**
+ * Allocate a collision-free agent UUID for a new instance.
+ * Loops on the astronomically unlikely randomUUID collision with an existing id.
+ */
+export function allocateInstanceId(
+  existingIds: ReadonlyArray<string> | ReadonlySet<string>,
+): string {
+  const taken = existingIds instanceof Set ? existingIds : new Set(existingIds);
+  for (;;) {
+    const id = randomUUID();
+    if (!taken.has(id)) return id;
+  }
+}
+
+/**
  * Add a instance, validating the id and checking for duplicate ids.
  * Multiple instances may share the same cwd. Returns the final HubConfig.
  * Throws InstanceExistsError if the id already exists.
+ *
+ * Also maps the Working Directory and agent private space into the hub store:
+ *   store://workspaces/<device>/<cwd-abs>/  (symlink → cwd)
+ *   store://agents/<device>/<agent-uuid>/
  */
 export function addInstance(
   config: HubConfig,
@@ -666,6 +693,16 @@ export function addInstance(
 
   const next = [...config.instances, normalized];
   persist(config.path, next, hubPersistMeta(config));
+
+  try {
+    ensureAgentStoreMappings({ agentId: normalized.id, cwd: normalized.cwd });
+  } catch (err) {
+    console.warn(
+      `[shepaw-hub] Warning: failed to map store spaces for agent "${normalized.id}": ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+
   return { ...config, instances: next };
 }
 
@@ -773,6 +810,22 @@ export function updateInstance(
   };
   const nextList = [...config.instances.slice(0, idx), next, ...config.instances.slice(idx + 1)];
   persist(config.path, nextList, hubPersistMeta(config));
+
+  if (next.cwd !== existing.cwd) {
+    try {
+      remapAgentWorkspace({
+        agentId: next.id,
+        previousCwd: existing.cwd,
+        cwd: next.cwd,
+      });
+    } catch (err) {
+      console.warn(
+        `[shepaw-hub] Warning: failed to remap workspace store for agent "${next.id}": ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
+
   return { ...config, instances: nextList };
 }
 

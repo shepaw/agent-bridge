@@ -9,7 +9,6 @@ const FALLBACK_ENGINES = [
 
 /** Survives modal unmount so closing without submit keeps the draft. */
 interface AddInstanceDraft {
-  id: string;
   label: string;
   engine: string;
   cwd: string;
@@ -22,7 +21,6 @@ interface AddInstanceDraft {
 }
 
 const EMPTY_DRAFT: AddInstanceDraft = {
-  id: '',
   label: '',
   engine: '',
   cwd: '',
@@ -47,7 +45,6 @@ interface AddInstanceModalProps {
 }
 
 export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: AddInstanceModalProps) {
-  const [id, setId] = useState(draft.id);
   const [label, setLabel] = useState(draft.label);
   const [engine, setEngine] = useState(draft.engine);
   const [engineOptions, setEngineOptions] = useState<EngineInfo[]>([]);
@@ -67,7 +64,6 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   // Keep draft in sync while editing; reopen restores these values.
   useEffect(() => {
     draft = {
-      id,
       label,
       engine,
       cwd,
@@ -78,7 +74,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       tunnelSecret,
       showTunnel,
     };
-  }, [id, label, engine, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showTunnel]);
+  }, [label, engine, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showTunnel]);
 
   useEffect(() => {
     api.engines.list()
@@ -130,8 +126,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       const resolvedBaseUrl = baseUrl.trim() || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
 
       await api.instances.create({
-        id,
-        label: label || id,
+        label: label || undefined,
         engine,
         cwd,
         host,
@@ -160,13 +155,11 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
             Upstream ACP agents handle their own login and API keys on the gateway host.
             Hub only spawns the agent CLI — no credentials needed here.
+            Agent ID is auto-generated and shared with the Shepaw app.
           </p>
 
-          <label style={lbl}>ID <span style={req}>*</span></label>
-          <input style={inp} value={id} onChange={(e) => setId(e.target.value)} placeholder="my-instance" required />
-
           <label style={lbl}>Label</label>
-          <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Instance" />
+          <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Agent" />
 
           <label style={lbl}>Engine <span style={req}>*</span></label>
           {engineOptions.length > 0 ? (

@@ -63,6 +63,12 @@ export interface Instance {
   /** Per-instance tool-call approval override; null/undefined = inherit. */
   approval?: ApprovalPolicy | null;
   status: InstanceStatus;
+  /** Auto-mapped store URIs for workspace + agent private space. */
+  store?: {
+    deviceId: string;
+    workspaceUri: string;
+    agentUri: string;
+  };
 }
 
 export interface Peer {
@@ -314,7 +320,8 @@ export interface GatewayInfo {
 }
 
 export interface CreateInstanceInput {
-  id: string;
+  /** Optional; server always allocates a collision-free UUID. */
+  id?: string;
   engine?: string;
   cwd: string;
   label?: string;

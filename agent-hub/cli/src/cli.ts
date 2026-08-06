@@ -5,7 +5,7 @@
  *
  *   init                           Initialize ~/.config/shepaw-hub/ (idempotent)
  *
- *   instance add <id>               Register a new instance
+ *   instance add                    Register a new instance (auto UUID)
  *   instance list                   List registered instances
  *   instance show <id>              Detailed info for one instance
  *   instance remove <id>            Unregister; stops first if running
@@ -47,6 +47,7 @@ import {
 
 import {
   addInstance,
+  allocateInstanceId,
   addCustomEngineToHub,
   findInstance,
   getInstance,
@@ -123,14 +124,14 @@ cli
     if (cfg.instances.length === 0) {
       console.log('');
       console.log('Next: register a instance');
-      console.log('  shepaw-hub instance add my-instance --engine codebuddy --cwd /path/to/code');
+      console.log('  shepaw-hub instance add --engine codebuddy --cwd /path/to/code');
     }
   });
 
 // ── instance management ─────────────────────────────────────────────
 
 cli
-  .command('instance-add <id>', 'Register a new agent instance')
+  .command('instance-add', 'Register a new agent instance (id is auto-generated UUID)')
   .option('--engine <engine>', 'Gateway engine id (built-in or custom; see shepaw-hub engine list)', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
   .option('--label <text>', 'Display name shown in `status`')
@@ -142,7 +143,7 @@ cli
   .option('--tunnel-secret <secret>', 'HMAC-SHA256 signing secret for this channel')
   .option('--extra-arg <arg>', 'Extra argument passed through to gateway serve (repeatable)', { default: [] })
   .option('--env <KEY=VALUE>', 'Set a instance env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
-  .action(async (id: string, opts: {
+  .action(async (opts: {
     engine: string;
     cwd: string;
     label?: string;
@@ -157,6 +158,7 @@ cli
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
+      const id = allocateInstanceId(cfg.instances.map((p) => p.id));
       const engine = parseEngine(opts.engine, cfg);
       const reservedPorts = cfg.instances.map((p) => p.port);
       const port = opts.port !== undefined
@@ -240,7 +242,7 @@ cli
     const cfg = loadOrCreateHubConfig();
     if (cfg.instances.length === 0) {
       console.log('No instances registered.');
-      console.log('  shepaw-hub instance add <id> --engine codebuddy --cwd /path/to/code');
+      console.log('  shepaw-hub instance add --engine codebuddy --cwd /path/to/code');
       return;
     }
     const rows = cfg.instances.map((p) => {

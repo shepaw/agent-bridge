@@ -9,6 +9,7 @@
 export {
   addInstance,
   addCustomEngineToHub,
+  allocateInstanceId,
   clearEngineApproval,
   DEFAULT_ROUTER_HOST,
   DEFAULT_ROUTER_PORT,
@@ -76,6 +77,17 @@ export {
   PeerLocalStore,
   resetPeerLocalStoreForTest,
 } from './peer/peer-local-store.js';
+export {
+  agentPrivateStoreUri,
+  ensureAgentStoreMappings,
+  encodeWorkspaceStorePath,
+  hubStoreDeviceId,
+  remapAgentWorkspace,
+  workspaceStoreUri,
+  AGENTS_SPACE,
+  WORKSPACES_SPACE,
+  type AgentStoreMapping,
+} from './peer/agent-store-mapping.js';
 export {
   callStoreOnDevice,
   callStoreOnPeerId,

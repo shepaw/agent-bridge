@@ -41,6 +41,7 @@ import {
 } from 'shepaw-acp-sdk';
 import {
   addInstance,
+  allocateInstanceId,
   deleteInstanceEnvVar,
   decryptValue,
   encryptValue,
@@ -78,6 +79,10 @@ import {
   type TunnelConfig,
   isKnownEngine,
   isAlive,
+  ensureAgentStoreMappings,
+  hubStoreDeviceId,
+  workspaceStoreUri,
+  agentPrivateStoreUri,
 } from '@shepaw/agent-hub-core';
 import { parseApprovalBody } from './approval.js';
 
@@ -90,12 +95,26 @@ async function instanceStatus(instance: InstanceConfig) {
 }
 
 async function enrichInstance(p: InstanceConfig) {
+  let store:
+    | { deviceId: string; workspaceUri: string; agentUri: string }
+    | undefined;
+  try {
+    const deviceId = hubStoreDeviceId();
+    store = {
+      deviceId,
+      workspaceUri: workspaceStoreUri(deviceId, p.cwd),
+      agentUri: agentPrivateStoreUri(deviceId, p.id),
+    };
+  } catch {
+    /* peer identity unavailable — omit store mapping from response */
+  }
   return {
     ...p,
     // Never expose encrypted envVar values — only the key names.
     envVars: undefined,
     envVarKeys: Object.keys(p.envVars ?? {}),
     status: await instanceStatus(p),
+    store,
   };
 }
 
@@ -263,12 +282,9 @@ instancesRouter.post('/restart-all', async (_req: Request, res: Response) => {
 
 instancesRouter.post('/', async (req: Request, res: Response) => {
   try {
-    const { id, engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars } = req.body as Record<string, unknown>;
-    if (typeof id !== 'string' || id.length === 0) {
-      res.status(400).json({ error: 'id is required' });
-      return;
-    }
+    const { engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars } = req.body as Record<string, unknown>;
     const cfg = loadOrCreateHubConfig();
+    const id = allocateInstanceId(cfg.instances.map((p) => p.id));
     const resolvedEngine = parseEngine(engine ?? 'codebuddy');
     const reservedPorts = cfg.instances.map((p) => p.port);
     const resolvedPort = typeof port === 'number' ? port : await nextFreePort({ reserved: reservedPorts });
@@ -305,9 +321,10 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
       }
     }
 
+    const displayLabel = typeof label === 'string' && label.length > 0 ? label : id;
     const instance: Omit<InstanceConfig, 'envVars'> & { plainEnvVars?: Record<string, string> } = {
       id,
-      label: typeof label === 'string' ? label : id,
+      label: displayLabel,
       engine: resolvedEngine,
       cwd: typeof cwd === 'string' ? cwd : process.cwd(),
       port: resolvedPort,
@@ -321,6 +338,13 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
 
     addInstance(cfg, instance);
     ensureInstanceDir(id);
+    // Mapping is also done inside addInstance; re-ensure so create response is consistent
+    // even if the first attempt warned.
+    try {
+      ensureAgentStoreMappings({ agentId: id, cwd: instance.cwd });
+    } catch {
+      /* warned in addInstance */
+    }
     const savedCfg = loadOrCreateHubConfig();
     const saved = savedCfg.instances.find((p) => p.id === id) ?? instance as unknown as InstanceConfig;
 

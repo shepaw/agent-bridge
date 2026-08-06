@@ -160,7 +160,7 @@ export function peerAttachmentsDir(instanceId: string, root: string = hubRoot())
 }
 
 /**
- * Validate a instance id supplied by the user on the CLI.
+ * Validate a instance id (auto-generated UUID or legacy user-chosen id).
  *
  * Rules (intentionally strict — these strings end up as directory names on
  * three operating systems, potentially in shell commands, and sometimes in
