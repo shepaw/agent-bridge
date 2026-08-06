@@ -72,6 +72,30 @@ URIs verbatim (`store://files/<device-id>/…`); after pairing, remote device
 spaces are readable over the shared peer channel (live owner preferred,
 master mirror as backup).
 
+**`shepaw store` CLI shim (shell access for external agents):** the shepaw
+app's `[implicit]` hint tells agents to read `store://` URIs with
+`shepaw store read --uri <uri-as-is>`. When any store backend above is
+configured, the gateway writes a tiny `shepaw` executable into a shim dir
+(`$TMPDIR/shepaw-acp-proxy-<uid>/bin`) and prepends it to the upstream
+agent's `PATH`, so the hint works verbatim from the agent's shell tool. The
+shim execs `dist/shepaw-cli.js` (`src/shepaw-cli.ts`), which speaks the same
+`/api/v1` store API and prints a single JSON envelope
+(`{"success":true,…}` / `{"success":false,"error":…}`, exit 1 on failure),
+matching the built-in Dart CLI's `content` / `content_base64` shapes:
+
+```bash
+shepaw store read --uri store://files/<device-id>/docs/a.txt
+shepaw store write --filename report.md --content "# Q2" [--task t1] [--space artifacts]
+shepaw store list|meta --uri store://…
+```
+
+Backend resolution order mirrors the transcript sink: `NEXUSPOUCH_URL` → hub
+peer store → `http://127.0.0.1:8787` when `NEXUSPOUCH_ROOT` is set. Disable
+the shim with `SHEPAW_STORE_CLI=off` (overrides: `SHEPAW_STORE_CLI_SCRIPT`,
+`SHEPAW_STORE_CLI_SHIM_DIR`). This complements, not replaces, the MCP
+`store_*` tools — tool-native agents use MCP, hint-following agents use the
+CLI.
+
 **Session transcript bypass (P3):** with a running Nexuspouch HTTP API, set
 `NEXUSPOUCH_URL` (default `http://127.0.0.1:8787` when `NEXUSPOUCH_ROOT` is set),
 `NEXUSPOUCH_DEVICE`, and `NEXUSPOUCH_ADMIN_TOKEN`. Each chat turn is debounced

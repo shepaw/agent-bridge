@@ -37,6 +37,7 @@ import {
 import { filterListedSessions } from './sessions-filter.js';
 import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
 import { resolvePeerStoreMcpServers } from './peer-store-mcp-resolve.js';
+import { ensureShepawShim } from './shepaw-cli-shim.js';
 import {
   promptToPlainText,
   SessionTranscriptSink,
@@ -1192,6 +1193,17 @@ function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     extras.length === 0 || current.split(sep).some((p) => extras.includes(p))
       ? { ...env }
       : { ...env, [pathKey]: `${extras.join(sep)}${sep}${current}` };
+
+  // Give upstream agents the `shepaw store …` CLI shim so the app's
+  // [implicit] store:// hint works verbatim (see shepaw-cli-shim.ts).
+  const shimDir = ensureShepawShim(next);
+  if (shimDir !== undefined) {
+    const cur = next[pathKey] ?? '';
+    if (!cur.split(sep).includes(shimDir)) {
+      next = { ...next, [pathKey]: `${shimDir}${sep}${cur}` };
+      log('shepaw store CLI shim on PATH: %s', shimDir);
+    }
+  }
 
   // Claude Code reads ANTHROPIC_API_KEY. An *empty* API_KEY in the env blocks
   // Claude's normal CLI login (~/.claude) and yields opaque ACP "Internal error".

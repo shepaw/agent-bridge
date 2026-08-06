@@ -11,7 +11,7 @@ export default defineConfig([
     target: 'node18',
   },
   {
-    entry: ['src/cli.ts', 'src/peer-store-mcp.ts'],
+    entry: ['src/cli.ts', 'src/peer-store-mcp.ts', 'src/shepaw-cli.ts'],
     format: ['esm'],
     dts: false,
     sourcemap: true,
