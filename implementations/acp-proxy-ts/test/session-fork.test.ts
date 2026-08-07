@@ -1,8 +1,10 @@
 /**
- * Regression tests for the "session crossing" bug: one app (Shepaw) session
- * must never silently fork into two upstream ACP sessions. When a fork is
- * unavoidable, the abandoned upstream session must be reported via
- * `onAbandonedAcpSessionId` so session/list sync filters it out.
+ * Regression tests for strict app↔upstream session binding.
+ *
+ * When sessions.json already maps an app session to an upstream id, ACP
+ * restart must resume that id — never silently session/new a parallel
+ * upstream session. Forking is only allowed when the upstream session is
+ * confirmed gone from session/list.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +24,13 @@ const SPEC: AcpEngineSpec = {
 
 const RESUME_CAPS: acp.InitializeResponse = {
   protocolVersion: acp.PROTOCOL_VERSION,
+  agentCapabilities: {
+    sessionCapabilities: { resume: {}, list: {} },
+  },
+} as acp.InitializeResponse;
+
+const RESUME_ONLY_CAPS: acp.InitializeResponse = {
+  protocolVersion: acp.PROTOCOL_VERSION,
   agentCapabilities: { sessionCapabilities: { resume: {} } },
 } as acp.InitializeResponse;
 
@@ -39,15 +48,21 @@ function fakeActiveSession(sessionId: string): FakeActiveSession {
   };
 }
 
-type RequestBehavior = (method: string) => Promise<unknown>;
+type RequestBehavior = (method: string, params?: unknown) => Promise<unknown>;
 
-function fakeConnection(opts: { onRequest: RequestBehavior; newSessionId?: string }) {
+function fakeConnection(opts: {
+  onRequest: RequestBehavior;
+  newSessionId?: string;
+}) {
   return {
     agent: {
-      request: (method: string) => opts.onRequest(method),
+      request: (method: string, params?: unknown) => opts.onRequest(method, params),
       attachSession: (r: { sessionId: string }) => fakeActiveSession(r.sessionId),
       buildSession: () => ({
         start: async () => fakeActiveSession(opts.newSessionId ?? 'sdk-new'),
+        withMcpServer: function withMcpServer() {
+          return this;
+        },
       }),
     },
   };
@@ -60,21 +75,36 @@ const rejectResume: RequestBehavior = () => Promise.reject(new Error('session no
 /** A request handler that resolves — resume succeeded. */
 const resolveResume: RequestBehavior = () => Promise.resolve({});
 
+const rejectResumeListEmpty: RequestBehavior = (method) => {
+  if (method.includes('list')) return Promise.resolve({ sessions: [] });
+  return Promise.reject(new Error('session not found'));
+};
+
+function rejectResumeListHas(id: string): RequestBehavior {
+  return (method) => {
+    if (method.includes('list')) {
+      return Promise.resolve({ sessions: [{ sessionId: id, cwd: '/tmp' }] });
+    }
+    return Promise.reject(new Error('resume rejected'));
+  };
+}
+
 interface SubHarness {
   sub: AcpSubprocess;
   getOrCreate: (shepawId: string, opts: RunPromptTurnOptions) => Promise<unknown>;
   setConnection: (conn: unknown) => void;
+  setCaps: (caps: acp.InitializeResponse) => void;
   restartMock: ReturnType<typeof vi.fn>;
 }
 
-function makeSub(): SubHarness {
+function makeSub(caps: acp.InitializeResponse = RESUME_CAPS): SubHarness {
   const sub = new AcpSubprocess({ spec: SPEC, cwd: '/tmp' }) as unknown as {
     connection: unknown;
     agentCaps: acp.InitializeResponse;
     restartUpstreamAgent: () => Promise<void>;
     getOrCreateSession: (id: string, opts: RunPromptTurnOptions) => Promise<unknown>;
   };
-  sub.agentCaps = RESUME_CAPS;
+  sub.agentCaps = caps;
   const restartMock = vi.fn(async () => {});
   sub.restartUpstreamAgent = restartMock as unknown as () => Promise<void>;
   return {
@@ -83,17 +113,19 @@ function makeSub(): SubHarness {
     setConnection: (conn) => {
       sub.connection = conn;
     },
+    setCaps: (next) => {
+      sub.agentCaps = next;
+    },
     restartMock,
   };
 }
 
-describe('getOrCreateSession fork handling', () => {
+describe('getOrCreateSession strict binding', () => {
   const originalTimeout = (
     AcpSubprocess as unknown as { RESTORE_TIMEOUT_MS: number }
   ).RESTORE_TIMEOUT_MS;
 
   beforeEach(() => {
-    // Shrink the restore timeout so wedged-upstream tests run fast.
     (AcpSubprocess as unknown as { RESTORE_TIMEOUT_MS: number }).RESTORE_TIMEOUT_MS = 30;
   });
 
@@ -103,9 +135,11 @@ describe('getOrCreateSession fork handling', () => {
     vi.restoreAllMocks();
   });
 
-  it('forks to session/new when restore fails and reports the abandoned upstream id', async () => {
+  it('forks only when restore fails and session/list confirms the upstream id is gone', async () => {
     const h = makeSub();
-    h.setConnection(fakeConnection({ onRequest: rejectResume, newSessionId: 'sdk-new' }));
+    h.setConnection(
+      fakeConnection({ onRequest: rejectResumeListEmpty, newSessionId: 'sdk-new' }),
+    );
 
     const abandoned: string[] = [];
     const restoreFailed: string[] = [];
@@ -124,9 +158,22 @@ describe('getOrCreateSession fork handling', () => {
     expect(mapped).toEqual([['shepaw-1', 'sdk-new']]);
   });
 
+  it('keeps the binding and throws when restore fails but upstream session still exists', async () => {
+    const h = makeSub();
+    h.setConnection(fakeConnection({ onRequest: rejectResumeListHas('sdk-old') }));
+
+    const abandoned: string[] = [];
+    await expect(
+      h.getOrCreate('shepaw-1', {
+        getStoredAcpSessionId: () => 'sdk-old',
+        onAbandonedAcpSessionId: (id) => abandoned.push(id),
+      }),
+    ).rejects.toThrow(/binding kept/);
+    expect(abandoned).toEqual([]);
+  });
+
   it('retries restore once on the restarted upstream after a timeout instead of forking', async () => {
     const h = makeSub();
-    // First connection wedges; the timeout path "restarts" into a healthy one.
     h.setConnection(fakeConnection({ onRequest: hangForever }));
     h.restartMock.mockImplementation(async () => {
       h.setConnection(fakeConnection({ onRequest: resolveResume }));
@@ -143,23 +190,22 @@ describe('getOrCreateSession fork handling', () => {
     expect(abandoned).toEqual([]);
   });
 
-  it('forks and orphans when the restore retry also times out', async () => {
+  it('keeps the binding and throws when the restore retry also times out', async () => {
     const h = makeSub();
     h.setConnection(fakeConnection({ onRequest: hangForever, newSessionId: 'sdk-new' }));
-    // Restart swaps in another wedged connection (session data itself hangs).
     h.restartMock.mockImplementation(async () => {
       h.setConnection(fakeConnection({ onRequest: hangForever, newSessionId: 'sdk-new' }));
     });
 
     const abandoned: string[] = [];
-    const session = (await h.getOrCreate('shepaw-1', {
-      getStoredAcpSessionId: () => 'sdk-old',
-      onAbandonedAcpSessionId: (id) => abandoned.push(id),
-    })) as FakeActiveSession;
-
-    expect(session.sessionId).toBe('sdk-new');
+    await expect(
+      h.getOrCreate('shepaw-1', {
+        getStoredAcpSessionId: () => 'sdk-old',
+        onAbandonedAcpSessionId: (id) => abandoned.push(id),
+      }),
+    ).rejects.toThrow(/timed out.*binding kept/i);
     expect(h.restartMock).toHaveBeenCalledTimes(2);
-    expect(abandoned).toEqual(['sdk-old']);
+    expect(abandoned).toEqual([]);
   });
 
   it('creates a fresh session without orphan bookkeeping when nothing is stored', async () => {
@@ -173,6 +219,20 @@ describe('getOrCreateSession fork handling', () => {
     })) as FakeActiveSession;
 
     expect(session.sessionId).toBe('sdk-new');
+    expect(abandoned).toEqual([]);
+  });
+
+  it('keeps the binding when session/list is unavailable after a failed restore', async () => {
+    const h = makeSub(RESUME_ONLY_CAPS);
+    h.setConnection(fakeConnection({ onRequest: rejectResume }));
+
+    const abandoned: string[] = [];
+    await expect(
+      h.getOrCreate('shepaw-1', {
+        getStoredAcpSessionId: () => 'sdk-old',
+        onAbandonedAcpSessionId: (id) => abandoned.push(id),
+      }),
+    ).rejects.toThrow(/binding kept/);
     expect(abandoned).toEqual([]);
   });
 });

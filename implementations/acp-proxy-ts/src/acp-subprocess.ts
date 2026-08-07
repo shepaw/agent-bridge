@@ -793,43 +793,82 @@ export class AcpSubprocess {
 
     const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
 
+    // Strict binding: when sessions.json already maps this app session to an
+    // upstream id, ALWAYS resume/load that id first. Never silently session/new
+    // a parallel upstream session after ACP restart — that is exactly how one
+    // app conversation drifts onto a second agent session.
     if (storedId !== undefined && storedId.length > 0) {
-      // Prefer resume, else load (incl. Cursor load-only). RESTORE_TIMEOUT_MS
-      // kills/restarts a hung upstream so we restore after idle death instead of
-      // silently opening session/new (amnesia). Skip only when neither cap exists.
       if (canRestorePersistedSession(this.agentCaps)) {
         let attempt = await this.tryRestoreSession(this.connection!.agent, shepawSessionId, storedId);
         if (attempt.kind === 'timed_out') {
-          // The timeout path already killed + restarted the upstream agent, so
-          // the hang cause (wedged process, idle death) is gone. Retry once on
-          // the FRESH connection before forking — this is what stops one app
-          // session from splitting across two upstream sessions whenever a
-          // restore is merely slow rather than impossible.
+          // Timeout path already killed + restarted the upstream agent. Retry
+          // once on the FRESH connection before giving up.
           log('retrying session restore for %s on restarted upstream', storedId);
+          console.error(
+            `[acp-proxy] restore timed out for shepaw=${shepawSessionId} upstream=${storedId}; retrying after restart`,
+          );
           attempt = await this.tryRestoreSession(this.connection!.agent, shepawSessionId, storedId);
         }
         if (attempt.kind === 'restored') {
           const restored = attempt.session;
           this.sessions.set(shepawSessionId, restored);
           opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
+          console.error(
+            `[acp-proxy] resumed bound session shepaw=${shepawSessionId} → upstream=${restored.sessionId}`,
+          );
           if (this.preferredModelValue !== undefined) {
             await this.applyModelToSession(restored, shepawSessionId, this.preferredModelValue);
           }
           return restored;
         }
+
+        if (attempt.kind === 'timed_out') {
+          // Keep the binding. A silent fork here would split history across two
+          // upstream sessions the next time the agent comes back healthy.
+          const msg =
+            `Bound ACP session ${storedId} restore timed out for shepaw ${shepawSessionId}; ` +
+            'binding kept — retry the message instead of opening a new upstream session';
+          console.error(`[acp-proxy] ${msg}`);
+          throw new Error(msg);
+        }
+
+        // resume/load rejected. Only fork when the upstream session is confirmed
+        // gone — if it still exists (or we cannot tell), keep the binding.
+        const existence = await this.upstreamSessionExists(storedId);
+        if (existence === 'yes' || existence === 'unknown') {
+          const msg =
+            `Bound ACP session ${storedId} for shepaw ${shepawSessionId} could not be resumed` +
+            (existence === 'yes'
+              ? ' (still listed upstream)'
+              : ' (could not verify via session/list)') +
+            '; binding kept — retry instead of forking';
+          console.error(`[acp-proxy] ${msg}`);
+          throw new Error(msg);
+        }
+
+        log(
+          'stored ACP session %s confirmed gone from session/list; creating new session for shepaw %s',
+          storedId,
+          shepawSessionId,
+        );
+        console.error(
+          `[acp-proxy] bound upstream ${storedId} gone; forking new session for shepaw=${shepawSessionId}`,
+        );
+        opts.onAbandonedAcpSessionId?.(storedId);
+        opts.onRestoreFailed?.(shepawSessionId);
       } else {
         log(
           'upstream has no session resume/load; cannot restore %s for shepaw %s',
           storedId,
           shepawSessionId,
         );
+        console.error(
+          `[acp-proxy] upstream cannot resume/load; refusing to replace bound session ${storedId} for shepaw=${shepawSessionId}`,
+        );
+        throw new Error(
+          `Upstream agent cannot resume/load bound session ${storedId}; binding kept`,
+        );
       }
-      log('stored ACP session %s unavailable; creating new session', storedId);
-      // The conversation forks here: the old upstream session still exists
-      // agent-side with the earlier history. Mark it orphaned so session/list
-      // sync filters it out instead of adopting it as a duplicate app session.
-      opts.onAbandonedAcpSessionId?.(storedId);
-      opts.onRestoreFailed?.(shepawSessionId);
     }
 
     // Use the CURRENT connection — tryRestoreSession may have restarted the
@@ -839,12 +878,41 @@ export class AcpSubprocess {
     opts.onAcpSessionId?.(shepawSessionId, session.sessionId);
     this.rememberConfigOptions(shepawSessionId, session.newSessionResponse.configOptions);
     log('created ACP session %s for shepaw session %s', session.sessionId, shepawSessionId);
+    console.error(
+      `[acp-proxy] created new session shepaw=${shepawSessionId} → upstream=${session.sessionId}`,
+    );
 
     if (this.preferredModelValue !== undefined) {
       await this.applyModelToSession(session, shepawSessionId, this.preferredModelValue);
     }
 
     return session;
+  }
+
+  /**
+   * Whether `sessionId` still appears in the upstream agent's raw session/list.
+   * Used to decide if a failed restore should fork (gone) or keep the binding
+   * (still there / unknown).
+   */
+  private async upstreamSessionExists(
+    sessionId: string,
+  ): Promise<'yes' | 'no' | 'unknown'> {
+    if (this.connection === undefined) return 'unknown';
+    if (!supportsSessionList(this.agentCaps)) return 'unknown';
+    try {
+      const response = (await this.connection.agent.request(acp.methods.agent.session.list, {
+        cwd: this.cwd,
+      })) as acp.ListSessionsResponse;
+      const raw = response.sessions ?? [];
+      return raw.some((s) => s.sessionId === sessionId) ? 'yes' : 'no';
+    } catch (err) {
+      log(
+        'upstreamSessionExists list failed for %s: %s',
+        sessionId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return 'unknown';
+    }
   }
 
   private async tryRestoreSession(
@@ -908,45 +976,65 @@ export class AcpSubprocess {
     storedId: string,
   ): Promise<acp.ActiveSession | undefined> {
     const mcpServers = this.mcpServers();
+    // Some engines reject resume/load when MCP servers differ from the original
+    // session. Try with the configured MCP set first; if that fails, retry with
+    // an empty list before giving up — keeping the app↔upstream binding intact
+    // matters more than immediately re-attaching store tools.
+    const mcpAttempts: acp.McpServer[][] = mcpServers.length > 0 ? [mcpServers, []] : [[]];
 
     if (supportsSessionResume(this.agentCaps)) {
-      try {
-        const response = await agent.request(acp.methods.agent.session.resume, {
-          sessionId: storedId,
-          cwd: this.cwd,
-          mcpServers,
-        });
-        const session = attachActiveSession(agent, storedId, response);
-        this.rememberConfigOptions(shepawSessionId, response.configOptions);
-        log('resumed ACP session %s', storedId);
-        return session;
-      } catch (err) {
-        log(
-          'session/resume failed for %s: %s',
-          storedId,
-          err instanceof Error ? err.message : String(err),
-        );
+      for (const servers of mcpAttempts) {
+        try {
+          const response = await agent.request(acp.methods.agent.session.resume, {
+            sessionId: storedId,
+            cwd: this.cwd,
+            mcpServers: servers,
+          });
+          const session = attachActiveSession(agent, storedId, response);
+          this.rememberConfigOptions(shepawSessionId, response.configOptions);
+          log(
+            'resumed ACP session %s (mcp=%d)',
+            storedId,
+            servers.length,
+          );
+          return session;
+        } catch (err) {
+          log(
+            'session/resume failed for %s (mcp=%d): %s',
+            storedId,
+            servers.length,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
     }
 
     if (supportsSessionLoad(this.agentCaps)) {
-      try {
-        const response = await agent.request(acp.methods.agent.session.load, {
-          sessionId: storedId,
-          cwd: this.cwd,
-          mcpServers,
-        });
-        const session = attachActiveSession(agent, storedId, response);
-        this.rememberConfigOptions(shepawSessionId, response.configOptions);
-        const discarded = await discardLoadReplayUpdates(session);
-        log('loaded ACP session %s (discarded %d replay updates)', storedId, discarded);
-        return session;
-      } catch (err) {
-        log(
-          'session/load failed for %s: %s',
-          storedId,
-          err instanceof Error ? err.message : String(err),
-        );
+      for (const servers of mcpAttempts) {
+        try {
+          const response = await agent.request(acp.methods.agent.session.load, {
+            sessionId: storedId,
+            cwd: this.cwd,
+            mcpServers: servers,
+          });
+          const session = attachActiveSession(agent, storedId, response);
+          this.rememberConfigOptions(shepawSessionId, response.configOptions);
+          const discarded = await discardLoadReplayUpdates(session);
+          log(
+            'loaded ACP session %s (discarded %d replay updates, mcp=%d)',
+            storedId,
+            discarded,
+            servers.length,
+          );
+          return session;
+        } catch (err) {
+          log(
+            'session/load failed for %s (mcp=%d): %s',
+            storedId,
+            servers.length,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
     }
 

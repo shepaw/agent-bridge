@@ -110,6 +110,13 @@ export class AcpProxyAgent extends ACPAgentServer {
   async init(): Promise<void> {
     await this.sessionStore.load();
     await this.subprocess.start();
+    // Make the binding contract visible in hub agent.log (DEBUG may be off):
+    // after ACP (re)start we rely on sessions.json to resume, never silently
+    // invent a second upstream session for an already-bound app conversation.
+    console.error(
+      `[acp-proxy] SessionStore ready: ${this.sessionStore.establishedSdkSessionIds().size} established binding(s), ` +
+        `${this.sessionStore.orphanedSdkSessionIds().size} orphaned`,
+    );
   }
 
   override async onChat(ctx: TaskContext, message: string, kwargs: ChatKwargs): Promise<void> {
