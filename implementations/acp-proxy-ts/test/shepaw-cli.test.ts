@@ -153,7 +153,11 @@ describe('shepaw-cli against mock store API', () => {
   });
 
   it('write then read roundtrip with Dart-compatible envelope', async () => {
-    const env = { NEXUSPOUCH_URL: base };
+    const env = {
+      NEXUSPOUCH_URL: base,
+      SHEPAW_STORE_OWNER: 'agent-x',
+      SHEPAW_STORE_CHANNEL: 'ch-x',
+    };
     const w = makeIo(env);
     const writeCode = await runShepawCli(
       ['store', 'write', '--filename', 'report.md', '--content', '# Q2'],
@@ -163,7 +167,10 @@ describe('shepaw-cli against mock store API', () => {
     const written = lastJson(w.out().lines);
     expect(written.success).toBe(true);
     expect(written.uri).toBe(
-      `store://artifacts/${DEVICE}/general/report.md`,
+      `store://runtime/${DEVICE}/agent-x/ch-x/artifacts/general/report.md`,
+    );
+    expect(written.reference).toBe(
+      `[report.md](store://runtime/${DEVICE}/agent-x/ch-x/artifacts/general/report.md)`,
     );
     expect(written.note).toMatch(/verbatim/);
     expect(createHash('sha256').update('# Q2').digest('hex')).toBe(written.sha256);
@@ -183,6 +190,49 @@ describe('shepaw-cli against mock store API', () => {
       content: '# Q2',
     });
     expect(read.content_base64).toBeUndefined();
+  });
+
+  it('write --space artifacts keeps legacy flat path', async () => {
+    const env = { NEXUSPOUCH_URL: base };
+    const w = makeIo(env);
+    const writeCode = await runShepawCli(
+      [
+        'store',
+        'write',
+        '--filename',
+        'legacy.md',
+        '--content',
+        'old',
+        '--space',
+        'artifacts',
+        '--task',
+        'security',
+      ],
+      w.io,
+    );
+    expect(writeCode).toBe(0);
+    const written = lastJson(w.out().lines);
+    expect(written.uri).toBe(
+      `store://artifacts/${DEVICE}/security/legacy.md`,
+    );
+  });
+
+  it('write splits workflow scoped channel into nested dirs', async () => {
+    const env = {
+      NEXUSPOUCH_URL: base,
+      SHEPAW_STORE_OWNER: 'peeragent_x',
+      SHEPAW_STORE_CHANNEL:
+        'psess_group_abc__wf_w1__step_s1',
+    };
+    const w = makeIo(env);
+    const code = await runShepawCli(
+      ['store', 'write', '--filename', 'a.md', '--content', 'x'],
+      w.io,
+    );
+    expect(code).toBe(0);
+    expect(lastJson(w.out().lines).uri).toBe(
+      `store://runtime/${DEVICE}/peeragent_x/psess_group_abc/wf_w1__step_s1/artifacts/general/a.md`,
+    );
   });
 
   it('read returns content_base64 for binary', async () => {

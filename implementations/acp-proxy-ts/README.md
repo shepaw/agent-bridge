@@ -85,8 +85,18 @@ matching the built-in Dart CLI's `content` / `content_base64` shapes:
 
 ```bash
 shepaw store read --uri store://files/<device-id>/docs/a.txt
-shepaw store write --filename report.md --content "# Q2" [--task t1] [--space artifacts]
+shepaw store write --filename report.md --content "# Q2" \
+  [--task t1] [--owner <agent|group>] [--channel <session>] [--space runtime]
 shepaw store list|meta --uri store://…
+
+Default write space is **runtime** (aligned with the Shepaw App):
+
+`store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>`
+
+Owner/channel are taken from CLI flags, then `SHEPAW_STORE_OWNER` /
+`SHEPAW_STORE_CHANNEL` / `SHEPAW_STORE_AGENT_ID`, then the per-turn
+`store-context.json` updated by the gateway on each chat. Pass
+`--space artifacts` only for legacy flat URIs.
 ```
 
 Backend resolution order mirrors the transcript sink: `NEXUSPOUCH_URL` → hub

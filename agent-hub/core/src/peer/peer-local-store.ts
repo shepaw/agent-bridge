@@ -23,10 +23,12 @@ import {
 import { dirname, join, normalize, relative, sep } from 'node:path';
 import { peerStoreRoot } from '../paths.js';
 
-export const SHARED_SPACES = new Set(['artifacts', 'files', 'workspaces']);
+export const SHARED_SPACES = new Set(['artifacts', 'files', 'workspaces', 'public']);
 export const ALL_SPACES = new Set([
+  'runtime',
   'artifacts',
   'files',
+  'public',
   'attachments',
   'backups',
   'memory',

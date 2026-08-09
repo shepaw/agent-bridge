@@ -23,6 +23,7 @@ import {
   type StoreToolResult,
 } from './store-tools.js';
 import { resolveHubStoreBase } from './hub-store-env.js';
+import { resolveStoreWriteScope } from './store-write-context.js';
 
 const DEFAULT_NEXUSPOUCH_URL = 'http://127.0.0.1:8787';
 
@@ -117,12 +118,16 @@ const USAGE = `shepaw store — read/write store:// URIs (Nexuspouch pouch)
 
   shepaw store read --uri <store://…>
   shepaw store write --filename <name> --content <text>
-      [--space artifacts] [--task <id>] [--context <text>] [--to-agent <id>]
+      [--space runtime|artifacts|files|public] [--task <id>]
+      [--owner <agent|group>] [--channel <session>]
+      [--context <text>] [--to-agent <id>]
   shepaw store list --uri <store://…>
   shepaw store meta --uri <store://…>
 
-Output is a single JSON envelope: {"success":true,…} or
-{"success":false,"error":…}. Cite returned store:// URIs verbatim.`;
+Default write space is runtime:
+  store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>
+Owner/channel fall back to SHEPAW_STORE_* env / store-context.json.
+Cite returned store:// URIs (or reference markdown) verbatim.`;
 
 function emit(
   io: ShepawCliIO,
@@ -209,12 +214,16 @@ export async function runShepawCli(
       if (!flags.content) {
         return emit(io, { success: false, error: 'missing --content' });
       }
+      const scope = resolveStoreWriteScope({ flags, env });
       args = {
         filename,
         content: flags.content,
         task: flags.task ?? 'general',
+        space: flags.space ?? 'runtime',
       };
-      if (flags.space) args.space = flags.space;
+      if (scope.owner) args.owner = scope.owner;
+      if (scope.channel) args.channel = scope.channel;
+      if (scope.agentId) args.agent_id = scope.agentId;
       if (flags.context) args.context = flags.context;
       if (flags['to-agent']) args.to_agent = flags['to-agent'];
       break;
@@ -227,7 +236,7 @@ export async function runShepawCli(
   const envelope = toEnvelope(out);
   if (envelope.success === true && command === 'write') {
     envelope.note =
-      'Shared on write (local-first, synced in background). Cite the URI verbatim.';
+      'Shared on write (local-first, synced in background). Cite the URI / reference verbatim.';
   }
   return emit(io, envelope);
 }

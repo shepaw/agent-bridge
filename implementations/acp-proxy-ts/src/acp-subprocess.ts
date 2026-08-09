@@ -38,6 +38,7 @@ import { filterListedSessions } from './sessions-filter.js';
 import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
 import { resolvePeerStoreMcpServers } from './peer-store-mcp-resolve.js';
 import { ensureShepawShim } from './shepaw-cli-shim.js';
+import { defaultStoreContextPath } from './store-write-context.js';
 import {
   promptToPlainText,
   SessionTranscriptSink,
@@ -1291,6 +1292,14 @@ function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       next = { ...next, [pathKey]: `${shimDir}${sep}${cur}` };
       log('shepaw store CLI shim on PATH: %s', shimDir);
     }
+  }
+
+  // Point the CLI at the per-turn store-context file (updated in onChat).
+  if (!(next.SHEPAW_STORE_CONTEXT_FILE ?? '').trim()) {
+    next = {
+      ...next,
+      SHEPAW_STORE_CONTEXT_FILE: defaultStoreContextPath(next),
+    };
   }
 
   // Claude Code reads ANTHROPIC_API_KEY. An *empty* API_KEY in the env blocks

@@ -8,7 +8,17 @@
  *
  * Write path uses the store frame API (write.begin → write.chunk → commit)
  * with sha256 verification, mirroring the MCP server implementation.
+ *
+ * Product artifacts default to `runtime/<owner>/<channel>/artifacts/<task>/<file>`
+ * (aligned with the Shepaw App ArtifactService). Pass `space: 'artifacts'` for
+ * legacy flat paths.
  */
+
+import {
+  buildArtifactRelPath,
+  formatStoreMarkdownLink,
+  safeStoreFilename,
+} from './store-runtime-path.js';
 
 export interface StoreToolArgs {
   [key: string]: unknown;
@@ -32,18 +42,42 @@ export const storeToolDefs: StoreToolDef[] = [
     name: 'store_write',
     description:
       'Write a file to the local store pouch and return its store:// URI ' +
-      '(store://<space>/<device>/<path>). Local-first; when a master is set, mirrored over the peer channel.',
+      '(prefer runtime: store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>). ' +
+      'Local-first; when a master is set, mirrored over the peer channel.',
     inputSchema: {
       type: 'object',
       properties: {
-        filename: { type: 'string', description: 'Relative path (no leading /, no ..)' },
+        filename: { type: 'string', description: 'File name (no leading /, no ..)' },
         content: { type: 'string' },
         space: {
           type: 'string',
-          enum: ['artifacts', 'files', 'attachments', 'backups', 'memory', 'sessions', 'workspaces', 'agents'],
-          default: 'artifacts',
+          enum: [
+            'runtime',
+            'artifacts',
+            'files',
+            'public',
+            'attachments',
+            'backups',
+            'memory',
+            'sessions',
+            'workspaces',
+            'agents',
+          ],
+          default: 'runtime',
         },
-        task: { type: 'string', description: 'Optional task folder prefix' },
+        task: { type: 'string', description: 'Optional task folder (default general)' },
+        owner: {
+          type: 'string',
+          description: 'runtime owner (agent id or group id); defaults from env/context',
+        },
+        channel: {
+          type: 'string',
+          description: 'runtime channel / session id; defaults from env/context',
+        },
+        agent_id: {
+          type: 'string',
+          description: 'Alias for owner when writing under the agent',
+        },
         context: {
           type: 'string',
           description: 'If set (or to_agent), commit via handoff.create (M3)',
@@ -160,9 +194,27 @@ export class StoreToolsClient {
       const filename = String(args.filename ?? '');
       const content = String(args.content ?? '');
       if (!filename) return { ok: false, code: 'bad_op', error: 'filename required' };
-      const space = String(args.space ?? 'artifacts');
-      const task = args.task ? String(args.task) : undefined;
-      const path = task ? `${task}/${filename}` : filename;
+      const space = String(args.space ?? 'runtime').trim() || 'runtime';
+      const task =
+        args.task != null && String(args.task).trim()
+          ? String(args.task)
+          : 'general';
+      const ownerRaw =
+        (typeof args.owner === 'string' && args.owner.trim()) ||
+        (typeof args.owner_id === 'string' && args.owner_id.trim()) ||
+        (typeof args.agent_id === 'string' && args.agent_id.trim()) ||
+        undefined;
+      const channelRaw =
+        (typeof args.channel === 'string' && args.channel.trim()) ||
+        (typeof args.channel_id === 'string' && args.channel_id.trim()) ||
+        undefined;
+      const path = buildArtifactRelPath({
+        space,
+        filename,
+        task,
+        owner: ownerRaw || undefined,
+        channel: channelRaw || undefined,
+      });
       if (path.startsWith('/') || path.split('/').includes('..')) {
         return { ok: false, code: 'bad_path', error: 'invalid path' };
       }
@@ -193,6 +245,8 @@ export class StoreToolsClient {
           ? String(args.to_agent)
           : undefined;
       const uri = `store://${space}/${this.device}/${path}`;
+      const displayName = safeStoreFilename(filename);
+      const reference = formatStoreMarkdownLink(displayName, uri);
       if (context || toAgent) {
         const handoffPayload: Record<string, unknown> = {
           space,
@@ -201,10 +255,12 @@ export class StoreToolsClient {
         if (context) handoffPayload.context = context;
         if (toAgent) handoffPayload.to_agent = toAgent;
         const handoff = await this.storeOp('handoff.create', handoffPayload);
+        const handoffUri = String(handoff.handoff_uri ?? uri);
         return {
           ok: true,
           data: {
-            uri: String(handoff.handoff_uri ?? uri),
+            uri: handoffUri,
+            reference: formatStoreMarkdownLink(displayName, handoffUri),
             space,
             path,
             size: bytes.length,
@@ -215,7 +271,17 @@ export class StoreToolsClient {
         };
       }
       await this.storeOp('commit', { space, upload_ids: [uploadId] });
-      return { ok: true, data: { uri, space, path, size: bytes.length, sha256: sha } };
+      return {
+        ok: true,
+        data: {
+          uri,
+          reference,
+          space,
+          path,
+          size: bytes.length,
+          sha256: sha,
+        },
+      };
     } catch (e) {
       return toResultError(e);
     }
@@ -272,7 +338,6 @@ export class StoreToolsClient {
       const uri = String(args.uri ?? '');
       if (!uri) return { ok: false, code: 'bad_op', error: 'uri required' };
       const depthRaw = args.depth;
-      // Tool default: one level (cross-agent / folder browse). Explicit 0 = full recursive.
       const depth =
         depthRaw === undefined || depthRaw === null || depthRaw === ''
           ? 1

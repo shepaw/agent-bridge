@@ -95,12 +95,23 @@ describe('store tools (Nexuspouch HTTP)', () => {
     const client = new StoreToolsClient(base, 'tok', 'aaaaaaaaaaaaaaaa');
     const written = await executeStoreTool(
       'store_write',
-      { filename: 't-1/out.txt', content: 'hello store tools', space: 'artifacts' },
+      {
+        filename: 'out.txt',
+        content: 'hello store tools',
+        owner: 'agent-1',
+        channel: 'ch-1',
+        task: 't-1',
+      },
       client,
     );
     expect(written.ok).toBe(true);
     const uri = (written.data as { uri: string }).uri;
-    expect(uri).toBe('store://artifacts/aaaaaaaaaaaaaaaa/t-1/out.txt');
+    expect(uri).toBe(
+      'store://runtime/aaaaaaaaaaaaaaaa/agent-1/ch-1/artifacts/t-1/out.txt',
+    );
+    expect((written.data as { reference: string }).reference).toBe(
+      '[out.txt](store://runtime/aaaaaaaaaaaaaaaa/agent-1/ch-1/artifacts/t-1/out.txt)',
+    );
 
     const meta = await executeStoreTool('store_meta', { uri }, client);
     expect(meta.ok).toBe(true);
@@ -116,9 +127,10 @@ describe('store tools (Nexuspouch HTTP)', () => {
     const written = await executeStoreTool(
       'store_write',
       {
-        filename: 't-2/out.txt',
+        filename: 'out.txt',
         content: 'handoff me',
         space: 'artifacts',
+        task: 't-2',
         context: 'please review',
         to_agent: 'agent-b',
       },

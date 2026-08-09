@@ -42,6 +42,9 @@ import {
 import { PermissionPolicy, loadPolicyFromEnv } from './permission/policy.js';
 import { preparePromptFromAttachments } from './prompt-attachments.js';
 import { log } from './debug.js';
+import {
+  writeStoreWriteContext,
+} from './store-write-context.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
@@ -109,6 +112,14 @@ export class AcpProxyAgent extends ACPAgentServer {
 
   async init(): Promise<void> {
     await this.sessionStore.load();
+    try {
+      writeStoreWriteContext({
+        agent_id: this.agentId,
+        owner: this.agentId,
+      });
+    } catch {
+      /* non-fatal */
+    }
     await this.subprocess.start();
     // Make the binding contract visible in hub agent.log (DEBUG may be off):
     // after ACP (re)start we rely on sessions.json to resume, never silently
@@ -123,6 +134,21 @@ export class AcpProxyAgent extends ACPAgentServer {
     const shepawSessionId = kwargs.session_id ?? ctx.sessionId;
     this.lastShepawSessionId = shepawSessionId;
     this.sessionHistoryCache.invalidate(shepawSessionId);
+
+    // So `shepaw store write` (shell shim) lands under runtime/<agent>/<session>/…
+    try {
+      writeStoreWriteContext({
+        agent_id: this.agentId,
+        owner: this.agentId,
+        channel: shepawSessionId,
+      });
+    } catch (err) {
+      log(
+        'store write context update failed: %s',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
     const signal = this.activeTasks.get(ctx.taskId)?.signal ?? new AbortController().signal;
 
     // Peer / app attachments arrive as path refs (or small base64). Resolve
