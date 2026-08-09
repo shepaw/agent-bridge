@@ -3,7 +3,7 @@
  */
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -100,6 +100,16 @@ describe('engine-setup', () => {
     expect(guide.installable).toBe(true);
     expect(guide.installCommand).toContain('code.kimi.com/install.sh');
     expect(guide.docsUrl).toContain('MoonshotAI/kimi-cli');
+    expect(guide.checkPaths?.some((p) => p.includes('.kimi-code'))).toBe(true);
+  });
+
+  it('checkEngineInstallStatus finds kimi under ~/.kimi-code/bin', () => {
+    clearEngineProbeCaches();
+    const kimiHome = join(homedir(), '.kimi-code', 'bin', 'kimi');
+    if (!existsSync(kimiHome)) return;
+    const status = checkEngineInstallStatus('kimi');
+    expect(status.installed).toBe(true);
+    expect(status.binaryPath).toBe(kimiHome);
   });
 
   it('resolveBinaryPath finds executable in extra path', () => {

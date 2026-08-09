@@ -213,6 +213,7 @@ export {
   detectHubPlatform,
   hubPlatformLabel,
   spawnPathPrefixes,
+  kimiCliSearchPaths,
   getEngineSetupGuide,
   resolveBinaryPath,
   resolveEngineAvailability,

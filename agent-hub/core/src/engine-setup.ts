@@ -659,6 +659,26 @@ const KIMI_INSTALL_UNIX = 'curl -LsSf https://code.kimi.com/install.sh | bash';
 const KIMI_INSTALL_WIN32 =
   "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression\"";
 
+/** Official kimi installer puts the binary under ~/.kimi-code/bin (not always on PATH). */
+export function kimiCliSearchPaths(platform: HubPlatform = detectHubPlatform()): string[] {
+  const paths = [join(homedir(), '.kimi-code', 'bin'), LOCAL_BIN];
+  if (platform === 'darwin') {
+    paths.push('/opt/homebrew/bin', '/usr/local/bin');
+  }
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      paths.push(join(localAppData, 'kimi-code', 'bin'));
+    }
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) {
+      paths.push(join(userProfile, '.kimi-code', 'bin'));
+      paths.push(join(userProfile, '.local', 'bin'));
+    }
+  }
+  return paths;
+}
+
 function buildKimiGuide(platform: HubPlatform): EngineSetupGuide {
   const installCommand = platform === 'win32' ? KIMI_INSTALL_WIN32 : KIMI_INSTALL_UNIX;
   const installStepCommand =
@@ -672,6 +692,7 @@ function buildKimiGuide(platform: HubPlatform): EngineSetupGuide {
     acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.kimi,
     docsUrl: 'https://github.com/MoonshotAI/kimi-cli',
     checkBinary: 'kimi',
+    checkPaths: kimiCliSearchPaths(platform),
     installable: true,
     installCommand,
     steps: [
@@ -680,7 +701,7 @@ function buildKimiGuide(platform: HubPlatform): EngineSetupGuide {
         description:
           platform === 'win32'
             ? '在 PowerShell 中运行官方安装脚本（通过 uv 安装 kimi-cli）。'
-            : '运行官方安装脚本（会安装 uv，再通过 uv 安装 kimi-cli）。也可：uv tool install --python 3.13 kimi-cli。',
+            : '运行官方安装脚本（安装到 ~/.kimi-code/bin）。也可：uv tool install --python 3.13 kimi-cli。',
         command: installStepCommand,
       },
       {
@@ -722,7 +743,11 @@ const CUSTOM_ENGINE_SETUP: EngineSetupGuide = {
 
 /** Directories commonly holding agent CLIs; prepended to PATH at gateway spawn. */
 export function spawnPathPrefixes(platform: HubPlatform = detectHubPlatform()): readonly string[] {
-  const prefixes: string[] = [LOCAL_BIN, join(homedir(), '.codebuddy', 'bin')];
+  const prefixes: string[] = [
+    LOCAL_BIN,
+    join(homedir(), '.codebuddy', 'bin'),
+    join(homedir(), '.kimi-code', 'bin'),
+  ];
   if (platform === 'darwin') {
     prefixes.push('/opt/homebrew/bin', '/usr/local/bin');
   }
@@ -731,10 +756,12 @@ export function spawnPathPrefixes(platform: HubPlatform = detectHubPlatform()): 
     if (localAppData) {
       prefixes.push(join(localAppData, 'cursor-agent'));
       prefixes.push(join(localAppData, 'Programs', 'cursor-agent'));
+      prefixes.push(join(localAppData, 'kimi-code', 'bin'));
     }
     const userProfile = process.env.USERPROFILE;
     if (userProfile) {
       prefixes.push(join(userProfile, '.local', 'bin'));
+      prefixes.push(join(userProfile, '.kimi-code', 'bin'));
     }
   }
   return prefixes;
