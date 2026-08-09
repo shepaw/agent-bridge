@@ -346,3 +346,17 @@ export interface UpdateInstanceInput {
   approval?: ApprovalPolicy;
   clearApproval?: boolean;
 }
+
+/** Directory entry from GET /api/fs/browse. */
+export interface FsBrowseEntry {
+  name: string;
+  path: string;
+  type: 'dir';
+}
+
+/** Response from GET /api/fs/browse. */
+export interface FsBrowseResult {
+  path: string;
+  parent: string | null;
+  entries: FsBrowseEntry[];
+}

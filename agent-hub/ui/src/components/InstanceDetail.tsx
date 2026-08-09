@@ -8,6 +8,7 @@ import { SessionResumeModal } from './SessionResumeModal.js';
 import { SessionsPanel } from './SessionsPanel.js';
 import { AttachmentsPanel } from './AttachmentsPanel.js';
 import { InstanceApprovalSection } from './InstanceApprovalSection.js';
+import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { maskSecret } from '../utils/maskSecret.js';
 import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
 import {
@@ -88,6 +89,7 @@ export function InstanceDetail({
   const [showTunnelAdvanced, setShowTunnelAdvanced] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
+  const [showDirPicker, setShowDirPicker] = useState(false);
 
   const load = async () => {
     try {
@@ -670,7 +672,22 @@ export function InstanceDetail({
                     </div>
                     <div style={editField}>
                       <label style={editLbl}>Working Directory <span style={{ color: '#f38ba8' }}>*</span></label>
-                      <input style={editInp} value={editCwd} onChange={(e) => setEditCwd(e.target.value)} placeholder="/path/to/instance" required />
+                      <div style={cwdRow}>
+                        <input
+                          style={{ ...editInp, flex: 1, minWidth: 0 }}
+                          value={editCwd}
+                          onChange={(e) => setEditCwd(e.target.value)}
+                          placeholder="/path/to/instance"
+                          required
+                        />
+                        <button
+                          type="button"
+                          style={browseBtn}
+                          onClick={() => setShowDirPicker(true)}
+                        >
+                          浏览…
+                        </button>
+                      </div>
                     </div>
                     <div style={editField}>
                       <label style={editLbl}>Bind Host</label>
@@ -916,6 +933,17 @@ export function InstanceDetail({
       {showResume && (
         <SessionResumeModal instanceId={instanceId} onClose={() => setShowResume(false)} />
       )}
+
+      {showDirPicker && (
+        <DirectoryPickerModal
+          initialPath={editCwd}
+          onSelect={(path) => {
+            setEditCwd(path);
+            setShowDirPicker(false);
+          }}
+          onClose={() => setShowDirPicker(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1110,6 +1138,16 @@ const editLbl: React.CSSProperties = { color: '#a6adc8', fontSize: 12 };
 const editInp: React.CSSProperties = {
   background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 5,
   color: '#cdd6f4', padding: '6px 10px', fontSize: 13, outline: 'none',
+};
+
+const cwdRow: React.CSSProperties = {
+  display: 'flex', gap: 8, alignItems: 'stretch',
+};
+
+const browseBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #45475a', color: '#89b4fa',
+  borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontSize: 12,
+  whiteSpace: 'nowrap', flexShrink: 0,
 };
 
 const editTunnelSection: React.CSSProperties = {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client.js';
 import type { EngineInfo, HubMeta } from '../api/types.js';
+import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'codex',
@@ -60,6 +61,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
+  const [showDirPicker, setShowDirPicker] = useState(false);
 
   // Keep draft in sync while editing; reopen restores these values.
   useEffect(() => {
@@ -244,7 +246,22 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           )}
 
           <label style={lbl}>Working Directory <span style={req}>*</span></label>
-          <input style={inp} value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/instance" required />
+          <div style={cwdRow}>
+            <input
+              style={{ ...inp, flex: 1, minWidth: 0 }}
+              value={cwd}
+              onChange={(e) => setCwd(e.target.value)}
+              placeholder="/path/to/instance"
+              required
+            />
+            <button
+              type="button"
+              style={browseBtn}
+              onClick={() => setShowDirPicker(true)}
+            >
+              浏览…
+            </button>
+          </div>
 
           <label style={lbl}>Bind Host</label>
           <select style={inp} value={host} onChange={(e) => setHost(e.target.value)}>
@@ -325,6 +342,17 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           </div>
         </form>
       </div>
+
+      {showDirPicker && (
+        <DirectoryPickerModal
+          initialPath={cwd}
+          onSelect={(path) => {
+            setCwd(path);
+            setShowDirPicker(false);
+          }}
+          onClose={() => setShowDirPicker(false)}
+        />
+      )}
     </div>
   );
 }
@@ -355,6 +383,14 @@ const req: React.CSSProperties = { color: '#f38ba8' };
 const inp: React.CSSProperties = {
   background: '#11111b', border: '1px solid #45475a', borderRadius: 5,
   color: '#cdd6f4', padding: '6px 10px', fontSize: 14, outline: 'none',
+};
+const cwdRow: React.CSSProperties = {
+  display: 'flex', gap: 8, alignItems: 'stretch',
+};
+const browseBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #45475a', color: '#89b4fa',
+  borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+  whiteSpace: 'nowrap', flexShrink: 0,
 };
 const submitBtn: React.CSSProperties = {
   background: '#89b4fa', color: '#11111b', border: 'none',

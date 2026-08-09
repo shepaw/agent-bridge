@@ -24,6 +24,7 @@ import { enginesRouter } from './routes/engines.js';
 import { pairRouter } from './routes/pair.js';
 import { gatewayRouter } from './routes/gateway.js';
 import { peerRouter } from './routes/peer.js';
+import { fsRouter } from './routes/fs.js';
 import { attachLogsWss } from './ws.js';
 import {
   authorizeWsUpgrade,
@@ -87,6 +88,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   app.use('/api/pair', pairRouter);
   app.use('/api/gateway', gatewayRouter);
   app.use('/api/peer', peerRouter);
+  app.use('/api/fs', fsRouter);
 
   // ── Health check ─────────────────────────────────────────────────
   app.get('/api/health', (_req: Request, res: Response) => {

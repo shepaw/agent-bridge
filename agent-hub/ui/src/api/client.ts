@@ -25,6 +25,7 @@ import type {
   SessionHistoryMessage,
   UpdateCustomEngineInput,
   UpdateInstanceInput,
+  FsBrowseResult,
 } from './types.js';
 
 const BASE = '/api';
@@ -321,5 +322,14 @@ export const api = {
 
     removeDevice: (fingerprint: string): Promise<{ ok: boolean; devices: PairedPeer[] }> =>
       request(`/peer/devices/${fingerprint}`, { method: 'DELETE' }),
+  },
+
+  fs: {
+    browse: (path?: string): Promise<FsBrowseResult> => {
+      const q = path !== undefined && path.trim().length > 0
+        ? `?path=${encodeURIComponent(path.trim())}`
+        : '';
+      return request(`/fs/browse${q}`);
+    },
   },
 };
