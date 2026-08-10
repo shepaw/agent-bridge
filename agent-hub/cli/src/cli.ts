@@ -4,6 +4,9 @@
  * Subcommand map:
  *
  *   init                           Initialize ~/.config/shepaw-hub/ (idempotent)
+ *   doctor                         Pre-flight diagnostics (Node, engines, ports, instances)
+ *   quickstart                     Interactive: init → pick engine → start → print pairing QR
+ *   test [id]                      Connectivity probe (HTTP; --rpc; --chat)
  *
  *   instance add                    Register a new instance (auto UUID)
  *   instance list                   List registered instances
@@ -57,6 +60,7 @@ import {
   InstanceNotFoundError,
   removeCustomEngineFromHub,
   isKnownEngine,
+  resolvePublicHost,
   type ApprovalMode,
   type ApprovalPolicyConfig,
   type InstanceConfig,
@@ -78,6 +82,9 @@ import { instancePaths, hubRoot, hubConfigPath, gatewayLogFile } from '@shepaw/a
 import { tailLog } from '@shepaw/agent-hub-core';
 import { probeInstanceRuntime, createHubPairing } from '@shepaw/agent-hub-core';
 import { updateInstance } from '@shepaw/agent-hub-core';
+import { runDoctor } from './doctor.js';
+import { runQuickstart } from './quickstart.js';
+import { runTest } from './test-cmd.js';
 import {
   DEFAULT_ROUTER_PORT,
   setHubGateway,
@@ -115,6 +122,67 @@ const cli = cac('shepaw-hub');
 // ── init ───────────────────────────────────────────────────────────
 
 cli
+  .command('doctor', 'Diagnose local setup (Node, engines, gateway package, instances)')
+  .option('--full', 'Also probe engine versions and remote auth (slower)')
+  .action(async (opts: { full?: boolean }) => {
+    const failures = await runDoctor({ full: opts.full === true });
+    if (failures > 0) process.exitCode = 1;
+  });
+
+cli
+  .command('test [id]', 'Probe instance connectivity (HTTP; optional Noise RPC / chat)')
+  .option('--rpc', 'Also open a Noise WS and call agent.sessions.list')
+  .option('--chat', 'Also send an agent.chat turn (implies --rpc; auto-approves tools)')
+  .option('--message <text>', 'Override the --chat probe message')
+  .option('--timeout-ms <n>', 'Chat timeout in milliseconds', { default: 60000 })
+  .action(async (
+    id: string | undefined,
+    opts: { rpc?: boolean; chat?: boolean; message?: string; timeoutMs?: number | string },
+  ) => {
+    try {
+      const failures = await runTest(id, {
+        rpc: opts.rpc === true,
+        chat: opts.chat === true,
+        message: opts.message,
+        timeoutMs: opts.timeoutMs !== undefined ? Number(opts.timeoutMs) : undefined,
+      });
+      if (failures > 0) process.exitCode = 1;
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('quickstart', 'Interactive onboarding: pick engine → start agent → print pairing QR')
+  .option('--engine <id>', 'Skip the engine picker')
+  .option('--cwd <dir>', 'Working directory (default: current dir)')
+  .option('--label <text>', 'Display label (default: directory basename)')
+  .option('--host <host>', 'Bind host (default: 0.0.0.0 for LAN pairing)')
+  .option('--yes', 'Non-interactive: accept defaults / require --engine')
+  .option('--no-qr', 'Suppress the terminal QR code')
+  .action(async (opts: {
+    engine?: string;
+    cwd?: string;
+    label?: string;
+    host?: string;
+    yes?: boolean;
+    qr?: boolean;
+  }) => {
+    try {
+      await runQuickstart({
+        engine: opts.engine,
+        cwd: opts.cwd,
+        label: opts.label,
+        host: opts.host,
+        yes: opts.yes === true,
+        noQr: opts.qr === false,
+      });
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
   .command('init', 'Create ~/.config/shepaw-hub/ and hub.json (idempotent)')
   .action(() => {
     const cfg = loadOrCreateHubConfig();
@@ -123,8 +191,8 @@ cli
     console.log(`Instances:     ${cfg.instances.length}`);
     if (cfg.instances.length === 0) {
       console.log('');
-      console.log('Next: register a instance');
-      console.log('  shepaw-hub instance add --engine codebuddy --cwd /path/to/code');
+      console.log('Next: shepaw-hub quickstart');
+      console.log('  (or: shepaw-hub instance add --engine codebuddy --cwd /path/to/code --host 0.0.0.0)');
     }
   });
 
@@ -607,7 +675,8 @@ function runPair(
   } else if (instance.baseUrl) {
     pairUrl = `${instance.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   } else {
-    pairUrl = `ws://${instance.host}:${instance.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+    const host = resolvePublicHost(instance.host);
+    pairUrl = `ws://${host}:${instance.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
   }
 
   const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
@@ -624,9 +693,16 @@ function runPair(
   console.log(`  Fingerprint:  ${identity.fingerprint}`);
   console.log(`  Pair URL:     ${pairUrl}`);
   if (!opts.baseUrl && !gatewayBase && !instance.baseUrl) {
-    console.log(`  ⚠ No shared channel or base URL configured — the URL above is loopback only.`);
-    console.log(`     Configure the shared channel: shepaw-hub gateway set-channel ...`);
-    console.log(`     Or a per-instance base URL: shepaw-hub instance update ${id} --base-url <url>`);
+    const publicHost = resolvePublicHost(instance.host);
+    if (publicHost !== '127.0.0.1' && publicHost !== 'localhost') {
+      console.log(`  LAN URL derived from bind host ${instance.host} → ${publicHost}.`);
+      console.log(`  Phone must be on the same Wi-Fi; bind with --host 0.0.0.0 for LAN reachability.`);
+    } else {
+      console.log(`  ⚠ No shared channel or base URL configured — the URL above is loopback only.`);
+      console.log(`     Configure the shared channel: shepaw-hub gateway set-channel ...`);
+      console.log(`     Or a per-instance base URL: shepaw-hub instance update ${id} --base-url <url>`);
+      console.log(`     Or re-register with --host 0.0.0.0 for same-Wi-Fi pairing.`);
+    }
   }
   if (gatewayBase) warnRouterIfNeeded();
 

@@ -18,26 +18,48 @@ agent-hub/
 
 ## Quick Start
 
+### Install
+
+```bash
+# One-liner
+curl -fsSL https://raw.githubusercontent.com/shepaw/agent-bridge/main/scripts/install.sh | bash
+
+# Or npm
+npm install -g shepaw-agent-hub    # provides the `shepaw-hub` binary
+```
+
+From a source checkout instead: `npm install && npm run build` at the repo
+root, then `cd agent-hub/cli && npm link`.
+
 ### CLI
 
 ```bash
 # Initialize config directory (~/.config/shepaw-hub/)
 shepaw-hub init
 
-# Register a project
-shepaw-hub project add my-project --engine codebuddy --cwd /path/to/workspace
+# One-shot onboarding (pick engine → start → print pairing QR)
+shepaw-hub quickstart
 
-# Start it
-shepaw-hub start my-project
+# Or register a project manually
+shepaw-hub instance add --engine codebuddy --cwd /path/to/workspace --host 0.0.0.0
+
+# Start it (use the id printed by `instance add` / `quickstart`)
+shepaw-hub start <id>
 
 # Check status
 shepaw-hub status
 
 # Pair a mobile device (QR code in terminal)
-shepaw-hub pair my-project
+shepaw-hub pair <id>
+
+# Diagnose setup issues
+shepaw-hub doctor
+
+# Verify a running instance (HTTP; add --rpc / --chat for deeper probes)
+shepaw-hub test <id> --rpc
 
 # View live logs
-shepaw-hub logs my-project -f
+shepaw-hub logs <id> -f
 ```
 
 ### Web Dashboard
@@ -55,6 +77,10 @@ shepaw-hub web --no-open
 
 The dashboard runs on `http://127.0.0.1:4000` by default.
 
+**First-run wizard:** when the dashboard has no instances, it auto-opens a
+guided flow (engine → working directory → start → pairing QR). You can also
+click **开始引导** on the empty state, or dismiss it and use **Add Instance**.
+
 ---
 
 ## CLI Reference
@@ -64,6 +90,9 @@ The dashboard runs on `http://127.0.0.1:4000` by default.
 | Command | Description |
 |---------|-------------|
 | `shepaw-hub init` | Create `~/.config/shepaw-hub/` and `hub.json` (idempotent) |
+| `shepaw-hub doctor` | Pre-flight diagnostics: Node version, gateway package, engine CLIs, per-instance state and port conflicts. `--full` adds engine version / remote auth probes. Exits non-zero on hard failures |
+| `shepaw-hub quickstart` | Interactive onboarding: probe engines → pick one → set cwd → start on LAN (`0.0.0.0`) → print pairing QR. Flags: `--engine`, `--cwd`, `--label`, `--yes`, `--no-qr` |
+| `shepaw-hub test [id]` | Connectivity probe. Default: HTTP `/status`. `--rpc` adds Noise WS + `agent.sessions.list`. `--chat` sends a short turn (auto-approves tools). Exits non-zero on failures |
 
 ### Project Management
 

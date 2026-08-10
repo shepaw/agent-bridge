@@ -28,11 +28,17 @@ import {
   formatSpawnCommandLine,
 } from './engines.js';
 import { formatShellCommand } from './command-line.js';
+import { detectLanIPv4 } from './lan.js';
 import { listUpstreamAcpSessions, readStoredSessions } from './sessions-list.js';
 
 if (process.argv[2] === 'peers' && typeof process.argv[3] === 'string' && !process.argv[3].startsWith('-')) {
   const sub = process.argv[3];
   process.argv.splice(2, 2, `peers-${sub}`);
+}
+// `pair` reads more naturally next to `shepaw-hub pair`; keep `enroll` as the
+// canonical command name.
+if (process.argv[2] === 'pair') {
+  process.argv.splice(2, 1, 'enroll');
 }
 
 const cli = cac('shepaw-acp-proxy');
@@ -204,13 +210,16 @@ cli
   });
 
 cli
-  .command('enroll', 'Mint a single-use pairing code')
+  .command('enroll', 'Mint a single-use pairing code + QR (alias: pair)')
   .option('--label <label>', 'Label for the redeeming device')
   .option('--ttl-minutes <min>', 'Code TTL in minutes', { default: 10 })
   .option('--peers-path <path>', 'Override authorized_peers.json path')
   .option('--enrollments-path <path>', 'Override enrollments.json path')
   .option('--identity-path <path>', 'Override identity.json path')
-  .option('--base-url <url>', 'Base WS URL for QR pairing')
+  .option('--base-url <url>', 'Base WS URL for QR pairing (default: derive from LAN IP + --port)')
+  .option('--port <port>', 'Gateway port used when deriving the LAN pairing URL', {
+    default: process.env.AGENT_PORT ?? 8090,
+  })
   .option('--no-qr', 'Suppress terminal QR code')
   .action((opts: {
     label?: string;
@@ -219,6 +228,7 @@ cli
     enrollmentsPath?: string;
     identityPath?: string;
     baseUrl?: string;
+    port?: string | number;
     qr?: boolean;
   }) => {
     const enrollmentsPath = resolveEnrollmentsPath(opts.enrollmentsPath);
@@ -228,9 +238,16 @@ cli
     const display = formatCodeForDisplay(token.code);
 
     let pairUrl: string | undefined;
+    let derivedBase: string | undefined;
     if (opts.baseUrl) {
       const base = opts.baseUrl.replace(/\/$/, '');
       pairUrl = `${base}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
+    } else {
+      const lanIp = detectLanIPv4();
+      if (lanIp) {
+        derivedBase = `ws://${lanIp}:${Number(opts.port) || 8090}`;
+        pairUrl = `${derivedBase}/acp/ws?agentId=${identity.agentId}#fp=${identity.fingerprint}`;
+      }
     }
 
     console.log(`\nPairing code: ${display}`);
@@ -243,6 +260,20 @@ cli
       const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
       qrcode.generate(qrPayload, { small: true }, (qr: string) => process.stdout.write(qr));
     }
+
+    if (derivedBase) {
+      console.log(`\nQR URL derived from this machine's LAN address (${derivedBase}).`);
+      console.log('The phone can only reach it if the gateway listens on LAN, e.g.:');
+      console.log(`  shepaw-acp-proxy serve --host 0.0.0.0 --port ${Number(opts.port) || 8090} ...`);
+      console.log('Pairing through a tunnel or another network? Pass --base-url instead.');
+    } else if (!pairUrl) {
+      console.log('\nNo --base-url given and no LAN address found — QR skipped.');
+      console.log('Re-run with --base-url ws://<host>:<port> (reachable from your phone) to get a QR.');
+    }
+
+    console.log('\nNext:');
+    console.log('  1. Keep `shepaw-acp-proxy serve` running on this machine.');
+    console.log('  2. In the Shepaw app choose "Add agent" and scan the QR (or type the code).');
     console.log('');
   });
 

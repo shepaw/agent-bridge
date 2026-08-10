@@ -3,6 +3,7 @@ import { useInstances } from './hooks/useInstances.js';
 import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
 import { AddInstanceModal } from './components/AddInstanceModal.js';
+import { OnboardingWizard } from './components/OnboardingWizard.js';
 import { ConfirmModal } from './components/ConfirmModal.js';
 import { SettingsPage } from './components/SettingsPage.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
@@ -35,6 +36,8 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [showAdd, setShowAdd] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardAutoPrompted, setWizardAutoPrompted] = useState(false);
   const [showRestartAllConfirm, setShowRestartAllConfirm] = useState(false);
   const [restartAllBusy, setRestartAllBusy] = useState(false);
   const [restartAllErr, setRestartAllErr] = useState<string | null>(null);
@@ -52,11 +55,48 @@ export function App() {
 
   const openEngineSettings = (engineId: string) => {
     setShowAdd(false);
+    setShowWizard(false);
     setSelected(null);
     setShowSettings(true);
     setSettingsTab('engines');
     setFocusEngineId(engineId);
     location.hash = buildSettingsHash('engines', engineId);
+  };
+
+  // Auto-open the first-run wizard once when the dashboard has zero instances
+  // (skip when auth is broken — user must fix the token first).
+  useEffect(() => {
+    if (wizardAutoPrompted || loading || showWizard || showAdd || showSettings || selected) return;
+    if (isUnauthorizedError(error)) return;
+    if (instances.length !== 0) return;
+    try {
+      if (localStorage.getItem('shepaw_onboarding_dismissed') === '1') {
+        setWizardAutoPrompted(true);
+        return;
+      }
+    } catch {
+      /* private mode */
+    }
+    setShowWizard(true);
+    setWizardAutoPrompted(true);
+  }, [
+    wizardAutoPrompted,
+    loading,
+    showWizard,
+    showAdd,
+    showSettings,
+    selected,
+    error,
+    instances.length,
+  ]);
+
+  const dismissWizard = () => {
+    setShowWizard(false);
+    try {
+      localStorage.setItem('shepaw_onboarding_dismissed', '1');
+    } catch {
+      /* ignore */
+    }
   };
 
   // Keep URL hash in sync with the active view
@@ -228,10 +268,20 @@ export function App() {
 
       {!loading && instances.length === 0 && (
         <div style={empty}>
-          <p>No instances registered yet.</p>
-          <p style={{ color: '#a6adc8', fontSize: 14 }}>
-            Click "Add Instance" or run{' '}
-            <code style={inlineCode}>shepaw-hub instance add &lt;id&gt; --engine codebuddy --cwd /path</code>
+          <p style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600 }}>还没有 Agent 实例</p>
+          <p style={{ color: '#a6adc8', fontSize: 14, margin: '0 0 16px' }}>
+            用引导向导在几分钟内把本机引擎接到 Shepaw App，或手动添加实例。
+          </p>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button type="button" style={addBtn} onClick={() => setShowWizard(true)}>
+              开始引导
+            </button>
+            <button type="button" style={secondaryBtn} onClick={() => setShowAdd(true)}>
+              手动添加
+            </button>
+          </div>
+          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 16 }}>
+            CLI：<code style={inlineCode}>shepaw-hub quickstart</code>
           </p>
         </div>
       )}
@@ -265,6 +315,25 @@ export function App() {
           onClose={() => setShowAdd(false)}
           onCreated={reload}
           onOpenEngineSettings={openEngineSettings}
+        />
+      )}
+
+      {showWizard && (
+        <OnboardingWizard
+          onClose={dismissWizard}
+          onOpenEngineSettings={openEngineSettings}
+          onFinished={(instanceId) => {
+            try {
+              localStorage.removeItem('shepaw_onboarding_dismissed');
+            } catch {
+              /* ignore */
+            }
+            setShowWizard(false);
+            void reload().then(() => {
+              setSelected(instanceId);
+              setSelectedTab('devices');
+            });
+          }}
         />
       )}
 

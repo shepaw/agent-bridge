@@ -107,7 +107,13 @@ async function fetchGatewayStatus(
 ): Promise<{ runtime?: AgentRuntimeStatus; probeError: string | null }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const base = `http://${instance.host}:${instance.port}`;
+  // Wildcard binds (0.0.0.0 / ::) are valid for listen() but not as HTTP
+  // client targets — hit loopback instead. Same-machine probes only.
+  const host =
+    instance.host === '0.0.0.0' || instance.host === '::' || instance.host === ''
+      ? '127.0.0.1'
+      : instance.host;
+  const base = `http://${host}:${instance.port}`;
 
   try {
     let res = await fetch(`${base}/status`, { signal: controller.signal });

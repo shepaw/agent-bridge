@@ -32,7 +32,7 @@ Shepaw App (手机)
 
 | 要求 | 说明 |
 |------|------|
-| **Node.js** | ≥ 18.17（见仓库根目录 `package.json`） |
+| **Node.js** | ≥ 18.17（见仓库根目录 `package.json`；Node 20 LTS / 22 / 24 均可） |
 | **操作系统** | macOS / Linux / Windows |
 | **Shepaw App** | iOS / Android，用于 Device Pairing 扫码与对话 |
 | **上游 Agent CLI** | 按所选引擎安装，例如 `claude-code`、`cursor-agent`、`codex` 等 |
@@ -42,6 +42,23 @@ Shepaw App (手机)
 ---
 
 ## 二、构建与安装
+
+最简单的方式是安装脚本或 npm 全局安装（无需克隆仓库）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shepaw/agent-bridge/main/scripts/install.sh | bash
+# 等价于：
+npm install -g shepaw-agent-hub
+```
+
+脚本选项：`--proxy-only` / `--all` / `--skip-doctor`。装完后建议：
+
+```bash
+shepaw-hub quickstart
+# 或逐步：shepaw-hub init && shepaw-hub doctor
+```
+
+需要从源码构建（如定制或锁定提交）时：
 
 ```bash
 git clone <repo-url> agent-bridge

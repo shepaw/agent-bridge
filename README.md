@@ -12,9 +12,9 @@ agent-bridge/
 │   └── shepaw-acp-sdk-typescript/    # TypeScript SDK (npm i shepaw-acp-sdk)
 │
 ├── implementations/
-│   └── acp-proxy-ts/                 # Unified ACP proxy gateway
+│   └── acp-proxy-ts/                 # ACP proxy gateway (npm i -g shepaw-acp-proxy-gateway)
 │
-├── agent-hub/                        # Multi-project supervisor (CLI + Web UI)
+├── agent-hub/                        # Multi-project supervisor (npm i -g shepaw-agent-hub)
 │
 ├── docs/                             # Deployment and help guides
 │
@@ -35,17 +35,19 @@ The recommended gateway (`shepaw-acp-proxy`) bridges them:
 Shepaw app → Shepaw ACP v2.1 → AcpProxyAgent → @agentclientprotocol/sdk → upstream agent subprocess
 ```
 
-Both SDKs speak the **same Shepaw wire protocol** — a Python agent and a
-TypeScript agent are interchangeable from the Shepaw app's point of view.
-JSON field names stay `snake_case` in both, method names match exactly,
-and Tunnel / Channel-Service framing is byte-for-byte identical.
+Both SDKs are designed to speak the **same Shepaw wire protocol** — JSON field
+names stay `snake_case` in both, method names match exactly, and Tunnel /
+Channel-Service framing is byte-for-byte identical, so a Python agent and a
+TypeScript agent are interchangeable from the Shepaw app's point of view
+(once the Python SDK is ported to v2.1 — see below).
 
 > **Note on protocol v2.1 (April 2026):** the TypeScript SDK and the
 > Shepaw Flutter app speak a Noise-IK-encrypted wire protocol with a
 > **per-device public-key allowlist** — there is no shared `token`.
-> Pairing URLs include a `#fp=<fingerprint>` fragment; authorization
-> is done out of band by running `<gateway> peers add <pubkey>` on the
-> agent host with the pubkey shown in the app's "Add agent" screen.
+> The easy path is `<gateway> pair`, which prints a QR + single-use code
+> the app redeems during the handshake; the manual fallback is
+> `<gateway> peers add <pubkey>` with the pubkey shown in the app's
+> "Add agent" screen. Pairing URLs include a `#fp=<fingerprint>` fragment.
 > v2.1 is a **hard cutover** from v2 (prologue changed); both sides
 > must be on v2.1. The Python SDK here is still v1 and is not
 > interoperable with v2.1 apps until ported. See [`SECURITY.md`](SECURITY.md)
@@ -53,45 +55,84 @@ and Tunnel / Channel-Service framing is byte-for-byte identical.
 
 ## Quick start
 
-### Run any ACP agent on your phone (recommended)
+Two ways to run agents — both end with scanning a QR code in the Shepaw app:
+
+- **One agent, three commands** — the ACP proxy gateway (`shepaw-acp-proxy`)
+- **Many projects on one host** — Agent Hub (`shepaw-hub`): CLI + Web
+  dashboard that spawns the gateway per project
+
+Prerequisites: Node.js ≥ 18.17, the CLI of the engine you pick (e.g.
+Claude Code), and the Shepaw app on the same Wi-Fi as this machine.
+
+### Install
 
 ```sh
-cd implementations/acp-proxy-ts
-npm install && npm run build
-export ANTHROPIC_API_KEY=sk-ant-...   # when using --engine claude-code
-node dist/cli.js serve --engine claude-code --cwd ~/your-project --port 8090
-node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
+# One-liner (recommended)
+curl -fsSL https://raw.githubusercontent.com/shepaw/agent-bridge/main/scripts/install.sh | bash
+
+# Or via npm
+npm install -g shepaw-agent-hub          # multi-project hub (includes gateway)
+npm install -g shepaw-acp-proxy-gateway  # single-agent gateway only
 ```
 
+Docker / systemd examples: [`docs/DOCKER.md`](docs/DOCKER.md), [`deploy/`](deploy/).
+
+### One agent on your phone (fastest)
+
+```sh
+# if you used the install script with --proxy-only / --all, or:
+npm install -g shepaw-acp-proxy-gateway
+
+# Terminal 1 — bind to LAN so the phone can reach the gateway
+shepaw-acp-proxy serve --engine claude-code --cwd ~/your-project --host 0.0.0.0
+
+# Terminal 2 — print the pairing QR (LAN address auto-detected)
+shepaw-acp-proxy pair
+```
+
+In the Shepaw app: **Add agent → scan the QR**. That's it — start chatting.
+
 Supported `--engine` values: `claude-code`, `codebuddy`, `codex`,
-`opencode`, `openclaw`, `cursor`, `hermes`, `kimi`. See
+`opencode`, `openclaw`, `cursor`, `hermes`, `kimi`. Pairing from outside
+your LAN (tunnel / channel) is covered in
 [`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
 
 ### Run multiple agents from one CLI (`shepaw-hub`)
 
 One host, many projects — each with its own identity, session store, and
 authorized-peers list. Agent Hub spawns `shepaw-acp-proxy` with per-project
-configuration:
+configuration.
+
+Fastest path — one interactive command:
 
 ```sh
-npm install && npm run build
-cd agent-hub/cli && npm link   # or npx shepaw-hub
-
-shepaw-hub init
-shepaw-hub project add work-api --engine claude-code --cwd ~/code/work-api \
-    --base-url "wss://channel.shepaw.com/c/work-api"
-shepaw-hub start work-api
-shepaw-hub pair work-api --label "My iPhone"   # prints QR + short code
+shepaw-hub quickstart
+# pick an engine → confirm cwd → scan the QR in the Shepaw app
 ```
 
-See [`agent-hub/README.md`](agent-hub/README.md) for the full command reference,
-Web UI, and Windows notes. For step-by-step deployment (Peer pairing, Channel,
+Or step by step:
+
+```sh
+shepaw-hub init
+shepaw-hub doctor                              # optional: check Node / engines / ports
+shepaw-hub instance add --engine claude-code --cwd ~/code/work-api --host 0.0.0.0
+shepaw-hub start <instance-id>
+shepaw-hub pair <instance-id> --label "My iPhone"   # prints QR + short code
+shepaw-hub test <instance-id> --rpc                 # verify HTTP + Noise path
+```
+
+A Web dashboard (default `:4000`) manages projects, engines, and pairing
+from the browser. See [`agent-hub/README.md`](agent-hub/README.md) for the
+full command reference. For step-by-step deployment (Peer pairing, Channel,
 production checklist), see [`docs/deployment.md`](docs/deployment.md).
 
 ### Build a custom agent (Python)
 
+> **v2.1 note:** the Python SDK is still protocol v1 and cannot pair with
+> current Shepaw apps until ported — see the protocol note above.
+
 ```sh
-pip install -e sdks/shepaw-acp-sdk-python
+pip install shepaw-acp-sdk
 ```
 
 ```py
@@ -107,9 +148,7 @@ MyAgent(name="My Agent", token="secret").run(port=8080)
 ### Build a custom agent (TypeScript)
 
 ```sh
-cd sdks/shepaw-acp-sdk-typescript && npm run build
-# from your project:
-npm install path/to/agent-bridge/sdks/shepaw-acp-sdk-typescript
+npm install shepaw-acp-sdk
 ```
 
 ```ts
@@ -143,6 +182,13 @@ npm install
 npm run typecheck
 npm run build
 npm test
+```
+
+To run the gateway from a source checkout instead of the npm package:
+
+```sh
+npm install && npm run build
+node implementations/acp-proxy-ts/dist/cli.js serve --engine claude-code --cwd ~/your-project
 ```
 
 Python packages are independent — `cd` into each and use `pytest` /

@@ -176,14 +176,17 @@ clears app data.
    The running agent picks up the change within ~100 ms — no restart.
 4. Share the WS URL (including `#fp=<fingerprint>`) with the user.
 
-**Option B — one-time pairing code (`enroll`, shorter flow):**
+**Option B — one-time pairing code (`enroll`, alias `pair`; shorter flow):**
 
 1. Start the agent as above.
 2. Mint a pairing code:
    ```sh
-   shepaw-codebuddy-code enroll --label "Alice's iPhone" \
+   shepaw-codebuddy-code pair --label "Alice's iPhone" \
        --base-url wss://channel.example.com/c/my-agent
    ```
+   Without `--base-url`, the CLI derives the URL from the machine's LAN
+   address (`ws://<lan-ip>:<port>`) and prints a scannable QR — convenient
+   for same-Wi-Fi pairing; see "Pairing over LAN" below.
    Output:
    ```
    ╭──────────────────────────────────────────────╮
@@ -233,6 +236,34 @@ printed URL + printed short code. A malicious passerby who photographs
 the operator's terminal screen gains the same 10-minute attack window
 they'd have if they photographed the printed short code. Treat both
 with the same sensitivity.
+
+### Pairing over LAN (`--host 0.0.0.0`)
+
+The quick-start flow (`serve --host 0.0.0.0` + `pair` with an
+auto-derived `ws://<lan-ip>:<port>` URL) exposes the Noise port to
+every device on the local network. This is a deliberate trade-off for
+same-Wi-Fi onboarding; the protections above still apply end to end:
+
+- **No allowlist entry, no session.** A LAN stranger can complete the
+  Noise *transport* handshake but cannot exchange a single data frame
+  without a pubkey in `authorized_peers.json` or a valid pairing code.
+- **Codes stay hard to guess.** ~44 bits entropy, 10-minute TTL,
+  single-use, and every guess costs the attacker a full Noise handshake
+  against the enrollment rate limit.
+- **`ws://` on LAN is plaintext at the IP layer, but the payload is
+  Noise-AEAD ciphertext** — a LAN sniffer sees the same thing the
+  Channel Service operator sees: opaque ciphertext frames (see
+  "Protected against → Passive wiretap").
+
+Residual risks to be aware of:
+
+- Anyone on the LAN can *attempt* handshakes (failed attempts are
+  logged). On an untrusted network — café, conference, shared office —
+  prefer the default `--host 127.0.0.1` plus a tunnel/channel, or bind
+  to a VPN interface, instead of `0.0.0.0`.
+- Do not port-forward the gateway to the internet as plain `ws://`.
+  For remote access use the Channel Service path, which terminates TLS
+  upstream and routes over the encrypted tunnel.
 
 ### What happens on revocation
 

@@ -35,7 +35,7 @@ Built-in engines cannot cover every ACP CLI. Register your own:
 shepaw-hub engine add my-agent --display "My Local Agent" --command "my-cli acp"
 
 # Gateway CLI (without Hub)
-node dist/cli.js serve --engine my-agent --engine-display-name "My Agent" \
+shepaw-acp-proxy serve --engine my-agent --engine-display-name "My Agent" \
   --acp-command "my-cli acp" --cwd ~/project --port 8090
 ```
 
@@ -136,22 +136,37 @@ Recommended Node is 20 (see repo `.nvmrc` / Docker `node:20`).
 ## Quick start
 
 ```sh
-cd implementations/acp-proxy-ts
-npm install && npm run build
+npm install -g shepaw-acp-proxy-gateway
 
-# Claude Code via ACP adapter
-node dist/cli.js serve --engine claude-code --cwd ~/your-project --port 8090
+# Terminal 1 — bind to LAN so the phone can reach the gateway
+shepaw-acp-proxy serve --engine claude-code --cwd ~/your-project --host 0.0.0.0
 
-# CodeBuddy (native ACP)
-node dist/cli.js serve --engine codebuddy --cwd ~/your-project --port 8090
-
-node dist/cli.js peers add <base64-pubkey> --label "My iPhone"
+# Terminal 2 — print the pairing QR (LAN address auto-detected)
+shepaw-acp-proxy pair
 ```
+
+In the Shepaw app choose **Add agent → scan the QR**. The single-use code is
+redeemed during the Noise handshake; the device's public key lands in
+`authorized_peers.json` automatically.
+
+Pairing outside your LAN (reverse tunnel / channel service):
+
+```sh
+shepaw-acp-proxy serve --engine codebuddy --cwd ~/your-project \
+  --tunnel-server wss://channel.example.com --tunnel-channel-id <id> --tunnel-secret <secret>
+shepaw-acp-proxy pair --base-url wss://channel.example.com/proxy/<id>
+```
+
+Manual fallback (no QR): `shepaw-acp-proxy peers add <base64-pubkey>` with the
+pubkey from the app's "Add agent" screen.
+
+From a source checkout, replace `shepaw-acp-proxy` with
+`node implementations/acp-proxy-ts/dist/cli.js` after `npm install && npm run build`.
 
 List engines:
 
 ```sh
-node dist/cli.js engines
+shepaw-acp-proxy engines
 ```
 
 ## Architecture

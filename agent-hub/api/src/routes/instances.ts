@@ -79,6 +79,7 @@ import {
   type TunnelConfig,
   isKnownEngine,
   isAlive,
+  resolvePublicHost,
   ensureAgentStoreMappings,
   hubStoreDeviceId,
   workspaceStoreUri,
@@ -746,7 +747,8 @@ instancesRouter.post('/:id/enroll', (req: Request, res: Response) => {
       const clean = base.replace(/\/$/, '');
       pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
     } else {
-      pairUrl = `ws://${p.host}:${p.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+      const host = resolvePublicHost(p.host);
+      pairUrl = `ws://${host}:${p.port}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
     }
 
     const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;

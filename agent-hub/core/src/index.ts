@@ -192,11 +192,14 @@ export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {
+  chatInstanceAcpRpc,
   closeInstanceAcpRpcClient,
   getInstanceConversationHistory,
   InstanceGatewayOfflineError,
   listInstanceConversations,
+  pingInstanceAcpRpc,
 } from './instance-acp-rpc.js';
+export type { InstanceChatTestResult } from './instance-acp-rpc.js';
 
 export {
   BUILTIN_ENGINE_ACP_COMMANDS,

@@ -6,6 +6,8 @@
  * on every poll.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { SessionHistoryMessage, SessionInfo } from 'shepaw-acp-sdk';
 
@@ -165,6 +167,101 @@ async function withAcpClient<T>(
 export async function listInstanceConversations(instanceId: string): Promise<SessionInfo[]> {
   const raw = await withAcpClient(instanceId, (client) => client.sessions());
   return raw.map(parseSessionInfo).filter((session): session is SessionInfo => session !== null);
+}
+
+/** Noise + JSON-RPC smoke test: open a WS and call `agent.sessions.list`. */
+export async function pingInstanceAcpRpc(instanceId: string): Promise<{ sessionCount: number }> {
+  const sessions = await withAcpClient(instanceId, (client) => client.sessions());
+  return { sessionCount: sessions.length };
+}
+
+export interface InstanceChatTestResult {
+  readonly ok: boolean;
+  readonly reply: string;
+  readonly error: string | null;
+  readonly elapsedMs: number;
+}
+
+/**
+ * End-to-end chat probe: Noise handshake → `agent.chat` → first completion.
+ * Auto-approves tool-call confirmations so unattended CI / doctor flows work.
+ */
+export async function chatInstanceAcpRpc(
+  instanceId: string,
+  message: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<InstanceChatTestResult> {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const started = Date.now();
+  const taskId = randomUUID();
+  const sessionId = `hub-test_${taskId}`;
+
+  try {
+    const reply = await withAcpClient(instanceId, async (client) => {
+      return await new Promise<string>((resolve, reject) => {
+        let settled = false;
+        let full = '';
+        const finish = (fn: () => void): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          fn();
+        };
+        const timer = setTimeout(() => {
+          finish(() => {
+            client.cancelTurn(taskId);
+            reject(new Error(`chat timed out after ${timeoutMs}ms`));
+          });
+        }, timeoutMs);
+
+        void client
+          .chat(
+            { message, taskId, sessionId },
+            {
+              onChunk: (content) => {
+                full += content;
+              },
+              onDone: (content) => {
+                finish(() => resolve(content.length > 0 ? content : full));
+              },
+              onError: (messageText) => {
+                finish(() => reject(new Error(messageText)));
+              },
+              onApproval: async (req) => {
+                const allow =
+                  req.actions.find((a) => a.id === 'allow') ??
+                  req.actions.find((a) => a.id === 'allow-all') ??
+                  req.actions.find((a) => a.id !== 'deny') ??
+                  req.actions[0];
+                if (allow === undefined) {
+                  throw new Error('approval requested but agent offered no actions');
+                }
+                return { id: allow.id, label: allow.label ?? 'Allow (hub test)' };
+              },
+            },
+          )
+          .catch((err: unknown) => {
+            finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+          });
+      });
+    });
+
+    return {
+      ok: true,
+      reply,
+      error: null,
+      elapsedMs: Date.now() - started,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reply: '',
+      error: err instanceof Error ? err.message : String(err),
+      elapsedMs: Date.now() - started,
+    };
+  } finally {
+    closeInstanceAcpRpcClient(instanceId);
+  }
 }
 
 /** Replayed transcript from `agent.sessions.history`. */
