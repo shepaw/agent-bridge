@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client.js';
 import type { EngineInfo, HubMeta } from '../api/types.js';
+import { rememberCwd } from '../utils/cwdHistory.js';
+import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 
 const FALLBACK_ENGINES = [
@@ -62,6 +64,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const [err, setErr] = useState<string | null>(null);
   const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
   const [showDirPicker, setShowDirPicker] = useState(false);
+  const [seedPaths, setSeedPaths] = useState<string[]>([]);
 
   // Keep draft in sync while editing; reopen restores these values.
   useEffect(() => {
@@ -103,6 +106,14 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
     }).catch(() => { /* optional UX enhancement */ });
   }, []);
 
+  useEffect(() => {
+    api.instances.list()
+      .then((instances) => {
+        setSeedPaths(instances.map((i) => i.cwd).filter(Boolean));
+      })
+      .catch(() => { /* history seed is optional */ });
+  }, []);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedUnavailable) {
@@ -135,6 +146,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
         baseUrl: resolvedBaseUrl,
         tunnel,
       });
+      rememberCwd(cwd);
       clearDraft();
       onCreated();
       onClose();
@@ -246,22 +258,22 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           )}
 
           <label style={lbl}>Working Directory <span style={req}>*</span></label>
-          <div style={cwdRow}>
-            <input
-              style={{ ...inp, flex: 1, minWidth: 0 }}
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
-              placeholder="/path/to/instance"
-              required
-            />
-            <button
-              type="button"
-              style={browseBtn}
-              onClick={() => setShowDirPicker(true)}
-            >
-              浏览…
-            </button>
-          </div>
+          <CwdPathInput
+            value={cwd}
+            onChange={setCwd}
+            placeholder="/path/to/instance"
+            required
+            seedPaths={seedPaths}
+            trailing={(
+              <button
+                type="button"
+                style={browseBtn}
+                onClick={() => setShowDirPicker(true)}
+              >
+                浏览…
+              </button>
+            )}
+          />
 
           <label style={lbl}>Bind Host</label>
           <select style={inp} value={host} onChange={(e) => setHost(e.target.value)}>
@@ -383,9 +395,6 @@ const req: React.CSSProperties = { color: '#f38ba8' };
 const inp: React.CSSProperties = {
   background: '#11111b', border: '1px solid #45475a', borderRadius: 5,
   color: '#cdd6f4', padding: '6px 10px', fontSize: 14, outline: 'none',
-};
-const cwdRow: React.CSSProperties = {
-  display: 'flex', gap: 8, alignItems: 'stretch',
 };
 const browseBtn: React.CSSProperties = {
   background: 'transparent', border: '1px solid #45475a', color: '#89b4fa',
