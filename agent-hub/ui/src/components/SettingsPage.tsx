@@ -8,7 +8,7 @@ import type { SettingsTab } from '../utils/settingsRoute.js';
  * Settings content panels (nav lives in App shell).
  *   - 全局: dashboard auth token + device-wide tool-call approval default
  *   - 引擎: per-engine overrides
- *   - Peer 配对: shared channel + peer service + shepaw://peer pairing
+ *   - 扫码配对: peer service + shepaw://peer QR + optional channel
  */
 
 export function SettingsPage({
@@ -55,9 +55,9 @@ export function SettingsPage({
 
       {tab === 'peer' && (
         <section style={card}>
-          <h3 style={cardTitle}>Peer 配对（shepaw://peer）</h3>
+          <h3 style={cardTitle}>扫码配对</h3>
           <p style={cardHint}>
-            配置 Channel 后启动 Peer 服务并生成二维码，用 Shepaw App 的「Device Pairing / Scan to Connect」扫码。
+            先启动 Peer 服务，再用 Shepaw App「Device Pairing / Scan to Connect」扫码。
             配对后手机可通过 peer 通道访问本机全部实例。
           </p>
           <PeerPairingPanel />

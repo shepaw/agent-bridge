@@ -295,7 +295,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           {showTunnel && (
             <div style={tunnelBox}>
               <p style={tunnelNote}>
-                可选。通常在「设置 → Peer 配对」配置共享 channel 即可让所有 agent 外网可达，无需在此填写。
+                可选。通常在「扫码配对」配置共享 channel 即可让所有 agent 外网可达，无需在此填写。
                 仅当该 agent 需要独立的 channel 时才配置；三项须同时填写，留空则跳过。
               </p>
               <label style={lbl}>Server URL</label>

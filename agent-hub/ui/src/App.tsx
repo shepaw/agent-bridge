@@ -22,9 +22,9 @@ type AppNav = 'instances' | SettingsTab;
 
 const NAV_ITEMS: { id: AppNav; label: string }[] = [
   { id: 'instances', label: '实例列表' },
+  { id: 'peer', label: '扫码配对' },
   { id: 'global', label: '全局设置' },
   { id: 'engines', label: '引擎管理' },
-  { id: 'peer', label: 'Peer 配对' },
 ];
 
 function getInitialInstanceRoute() {
@@ -43,9 +43,9 @@ function navTitle(nav: AppNav, hasSelected: boolean): { title: string; subtitle:
       ? { title: '实例详情', subtitle: '运行状态 · 会话 · 配置' }
       : { title: '实例列表', subtitle: '管理本机 Agent 实例' };
   }
+  if (nav === 'peer') return { title: '扫码配对', subtitle: '启动 Peer · 扫码连接 App' };
   if (nav === 'global') return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
-  if (nav === 'engines') return { title: '引擎管理', subtitle: '内置与自定义引擎' };
-  return { title: 'Peer 配对', subtitle: 'Channel · 扫码连接' };
+  return { title: '引擎管理', subtitle: '内置与自定义引擎' };
 }
 
 export function App() {
