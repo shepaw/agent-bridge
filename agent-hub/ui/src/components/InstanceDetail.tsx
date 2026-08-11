@@ -27,6 +27,8 @@ interface InstanceDetailProps {
   onSessionChange?: (sessionId: string | null) => void;
   onBack: () => void;
   onReload: () => void;
+  /** Jump to global store browser at a URI. */
+  onOpenStore?: (uri: string) => void;
 }
 
 const NAV_ITEMS: { id: InstanceDetailTab; label: string }[] = [
@@ -46,6 +48,7 @@ export function InstanceDetail({
   onSessionChange,
   onBack,
   onReload,
+  onOpenStore,
 }: InstanceDetailProps) {
   const [instance, setInstance] = useState<Instance | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -446,6 +449,69 @@ export function InstanceDetail({
                 )}
                 <InfoItem label="Created" value={new Date(instance.createdAt).toLocaleString()} />
               </div>
+
+              {instance.store && (
+                <div style={{ marginTop: 20 }}>
+                  <h3 style={panelTitle}>储物袋</h3>
+                  <p style={panelHint}>
+                    本实例自动映射的 Working Directory 与私有 agents 目录。可在「储物袋」中浏览与管理。
+                  </p>
+                  <div style={storeBox}>
+                    <div style={storeRow}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={storeLabel}>Workspace</div>
+                        <code style={storeUri} title={instance.store.workspaceUri}>
+                          {instance.store.workspaceUri}
+                        </code>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          style={storeBtn}
+                          onClick={() => void navigator.clipboard.writeText(instance.store!.workspaceUri)}
+                        >
+                          复制
+                        </button>
+                        {onOpenStore && (
+                          <button
+                            type="button"
+                            style={storeBtn}
+                            onClick={() => onOpenStore(instance.store!.workspaceUri)}
+                          >
+                            打开
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div style={storeRow}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={storeLabel}>Agent 私有</div>
+                        <code style={storeUri} title={instance.store.agentUri}>
+                          {instance.store.agentUri}
+                        </code>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          style={storeBtn}
+                          onClick={() => void navigator.clipboard.writeText(instance.store!.agentUri)}
+                        >
+                          复制
+                        </button>
+                        {onOpenStore && (
+                          <button
+                            type="button"
+                            style={storeBtn}
+                            onClick={() => onOpenStore(instance.store!.agentUri)}
+                          >
+                            打开
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -997,6 +1063,29 @@ const panelTitle: React.CSSProperties = {
 
 const panelHint: React.CSSProperties = {
   margin: '0 0 16px', color: '#a6adc8', fontSize: 13,
+};
+
+const storeBox: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 10,
+  background: '#181825', border: '1px solid #313244', borderRadius: 8, padding: 12,
+};
+
+const storeRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
+};
+
+const storeLabel: React.CSSProperties = {
+  color: '#a6adc8', fontSize: 12, marginBottom: 4,
+};
+
+const storeUri: React.CSSProperties = {
+  display: 'block', color: '#89dceb', fontSize: 11,
+  wordBreak: 'break-all', fontFamily: 'ui-monospace, Menlo, monospace',
+};
+
+const storeBtn: React.CSSProperties = {
+  background: 'transparent', color: '#89b4fa', border: '1px solid #45475a',
+  borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap',
 };
 
 const panelHeaderRow: React.CSSProperties = {

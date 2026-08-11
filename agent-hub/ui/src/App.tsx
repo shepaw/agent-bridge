@@ -9,6 +9,7 @@ import { SettingsPage } from './components/SettingsPage.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
 import { filterInstances, uniqueEngines } from './utils/instanceFilters.js';
 import { buildSettingsHash, parseSettingsHash, type SettingsTab } from './utils/settingsRoute.js';
+import { buildStoreHash, parseStoreHash } from './utils/storeRoute.js';
 import {
   buildInstanceHash,
   parseInstanceHash,
@@ -16,13 +17,15 @@ import {
 } from './utils/instanceRoute.js';
 import { api, getHubAuthToken } from './api/client.js';
 import { HubAuthTokenPanel } from './components/HubAuthTokenPanel.js';
+import { StoreBrowserPanel } from './components/StoreBrowserPanel.js';
 
 /** Top-level shell nav: instances list first (default), then settings sections. */
-type AppNav = 'instances' | SettingsTab;
+type AppNav = 'instances' | 'store' | SettingsTab;
 
 const NAV_ITEMS: { id: AppNav; label: string }[] = [
   { id: 'instances', label: '实例列表' },
   { id: 'peer', label: '扫码配对' },
+  { id: 'store', label: '储物袋' },
   { id: 'global', label: '全局设置' },
   { id: 'engines', label: '引擎管理' },
 ];
@@ -32,6 +35,8 @@ function getInitialInstanceRoute() {
 }
 
 function getInitialNav(): AppNav {
+  const store = parseStoreHash(location.hash);
+  if (store.active) return 'store';
   const settings = parseSettingsHash(location.hash);
   if (settings.active) return settings.tab;
   return 'instances';
@@ -43,6 +48,7 @@ function navTitle(nav: AppNav, hasSelected: boolean): { title: string; subtitle:
       ? { title: '实例详情', subtitle: '运行状态 · 会话 · 配置' }
       : { title: '实例列表', subtitle: '管理本机 Agent 实例' };
   }
+  if (nav === 'store') return { title: '储物袋', subtitle: '浏览 · 读写本机 pouch' };
   if (nav === 'peer') return { title: '扫码配对', subtitle: '启动 Peer · 扫码连接 App' };
   if (nav === 'global') return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
   return { title: '引擎管理', subtitle: '内置与自定义引擎' };
@@ -52,6 +58,7 @@ export function App() {
   const { instances, loading, error, reload } = useInstances();
   const initialRoute = getInitialInstanceRoute();
   const initialSettings = parseSettingsHash(location.hash);
+  const initialStore = parseStoreHash(location.hash);
   const [nav, setNav] = useState<AppNav>(getInitialNav);
   const [selected, setSelected] = useState<string | null>(initialRoute?.instanceId ?? null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
@@ -64,6 +71,7 @@ export function App() {
     initialSettings.active ? initialSettings.tab : 'global',
   );
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
+  const [storeUri, setStoreUri] = useState<string | null>(initialStore.uri);
   const [showAdd, setShowAdd] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [wizardAutoPrompted, setWizardAutoPrompted] = useState(false);
@@ -88,6 +96,16 @@ export function App() {
     setSelectedSessionId(null);
     setSelectedTab('overview');
     setFocusEngineId(null);
+    setStoreUri(null);
+  }, []);
+
+  const goStore = useCallback((uri?: string | null) => {
+    setNav('store');
+    setSelected(null);
+    setSelectedSessionId(null);
+    setSelectedTab('overview');
+    setFocusEngineId(null);
+    setStoreUri(uri ?? null);
   }, []);
 
   const goSettings = useCallback((tab: SettingsTab, engineId?: string | null) => {
@@ -97,6 +115,7 @@ export function App() {
     setSelectedSessionId(null);
     setSelectedTab('overview');
     setFocusEngineId(engineId ?? null);
+    setStoreUri(null);
   }, []);
 
   const openEngineSettings = (engineId: string) => {
@@ -108,6 +127,10 @@ export function App() {
   const onNavClick = (id: AppNav) => {
     if (id === 'instances') {
       goInstances();
+      return;
+    }
+    if (id === 'store') {
+      goStore(null);
       return;
     }
     goSettings(id);
@@ -158,12 +181,14 @@ export function App() {
         sessionId: selectedSessionId,
         tab: selectedTab,
       });
+    } else if (nav === 'store') {
+      location.hash = buildStoreHash(storeUri);
     } else if (nav !== 'instances') {
       location.hash = buildSettingsHash(settingsTab, focusEngineId ?? undefined);
     } else {
       history.replaceState(null, '', location.pathname + location.search);
     }
-  }, [selected, selectedSessionId, selectedTab, nav, settingsTab, focusEngineId]);
+  }, [selected, selectedSessionId, selectedTab, nav, settingsTab, focusEngineId, storeUri]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
@@ -175,6 +200,17 @@ export function App() {
         setSelectedSessionId(route.sessionId);
         setSelectedTab(route.tab);
         setFocusEngineId(null);
+        setStoreUri(null);
+        return;
+      }
+      const storeRoute = parseStoreHash(location.hash);
+      if (storeRoute.active) {
+        setNav('store');
+        setStoreUri(storeRoute.uri);
+        setSelected(null);
+        setSelectedSessionId(null);
+        setSelectedTab('overview');
+        setFocusEngineId(null);
         return;
       }
       const settingsRoute = parseSettingsHash(location.hash);
@@ -185,6 +221,7 @@ export function App() {
         setSelected(null);
         setSelectedSessionId(null);
         setSelectedTab('overview');
+        setStoreUri(null);
         return;
       }
       setNav('instances');
@@ -192,6 +229,7 @@ export function App() {
       setSelectedSessionId(null);
       setSelectedTab('overview');
       setFocusEngineId(null);
+      setStoreUri(null);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -222,7 +260,6 @@ export function App() {
   }, [running, reload]);
 
   const heading = navTitle(nav, Boolean(selected));
-  const showInstanceList = nav === 'instances' && !selected;
 
   return (
     <Layout>
@@ -238,22 +275,6 @@ export function App() {
                   : `${instances.length} instance${instances.length === 1 ? '' : 's'} · ${running} running`)
               : heading.subtitle}
           </p>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {showInstanceList && running > 0 && (
-            <button
-              style={restartAllBtn}
-              disabled={restartAllBusy || loading}
-              onClick={() => setShowRestartAllConfirm(true)}
-            >
-              {restartAllBusy ? '重启中...' : '重启全部'}
-            </button>
-          )}
-          {showInstanceList && (
-            <button style={addBtn} onClick={() => setShowAdd(true)}>
-              + Add Instance
-            </button>
-          )}
         </div>
       </div>
 
@@ -285,6 +306,7 @@ export function App() {
                 setSelectedTab('overview');
               }}
               onReload={reload}
+              onOpenStore={(uri) => goStore(uri)}
             />
           ) : nav === 'instances' ? (
             <InstancesPanel
@@ -294,12 +316,20 @@ export function App() {
               filteredInstances={filteredInstances}
               filters={filters}
               engines={engines}
+              running={running}
+              restartAllBusy={restartAllBusy}
               restartAllErr={restartAllErr}
               onFiltersChange={setFilters}
               onSelect={setSelected}
               onReload={reload}
               onShowWizard={() => setShowWizard(true)}
               onShowAdd={() => setShowAdd(true)}
+              onRestartAll={() => setShowRestartAllConfirm(true)}
+            />
+          ) : nav === 'store' ? (
+            <StoreBrowserPanel
+              initialUri={storeUri}
+              onUriChange={setStoreUri}
             />
           ) : (
             <SettingsPage
@@ -364,12 +394,15 @@ function InstancesPanel({
   filteredInstances,
   filters,
   engines,
+  running,
+  restartAllBusy,
   restartAllErr,
   onFiltersChange,
   onSelect,
   onReload,
   onShowWizard,
   onShowAdd,
+  onRestartAll,
 }: {
   loading: boolean;
   error: string | null;
@@ -377,12 +410,15 @@ function InstancesPanel({
   filteredInstances: ReturnType<typeof useInstances>['instances'];
   filters: InstanceListFilterState;
   engines: string[];
+  running: number;
+  restartAllBusy: boolean;
   restartAllErr: string | null;
   onFiltersChange: (v: InstanceListFilterState) => void;
   onSelect: (id: string) => void;
   onReload: () => void;
   onShowWizard: () => void;
   onShowAdd: () => void;
+  onRestartAll: () => void;
 }) {
   return (
     <>
@@ -408,6 +444,11 @@ function InstancesPanel({
           onChange={onFiltersChange}
           shown={filteredInstances.length}
           total={instances.length}
+          runningCount={running}
+          restartAllBusy={restartAllBusy}
+          restartAllDisabled={loading}
+          onRestartAll={onRestartAll}
+          onAddInstance={onShowAdd}
         />
       )}
 
@@ -566,17 +607,6 @@ const secondaryBtn: React.CSSProperties = {
   background: 'transparent',
   color: '#cdd6f4',
   border: '1px solid #45475a',
-  borderRadius: 6,
-  padding: '8px 18px',
-  cursor: 'pointer',
-  fontWeight: 600,
-  fontSize: 14,
-};
-
-const restartAllBtn: React.CSSProperties = {
-  background: 'transparent',
-  color: '#f9e2af',
-  border: '1px solid #f9e2af',
   borderRadius: 6,
   padding: '8px 18px',
   cursor: 'pointer',

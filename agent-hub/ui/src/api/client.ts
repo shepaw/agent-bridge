@@ -26,6 +26,11 @@ import type {
   UpdateCustomEngineInput,
   UpdateInstanceInput,
   FsBrowseResult,
+  StoreHealth,
+  StoreListResult,
+  StoreMappingsResult,
+  StoreReadResult,
+  StoreWriteResult,
 } from './types.js';
 
 const BASE = '/api';
@@ -331,5 +336,34 @@ export const api = {
         : '';
       return request(`/fs/browse${q}`);
     },
+  },
+
+  store: {
+    health: (): Promise<StoreHealth> => request('/store/health'),
+
+    mappings: (): Promise<StoreMappingsResult> => request('/store/mappings'),
+
+    list: (uri: string, depth = 1): Promise<StoreListResult> =>
+      request(`/store/list?uri=${encodeURIComponent(uri)}&depth=${depth}`),
+
+    meta: (uri: string): Promise<Record<string, unknown>> =>
+      request(`/store/meta?uri=${encodeURIComponent(uri)}`),
+
+    read: (uri: string): Promise<StoreReadResult> =>
+      request(`/store/read?uri=${encodeURIComponent(uri)}`),
+
+    write: (input: {
+      uri: string;
+      content?: string;
+      contentBase64?: string;
+    }): Promise<StoreWriteResult> =>
+      request('/store/write', { method: 'POST', body: JSON.stringify(input) }),
+
+    remove: (uri: string): Promise<{ ok: boolean }> =>
+      request(`/store/entry?uri=${encodeURIComponent(uri)}`, { method: 'DELETE' }),
+
+    /** Raw download URL (same-origin; auth via Bearer header not possible for <a download>). */
+    rawUrl: (uri: string): string =>
+      `${BASE}/store/read?uri=${encodeURIComponent(uri)}&raw=1`,
   },
 };

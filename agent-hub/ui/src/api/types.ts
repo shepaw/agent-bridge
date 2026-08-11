@@ -360,3 +360,58 @@ export interface FsBrowseResult {
   parent: string | null;
   entries: FsBrowseEntry[];
 }
+
+/** Entry from GET /api/store/list. */
+export interface StoreEntry {
+  path: string;
+  size: number;
+  sha256: string;
+  mtime: number;
+  kind?: 'file' | 'dir';
+}
+
+export interface StoreHealth {
+  ok: boolean;
+  deviceId: string;
+  storeRoot: string;
+  spaces: string[];
+}
+
+export interface StoreMapping {
+  instanceId: string;
+  label: string;
+  engine: string;
+  cwd: string;
+  deviceId: string;
+  workspaceUri: string;
+  agentUri: string;
+}
+
+export interface StoreMappingsResult {
+  deviceId: string;
+  mappings: StoreMapping[];
+}
+
+export interface StoreListResult {
+  uri: string;
+  space: string;
+  device: string;
+  path: string;
+  parent: string | null;
+  entries: StoreEntry[];
+}
+
+export interface StoreReadResult {
+  uri: string;
+  size: number;
+  sha256: string;
+  mtime?: number;
+  contentBase64: string;
+}
+
+export interface StoreWriteResult {
+  ok: boolean;
+  uri: string;
+  size: number;
+  sha256: string;
+}

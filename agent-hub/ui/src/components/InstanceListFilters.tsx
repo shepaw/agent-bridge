@@ -12,9 +12,25 @@ interface InstanceListFiltersProps {
   onChange: (next: InstanceListFilterState) => void;
   shown: number;
   total: number;
+  runningCount?: number;
+  restartAllBusy?: boolean;
+  restartAllDisabled?: boolean;
+  onRestartAll?: () => void;
+  onAddInstance?: () => void;
 }
 
-export function InstanceListFilters({ value, engines, onChange, shown, total }: InstanceListFiltersProps) {
+export function InstanceListFilters({
+  value,
+  engines,
+  onChange,
+  shown,
+  total,
+  runningCount = 0,
+  restartAllBusy = false,
+  restartAllDisabled = false,
+  onRestartAll,
+  onAddInstance,
+}: InstanceListFiltersProps) {
   const hasActiveFilter =
     value.search.trim().length > 0 || value.busy !== 'all' || value.engine !== 'all';
 
@@ -60,6 +76,23 @@ export function InstanceListFilters({ value, engines, onChange, shown, total }: 
           清除筛选
         </button>
       )}
+      <div style={actions}>
+        {runningCount > 0 && onRestartAll && (
+          <button
+            style={restartAllBtn}
+            type="button"
+            disabled={restartAllBusy || restartAllDisabled}
+            onClick={onRestartAll}
+          >
+            {restartAllBusy ? '重启中...' : '重启全部'}
+          </button>
+        )}
+        {onAddInstance && (
+          <button style={addBtn} type="button" onClick={onAddInstance}>
+            + 添加实例
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -99,7 +132,6 @@ const select: React.CSSProperties = {
 const count: React.CSSProperties = {
   color: '#6c7086',
   fontSize: 13,
-  marginLeft: 'auto',
 };
 
 const clearBtn: React.CSSProperties = {
@@ -109,5 +141,34 @@ const clearBtn: React.CSSProperties = {
   borderRadius: 6,
   padding: '6px 12px',
   cursor: 'pointer',
+  fontSize: 13,
+};
+
+const actions: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  marginLeft: 'auto',
+  alignItems: 'center',
+};
+
+const restartAllBtn: React.CSSProperties = {
+  background: 'transparent',
+  color: '#f9e2af',
+  border: '1px solid #f9e2af',
+  borderRadius: 6,
+  padding: '8px 14px',
+  cursor: 'pointer',
+  fontWeight: 600,
+  fontSize: 13,
+};
+
+const addBtn: React.CSSProperties = {
+  background: '#89b4fa',
+  color: '#11111b',
+  border: 'none',
+  borderRadius: 6,
+  padding: '8px 14px',
+  cursor: 'pointer',
+  fontWeight: 600,
   fontSize: 13,
 };
