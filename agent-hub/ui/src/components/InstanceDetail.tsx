@@ -452,14 +452,41 @@ export function InstanceDetail({
 
               {instance.store && (
                 <div style={{ marginTop: 20 }}>
-                  <h3 style={panelTitle}>储物袋</h3>
+                  <h3 style={panelTitle}>储物空间</h3>
                   <p style={panelHint}>
-                    本实例自动映射的 Working Directory 与私有 agents 目录。可在「储物袋」中浏览与管理。
+                    每个 Agent 拥有私有储物袋空间，Working Directory 同时映射为 workspace。
+                    可在全局「储物袋」中以网盘方式管理。
                   </p>
                   <div style={storeBox}>
                     <div style={storeRow}>
                       <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={storeLabel}>Workspace</div>
+                        <div style={storeLabel}>Agent 私有空间</div>
+                        <code style={storeUri} title={instance.store.agentUri}>
+                          {instance.store.agentUri}
+                        </code>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          style={storeBtn}
+                          onClick={() => void navigator.clipboard.writeText(instance.store!.agentUri)}
+                        >
+                          复制
+                        </button>
+                        {onOpenStore && (
+                          <button
+                            type="button"
+                            style={storePrimaryBtn}
+                            onClick={() => onOpenStore(instance.store!.agentUri)}
+                          >
+                            进入储物空间
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div style={storeRow}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={storeLabel}>Workspace（Working Directory）</div>
                         <code style={storeUri} title={instance.store.workspaceUri}>
                           {instance.store.workspaceUri}
                         </code>
@@ -477,32 +504,6 @@ export function InstanceDetail({
                             type="button"
                             style={storeBtn}
                             onClick={() => onOpenStore(instance.store!.workspaceUri)}
-                          >
-                            打开
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div style={storeRow}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={storeLabel}>Agent 私有</div>
-                        <code style={storeUri} title={instance.store.agentUri}>
-                          {instance.store.agentUri}
-                        </code>
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                        <button
-                          type="button"
-                          style={storeBtn}
-                          onClick={() => void navigator.clipboard.writeText(instance.store!.agentUri)}
-                        >
-                          复制
-                        </button>
-                        {onOpenStore && (
-                          <button
-                            type="button"
-                            style={storeBtn}
-                            onClick={() => onOpenStore(instance.store!.agentUri)}
                           >
                             打开
                           </button>
@@ -1086,6 +1087,11 @@ const storeUri: React.CSSProperties = {
 const storeBtn: React.CSSProperties = {
   background: 'transparent', color: '#89b4fa', border: '1px solid #45475a',
   borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap',
+};
+
+const storePrimaryBtn: React.CSSProperties = {
+  background: '#89b4fa', color: '#1e1e2e', border: 'none',
+  borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', fontWeight: 600,
 };
 
 const panelHeaderRow: React.CSSProperties = {

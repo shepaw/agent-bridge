@@ -1,6 +1,6 @@
 /**
- * Dashboard store (储物袋) routes — local PeerLocalStore via executeLocalStoreOp.
- * Does not require the Peer service to be running.
+ * Dashboard store (储物袋) routes — local PeerLocalStore + optional peer HTTP
+ * fallback for paired-device shared spaces. Peer daemon not required for local.
  */
 
 import { createHash } from 'node:crypto';
@@ -8,11 +8,14 @@ import { Router, type Request, type Response } from 'express';
 import {
   ALL_SPACES,
   MAX_CHUNK,
+  SHARED_SPACES,
   executeLocalStoreOp,
   getPeerLocalStore,
   hubStoreDeviceId,
   loadOrCreateHubConfig,
+  loadPairedPeers,
   parseStoreUri,
+  peerServiceStatus,
   agentPrivateStoreUri,
   workspaceStoreUri,
 } from '@shepaw/agent-hub-core';
@@ -20,6 +23,20 @@ import {
 export const storeRouter = Router();
 
 const MAX_WRITE_BYTES = 5 * 1024 * 1024;
+
+/** Spaces shown for local hub (网盘分区), aligned with Shepaw browserSpaces + agents. */
+const LOCAL_BROWSER_SPACES = [
+  'workspaces',
+  'runtime',
+  'files',
+  'public',
+  'memory',
+  'artifacts',
+  'agents',
+] as const;
+
+/** Spaces readable on paired devices (SHARED_SPACES). */
+const PEER_BROWSER_SPACES = [...SHARED_SPACES].sort();
 
 const SPACE_LIST = [...ALL_SPACES].sort();
 
@@ -32,7 +49,9 @@ function httpStatusForError(code: string): number {
     code === 'bad_uri' ||
     code === 'too_large' ||
     code === 'hash_mismatch' ||
-    code === 'staging_state'
+    code === 'staging_state' ||
+    code === 'peer_offline' ||
+    code === 'remote_only'
   ) {
     return 400;
   }
@@ -60,6 +79,110 @@ function buildUri(space: string, device: string, path: string): string {
   return `store://${space}/${device}/${path.replace(/^\/+|\/+$/g, '')}`;
 }
 
+function parentStoreUri(space: string, device: string, path: string): string | null {
+  if (!path) return null;
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length === 0) return null;
+  parts.pop();
+  return buildUri(space, device, parts.join('/'));
+}
+
+function peerBaseUrl(): string | null {
+  const st = peerServiceStatus();
+  if (!st.running) return null;
+  const host = st.host === '0.0.0.0' ? '127.0.0.1' : st.host;
+  return `http://${host}:${st.port}`;
+}
+
+async function peerListRemote(
+  uri: string,
+  depth: number,
+): Promise<Record<string, unknown> | null> {
+  const base = peerBaseUrl();
+  if (!base) return null;
+  try {
+    const q = new URLSearchParams({ uri, depth: String(depth) });
+    const res = await fetch(`${base}/api/v1/list?${q}`);
+    const body = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      return {
+        _error: String(body.error ?? 'peer_offline'),
+        message: String(body.message ?? `peer HTTP ${res.status}`),
+      };
+    }
+    return body;
+  } catch (e) {
+    return {
+      _error: 'peer_offline',
+      message: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+async function peerReadRemoteBytes(
+  uri: string,
+): Promise<{ bytes: Buffer } | { error: string; message: string }> {
+  const base = peerBaseUrl();
+  if (!base) {
+    return { error: 'peer_offline', message: 'Peer 服务未运行，无法读取远端储物袋' };
+  }
+  try {
+    const q = new URLSearchParams({ uri });
+    const res = await fetch(`${base}/api/v1/read?${q}`);
+    if (!res.ok) {
+      let message = `peer HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { message?: string; error?: string };
+        message = String(body.message ?? body.error ?? message);
+      } catch {
+        /* ignore */
+      }
+      return { error: 'not_found', message };
+    }
+    const ab = await res.arrayBuffer();
+    return { bytes: Buffer.from(ab) };
+  } catch (e) {
+    return {
+      error: 'peer_offline',
+      message: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+async function listLocalOrRemote(
+  uri: string,
+  depth: number,
+  self: string,
+): Promise<Record<string, unknown>> {
+  const parsed = parseStoreUri(uri);
+  if (!parsed) return { _error: 'bad_uri', message: 'invalid store:// URI' };
+
+  const payload: Record<string, unknown> = {
+    space: parsed.space,
+    device: parsed.device,
+    path: parsed.path || undefined,
+    limit: 1000,
+  };
+  if (Number.isFinite(depth) && depth > 0) payload.depth = depth;
+
+  const local = executeLocalStoreOp('list', payload, self);
+  if (!local._error) {
+    const entries = Array.isArray(local.entries) ? local.entries : [];
+    // Local miss for remote device: empty dirs may mean mirror missing — try peer live.
+    if (entries.length === 0 && parsed.device !== self) {
+      const remote = await peerListRemote(uri, depth);
+      if (remote && !remote._error) return remote;
+    }
+    return local;
+  }
+
+  if (parsed.device !== self) {
+    const remote = await peerListRemote(uri, depth);
+    if (remote) return remote;
+  }
+  return local;
+}
+
 storeRouter.get('/health', (_req: Request, res: Response) => {
   try {
     const deviceId = hubStoreDeviceId();
@@ -69,6 +192,57 @@ storeRouter.get('/health', (_req: Request, res: Response) => {
       deviceId,
       storeRoot: store.root,
       spaces: SPACE_LIST,
+      localBrowserSpaces: [...LOCAL_BROWSER_SPACES],
+      peerBrowserSpaces: PEER_BROWSER_SPACES,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** Netdisk-style roots: local device, paired peers, agent mappings. */
+storeRouter.get('/roots', (_req: Request, res: Response) => {
+  try {
+    const deviceId = hubStoreDeviceId();
+    const store = getPeerLocalStore();
+    const peerStatus = peerServiceStatus();
+    const peers = loadPairedPeers().map((p) => ({
+      id: p.id,
+      deviceName: p.deviceName || p.fingerprint,
+      deviceId: p.deviceId,
+      fingerprint: p.fingerprint,
+      pairedAt: p.pairedAt,
+      writable: false,
+      spaces: PEER_BROWSER_SPACES,
+      /** Default entry: shared files space. */
+      rootUri: buildUri('files', p.fingerprint, ''),
+    }));
+    const cfg = loadOrCreateHubConfig();
+    const agents = cfg.instances.map((p) => ({
+      instanceId: p.id,
+      label: p.label || p.id,
+      engine: p.engine,
+      cwd: p.cwd,
+      deviceId,
+      workspaceUri: workspaceStoreUri(deviceId, p.cwd),
+      agentUri: agentPrivateStoreUri(deviceId, p.id),
+    }));
+    res.json({
+      local: {
+        kind: 'local' as const,
+        label: '本机',
+        deviceId,
+        writable: true,
+        storeRoot: store.root,
+        spaces: [...LOCAL_BROWSER_SPACES],
+      },
+      peers,
+      agents,
+      peerService: {
+        running: peerStatus.running,
+        port: peerStatus.port,
+        host: peerStatus.host,
+      },
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -94,7 +268,7 @@ storeRouter.get('/mappings', (_req: Request, res: Response) => {
   }
 });
 
-storeRouter.get('/list', (req: Request, res: Response) => {
+storeRouter.get('/list', async (req: Request, res: Response) => {
   try {
     const uri = requireUri(req.query.uri);
     if (!uri) {
@@ -112,15 +286,8 @@ storeRouter.get('/list', (req: Request, res: Response) => {
       typeof depthRaw === 'string' && depthRaw.trim()
         ? Number(depthRaw)
         : 1;
-    const payload: Record<string, unknown> = {
-      space: parsed.space,
-      device: parsed.device,
-      path: parsed.path || undefined,
-      limit: 1000,
-    };
-    if (Number.isFinite(depth) && depth > 0) payload.depth = depth;
 
-    const result = executeLocalStoreOp('list', payload, self);
+    const result = await listLocalOrRemote(uri, depth, self);
     if (sendOpError(res, result)) return;
 
     const entries = Array.isArray(result.entries) ? result.entries : [];
@@ -130,6 +297,7 @@ storeRouter.get('/list', (req: Request, res: Response) => {
       device: parsed.device,
       path: parsed.path,
       parent: parentStoreUri(parsed.space, parsed.device, parsed.path),
+      writable: parsed.device === self,
       entries,
     });
   } catch (err) {
@@ -137,7 +305,7 @@ storeRouter.get('/list', (req: Request, res: Response) => {
   }
 });
 
-storeRouter.get('/meta', (req: Request, res: Response) => {
+storeRouter.get('/meta', async (req: Request, res: Response) => {
   try {
     const uri = requireUri(req.query.uri);
     if (!uri) {
@@ -150,19 +318,34 @@ storeRouter.get('/meta', (req: Request, res: Response) => {
       return;
     }
     const self = hubStoreDeviceId();
-    const result = executeLocalStoreOp(
+    let result = executeLocalStoreOp(
       'meta',
       { space: parsed.space, device: parsed.device, path: parsed.path },
       self,
     );
+    if (result._error && parsed.device !== self) {
+      // Fallback: read via peer then synthesize meta
+      const remote = await peerReadRemoteBytes(uri);
+      if ('bytes' in remote) {
+        result = {
+          kind: 'file',
+          size: remote.bytes.length,
+          sha256: createHash('sha256').update(remote.bytes).digest('hex'),
+          mtime: Date.now(),
+        };
+      } else {
+        res.status(httpStatusForError(remote.error)).json(remote);
+        return;
+      }
+    }
     if (sendOpError(res, result)) return;
-    res.json({ uri, ...result });
+    res.json({ uri, writable: parsed.device === self, ...result });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
-storeRouter.get('/read', (req: Request, res: Response) => {
+storeRouter.get('/read', async (req: Request, res: Response) => {
   try {
     const uri = requireUri(req.query.uri);
     if (!uri) {
@@ -175,43 +358,69 @@ storeRouter.get('/read', (req: Request, res: Response) => {
       return;
     }
     const self = hubStoreDeviceId();
+
+    let bytes: Buffer | null = null;
+    let sha256 = '';
+    let mtime: unknown;
+
     const meta = executeLocalStoreOp(
       'meta',
       { space: parsed.space, device: parsed.device, path: parsed.path },
       self,
     );
-    if (sendOpError(res, meta)) return;
-
-    const size = typeof meta.size === 'number' ? meta.size : 0;
-    if (size > MAX_WRITE_BYTES) {
-      res.status(400).json({
-        error: `file too large to read via dashboard (${size} bytes; max ${MAX_WRITE_BYTES})`,
-        code: 'too_large',
-      });
+    if (!meta._error) {
+      const size = typeof meta.size === 'number' ? meta.size : 0;
+      if (size > MAX_WRITE_BYTES) {
+        res.status(400).json({
+          error: `file too large to read via dashboard (${size} bytes; max ${MAX_WRITE_BYTES})`,
+          code: 'too_large',
+        });
+        return;
+      }
+      const chunks: Buffer[] = [];
+      let offset = 0;
+      for (;;) {
+        const part = executeLocalStoreOp(
+          'read',
+          {
+            space: parsed.space,
+            device: parsed.device,
+            path: parsed.path,
+            offset,
+            length: MAX_CHUNK,
+          },
+          self,
+        );
+        if (sendOpError(res, part)) return;
+        const data = Buffer.from(String(part.data ?? ''), 'base64');
+        chunks.push(data);
+        offset += data.length;
+        if (part.eof === true || data.length === 0) break;
+      }
+      bytes = Buffer.concat(chunks);
+      sha256 = typeof meta.sha256 === 'string'
+        ? meta.sha256
+        : createHash('sha256').update(bytes).digest('hex');
+      mtime = meta.mtime;
+    } else if (parsed.device !== self) {
+      const remote = await peerReadRemoteBytes(uri);
+      if ('error' in remote) {
+        res.status(httpStatusForError(remote.error)).json(remote);
+        return;
+      }
+      if (remote.bytes.length > MAX_WRITE_BYTES) {
+        res.status(400).json({
+          error: `file too large to read via dashboard (${remote.bytes.length} bytes; max ${MAX_WRITE_BYTES})`,
+          code: 'too_large',
+        });
+        return;
+      }
+      bytes = remote.bytes;
+      sha256 = createHash('sha256').update(bytes).digest('hex');
+    } else {
+      sendOpError(res, meta);
       return;
     }
-
-    const chunks: Buffer[] = [];
-    let offset = 0;
-    for (;;) {
-      const part = executeLocalStoreOp(
-        'read',
-        {
-          space: parsed.space,
-          device: parsed.device,
-          path: parsed.path,
-          offset,
-          length: MAX_CHUNK,
-        },
-        self,
-      );
-      if (sendOpError(res, part)) return;
-      const data = Buffer.from(String(part.data ?? ''), 'base64');
-      chunks.push(data);
-      offset += data.length;
-      if (part.eof === true || data.length === 0) break;
-    }
-    const bytes = Buffer.concat(chunks);
 
     if (req.query.raw === '1' || req.query.raw === 'true') {
       const name = parsed.path.split('/').pop() || 'download';
@@ -224,8 +433,9 @@ storeRouter.get('/read', (req: Request, res: Response) => {
     res.json({
       uri,
       size: bytes.length,
-      sha256: typeof meta.sha256 === 'string' ? meta.sha256 : createHash('sha256').update(bytes).digest('hex'),
-      mtime: meta.mtime,
+      sha256,
+      mtime,
+      writable: parsed.device === self,
       contentBase64: bytes.toString('base64'),
     });
   } catch (err) {
@@ -250,6 +460,14 @@ storeRouter.post('/write', (req: Request, res: Response) => {
       res.status(400).json({ error: 'invalid store:// file URI (path required)', code: 'bad_uri' });
       return;
     }
+    const self = hubStoreDeviceId();
+    if (parsed.device !== self) {
+      res.status(403).json({
+        error: '只能写入本机储物袋；配对设备为只读',
+        code: 'acl_denied',
+      });
+      return;
+    }
 
     let bytes: Buffer;
     if (typeof body.contentBase64 === 'string') {
@@ -269,7 +487,6 @@ storeRouter.post('/write', (req: Request, res: Response) => {
       return;
     }
 
-    const self = hubStoreDeviceId();
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const begin = executeLocalStoreOp(
       'write.begin',
@@ -347,6 +564,13 @@ storeRouter.delete('/entry', (req: Request, res: Response) => {
       return;
     }
     const self = hubStoreDeviceId();
+    if (parsed.device !== self) {
+      res.status(403).json({
+        error: '只能删除本机储物袋文件；配对设备为只读',
+        code: 'acl_denied',
+      });
+      return;
+    }
     const result = executeLocalStoreOp(
       'delete',
       { space: parsed.space, device: parsed.device, path: parsed.path },
@@ -358,11 +582,3 @@ storeRouter.delete('/entry', (req: Request, res: Response) => {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
-
-function parentStoreUri(space: string, device: string, path: string): string | null {
-  if (!path) return null;
-  const parts = path.split('/').filter(Boolean);
-  if (parts.length === 0) return null;
-  parts.pop();
-  return buildUri(space, device, parts.join('/'));
-}

@@ -29,6 +29,7 @@ import type {
   StoreHealth,
   StoreListResult,
   StoreMappingsResult,
+  StoreRootsResult,
   StoreReadResult,
   StoreWriteResult,
 } from './types.js';
@@ -340,6 +341,8 @@ export const api = {
 
   store: {
     health: (): Promise<StoreHealth> => request('/store/health'),
+
+    roots: (): Promise<StoreRootsResult> => request('/store/roots'),
 
     mappings: (): Promise<StoreMappingsResult> => request('/store/mappings'),
 

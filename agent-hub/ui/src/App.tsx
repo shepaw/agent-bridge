@@ -48,7 +48,7 @@ function navTitle(nav: AppNav, hasSelected: boolean): { title: string; subtitle:
       ? { title: '实例详情', subtitle: '运行状态 · 会话 · 配置' }
       : { title: '实例列表', subtitle: '管理本机 Agent 实例' };
   }
-  if (nav === 'store') return { title: '储物袋', subtitle: '浏览 · 读写本机 pouch' };
+  if (nav === 'store') return { title: '储物袋', subtitle: '本机 · 配对设备 · Agent 空间' };
   if (nav === 'peer') return { title: '扫码配对', subtitle: '启动 Peer · 扫码连接 App' };
   if (nav === 'global') return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
   return { title: '引擎管理', subtitle: '内置与自定义引擎' };

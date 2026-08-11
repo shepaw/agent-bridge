@@ -375,6 +375,8 @@ export interface StoreHealth {
   deviceId: string;
   storeRoot: string;
   spaces: string[];
+  localBrowserSpaces?: string[];
+  peerBrowserSpaces?: string[];
 }
 
 export interface StoreMapping {
@@ -392,12 +394,40 @@ export interface StoreMappingsResult {
   mappings: StoreMapping[];
 }
 
+export interface StoreRootsResult {
+  local: {
+    kind: 'local';
+    label: string;
+    deviceId: string;
+    writable: boolean;
+    storeRoot: string;
+    spaces: string[];
+  };
+  peers: Array<{
+    id: string;
+    deviceName: string;
+    deviceId: string;
+    fingerprint: string;
+    pairedAt: string;
+    writable: boolean;
+    spaces: string[];
+    rootUri: string;
+  }>;
+  agents: StoreMapping[];
+  peerService: {
+    running: boolean;
+    port: number;
+    host: string;
+  };
+}
+
 export interface StoreListResult {
   uri: string;
   space: string;
   device: string;
   path: string;
   parent: string | null;
+  writable?: boolean;
   entries: StoreEntry[];
 }
 
@@ -406,6 +436,7 @@ export interface StoreReadResult {
   size: number;
   sha256: string;
   mtime?: number;
+  writable?: boolean;
   contentBase64: string;
 }
 

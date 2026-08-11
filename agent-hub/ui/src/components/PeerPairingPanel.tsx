@@ -227,7 +227,19 @@ export function PeerPairingPanel() {
                 <strong style={{ color: '#cdd6f4' }}>{d.deviceName || d.fingerprint}</strong>
                 <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>{d.fingerprint}</span>
               </div>
-              <button style={dangerBtn} disabled={busy} onClick={() => void revoke(d.fingerprint)}>撤销</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={secondaryBtn}
+                  type="button"
+                  onClick={() => {
+                    const uri = `store://files/${d.fingerprint}/`;
+                    location.hash = `#store/${encodeURIComponent(uri)}`;
+                  }}
+                >
+                  打开储物袋
+                </button>
+                <button style={dangerBtn} disabled={busy} onClick={() => void revoke(d.fingerprint)}>撤销</button>
+              </div>
             </div>
           ))}
       </div>
