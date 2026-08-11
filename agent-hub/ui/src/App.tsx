@@ -17,14 +17,42 @@ import {
 import { api, getHubAuthToken } from './api/client.js';
 import { HubAuthTokenPanel } from './components/HubAuthTokenPanel.js';
 
+/** Top-level shell nav: instances list first (default), then settings sections. */
+type AppNav = 'instances' | SettingsTab;
+
+const NAV_ITEMS: { id: AppNav; label: string }[] = [
+  { id: 'instances', label: '实例列表' },
+  { id: 'global', label: '全局设置' },
+  { id: 'engines', label: '引擎管理' },
+  { id: 'peer', label: 'Peer 配对' },
+];
+
 function getInitialInstanceRoute() {
   return parseInstanceHash(location.hash);
+}
+
+function getInitialNav(): AppNav {
+  const settings = parseSettingsHash(location.hash);
+  if (settings.active) return settings.tab;
+  return 'instances';
+}
+
+function navTitle(nav: AppNav, hasSelected: boolean): { title: string; subtitle: string } {
+  if (nav === 'instances') {
+    return hasSelected
+      ? { title: '实例详情', subtitle: '运行状态 · 会话 · 配置' }
+      : { title: '实例列表', subtitle: '管理本机 Agent 实例' };
+  }
+  if (nav === 'global') return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
+  if (nav === 'engines') return { title: '引擎管理', subtitle: '内置与自定义引擎' };
+  return { title: 'Peer 配对', subtitle: 'Channel · 扫码连接' };
 }
 
 export function App() {
   const { instances, loading, error, reload } = useInstances();
   const initialRoute = getInitialInstanceRoute();
   const initialSettings = parseSettingsHash(location.hash);
+  const [nav, setNav] = useState<AppNav>(getInitialNav);
   const [selected, setSelected] = useState<string | null>(initialRoute?.instanceId ?? null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     initialRoute?.sessionId ?? null,
@@ -32,8 +60,9 @@ export function App() {
   const [selectedTab, setSelectedTab] = useState<InstanceDetailTab>(
     initialRoute?.tab ?? 'overview',
   );
-  const [showSettings, setShowSettings] = useState(initialSettings.active);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettings.tab);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(
+    initialSettings.active ? initialSettings.tab : 'global',
+  );
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [showAdd, setShowAdd] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
@@ -53,20 +82,43 @@ export function App() {
     [instances, filters],
   );
 
+  const goInstances = useCallback(() => {
+    setNav('instances');
+    setSelected(null);
+    setSelectedSessionId(null);
+    setSelectedTab('overview');
+    setFocusEngineId(null);
+  }, []);
+
+  const goSettings = useCallback((tab: SettingsTab, engineId?: string | null) => {
+    setNav(tab);
+    setSettingsTab(tab);
+    setSelected(null);
+    setSelectedSessionId(null);
+    setSelectedTab('overview');
+    setFocusEngineId(engineId ?? null);
+  }, []);
+
   const openEngineSettings = (engineId: string) => {
     setShowAdd(false);
     setShowWizard(false);
-    setSelected(null);
-    setShowSettings(true);
-    setSettingsTab('engines');
-    setFocusEngineId(engineId);
-    location.hash = buildSettingsHash('engines', engineId);
+    goSettings('engines', engineId);
+  };
+
+  const onNavClick = (id: AppNav) => {
+    if (id === 'instances') {
+      goInstances();
+      return;
+    }
+    goSettings(id);
   };
 
   // Auto-open the first-run wizard once when the dashboard has zero instances
   // (skip when auth is broken — user must fix the token first).
   useEffect(() => {
-    if (wizardAutoPrompted || loading || showWizard || showAdd || showSettings || selected) return;
+    if (wizardAutoPrompted || loading || showWizard || showAdd || nav !== 'instances' || selected) {
+      return;
+    }
     if (isUnauthorizedError(error)) return;
     if (instances.length !== 0) return;
     try {
@@ -84,7 +136,7 @@ export function App() {
     loading,
     showWizard,
     showAdd,
-    showSettings,
+    nav,
     selected,
     error,
     instances.length,
@@ -106,30 +158,45 @@ export function App() {
         sessionId: selectedSessionId,
         tab: selectedTab,
       });
-    } else if (showSettings) {
+    } else if (nav !== 'instances') {
       location.hash = buildSettingsHash(settingsTab, focusEngineId ?? undefined);
     } else {
       history.replaceState(null, '', location.pathname + location.search);
     }
-  }, [selected, selectedSessionId, selectedTab, showSettings, settingsTab, focusEngineId]);
+  }, [selected, selectedSessionId, selectedTab, nav, settingsTab, focusEngineId]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
     const onHashChange = () => {
       const route = parseInstanceHash(location.hash);
-      setSelected(route?.instanceId ?? null);
-      setSelectedSessionId(route?.sessionId ?? null);
-      setSelectedTab(route?.tab ?? 'overview');
+      if (route) {
+        setNav('instances');
+        setSelected(route.instanceId);
+        setSelectedSessionId(route.sessionId);
+        setSelectedTab(route.tab);
+        setFocusEngineId(null);
+        return;
+      }
       const settingsRoute = parseSettingsHash(location.hash);
-      setShowSettings(settingsRoute.active);
-      setSettingsTab(settingsRoute.tab);
-      setFocusEngineId(settingsRoute.focusEngineId);
+      if (settingsRoute.active) {
+        setNav(settingsRoute.tab);
+        setSettingsTab(settingsRoute.tab);
+        setFocusEngineId(settingsRoute.focusEngineId);
+        setSelected(null);
+        setSelectedSessionId(null);
+        setSelectedTab('overview');
+        return;
+      }
+      setNav('instances');
+      setSelected(null);
+      setSelectedSessionId(null);
+      setSelectedTab('overview');
+      setFocusEngineId(null);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // Must stay above early returns — Rules of Hooks
   const running = instances.filter((p) => p.status.running).length;
 
   const restartAll = useCallback(async () => {
@@ -154,71 +221,26 @@ export function App() {
     }
   }, [running, reload]);
 
-  if (selected) {
-    return (
-      <Layout wide>
-        <InstanceDetail
-          instanceId={selected}
-          activeTab={selectedTab}
-          onTabChange={setSelectedTab}
-          initialSessionId={selectedSessionId}
-          onSessionChange={setSelectedSessionId}
-          onBack={() => {
-            setSelected(null);
-            setSelectedSessionId(null);
-            setSelectedTab('overview');
-          }}
-          onReload={reload}
-        />
-      </Layout>
-    );
-  }
-
-  if (showSettings) {
-    return (
-      <Layout wide>
-        <div style={topbar}>
-          <div>
-            <h1 style={title}>设置</h1>
-            <p style={subtitle}>全局设置 · 引擎管理 · Peer 配对</p>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-          <button style={secondaryBtn} onClick={() => {
-            setShowSettings(false);
-            setSettingsTab('global');
-            setFocusEngineId(null);
-          }}>
-            ← 返回实例
-          </button>
-        </div>
-      </div>
-        <SettingsPage
-          tab={settingsTab}
-          onTabChange={setSettingsTab}
-          focusEngineId={focusEngineId}
-          onFocusEngineHandled={() => setFocusEngineId(null)}
-          onAuthTokenSaved={() => void reload()}
-        />
-      </Layout>
-    );
-  }
+  const heading = navTitle(nav, Boolean(selected));
+  const showInstanceList = nav === 'instances' && !selected;
 
   return (
     <Layout>
-      {/* ── Topbar ─────────────────────────────────────────────── */}
       <div style={topbar}>
         <div>
-          <h1 style={title}>Shepaw Agent Hub</h1>
+          <h1 style={title}>{heading.title}</h1>
           <p style={subtitle}>
-            {loading
-              ? 'Loading...'
-              : error
-                ? `Error: ${error}`
-                : `${instances.length} instance${instances.length === 1 ? '' : 's'} · ${running} running`}
+            {nav === 'instances' && !selected
+              ? (loading
+                ? 'Loading...'
+                : error
+                  ? `Error: ${error}`
+                  : `${instances.length} instance${instances.length === 1 ? '' : 's'} · ${running} running`)
+              : heading.subtitle}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {running > 0 && (
+          {showInstanceList && running > 0 && (
             <button
               style={restartAllBtn}
               disabled={restartAllBusy || loading}
@@ -227,87 +249,67 @@ export function App() {
               {restartAllBusy ? '重启中...' : '重启全部'}
             </button>
           )}
-          <button style={secondaryBtn} onClick={() => {
-            setSettingsTab('global');
-            setFocusEngineId(null);
-            setShowSettings(true);
-          }}>
-            设置
-          </button>
-          <button style={addBtn} onClick={() => setShowAdd(true)}>
-            + Add Instance
-          </button>
+          {showInstanceList && (
+            <button style={addBtn} onClick={() => setShowAdd(true)}>
+              + Add Instance
+            </button>
+          )}
         </div>
       </div>
 
-      {restartAllErr && (
-        <p style={{ color: '#e74c3c', margin: '0 0 16px', fontSize: 14 }}>{restartAllErr}</p>
-      )}
-
-      {isUnauthorizedError(error) && (
-        <div style={authBanner}>
-          <p style={{ margin: '0 0 12px', color: '#f9e2af', fontSize: 14 }}>
-            Dashboard API 需要鉴权
-            {!getHubAuthToken() ? '（本机尚未配置 Token）' : '（当前 Token 无效）'}。
-            请填写与启动命令中 <code style={inlineCode}>SHEPAW_HUB_TOKEN</code> 相同的值。
-          </p>
-          <HubAuthTokenPanel onSaved={() => void reload()} />
-        </div>
-      )}
-
-      {/* ── Filters + instance grid ─────────────────────────────── */}
-      {!loading && instances.length > 0 && (
-        <InstanceListFilters
-          value={filters}
-          engines={engines}
-          onChange={setFilters}
-          shown={filteredInstances.length}
-          total={instances.length}
-        />
-      )}
-
-      {!loading && instances.length === 0 && (
-        <div style={empty}>
-          <p style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600 }}>还没有 Agent 实例</p>
-          <p style={{ color: '#a6adc8', fontSize: 14, margin: '0 0 16px' }}>
-            用引导向导在几分钟内把本机引擎接到 Shepaw App，或手动添加实例。
-          </p>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button type="button" style={addBtn} onClick={() => setShowWizard(true)}>
-              开始引导
+      <div style={pageLayout}>
+        <nav style={sidebar} aria-label="主导航">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              style={navBtn(nav === item.id)}
+              onClick={() => onNavClick(item.id)}
+            >
+              {item.label}
             </button>
-            <button type="button" style={secondaryBtn} onClick={() => setShowAdd(true)}>
-              手动添加
-            </button>
-          </div>
-          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 16 }}>
-            CLI：<code style={inlineCode}>shepaw-hub quickstart</code>
-          </p>
-        </div>
-      )}
+          ))}
+        </nav>
 
-      {!loading && instances.length > 0 && filteredInstances.length === 0 && (
-        <div style={empty}>
-          <p>没有符合筛选条件的实例。</p>
-          <button
-            style={secondaryBtn}
-            type="button"
-            onClick={() => setFilters({ search: '', busy: 'all', engine: 'all' })}
-          >
-            清除筛选
-          </button>
-        </div>
-      )}
-
-      <div style={grid}>
-        {filteredInstances.map((p) => (
-          <InstanceCard
-            key={p.id}
-            instance={p}
-            onSelect={setSelected}
-            onReload={reload}
-          />
-        ))}
+        <main style={contentPanel}>
+          {nav === 'instances' && selected ? (
+            <InstanceDetail
+              instanceId={selected}
+              activeTab={selectedTab}
+              onTabChange={setSelectedTab}
+              initialSessionId={selectedSessionId}
+              onSessionChange={setSelectedSessionId}
+              onBack={() => {
+                setSelected(null);
+                setSelectedSessionId(null);
+                setSelectedTab('overview');
+              }}
+              onReload={reload}
+            />
+          ) : nav === 'instances' ? (
+            <InstancesPanel
+              loading={loading}
+              error={error}
+              instances={instances}
+              filteredInstances={filteredInstances}
+              filters={filters}
+              engines={engines}
+              restartAllErr={restartAllErr}
+              onFiltersChange={setFilters}
+              onSelect={setSelected}
+              onReload={reload}
+              onShowWizard={() => setShowWizard(true)}
+              onShowAdd={() => setShowAdd(true)}
+            />
+          ) : (
+            <SettingsPage
+              tab={settingsTab}
+              focusEngineId={focusEngineId}
+              onFocusEngineHandled={() => setFocusEngineId(null)}
+              onAuthTokenSaved={() => void reload()}
+            />
+          )}
+        </main>
       </div>
 
       {showAdd && (
@@ -329,6 +331,7 @@ export function App() {
               /* ignore */
             }
             setShowWizard(false);
+            setNav('instances');
             void reload().then(() => {
               setSelected(instanceId);
               setSelectedTab('devices');
@@ -354,10 +357,111 @@ export function App() {
   );
 }
 
-function Layout({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
+function InstancesPanel({
+  loading,
+  error,
+  instances,
+  filteredInstances,
+  filters,
+  engines,
+  restartAllErr,
+  onFiltersChange,
+  onSelect,
+  onReload,
+  onShowWizard,
+  onShowAdd,
+}: {
+  loading: boolean;
+  error: string | null;
+  instances: ReturnType<typeof useInstances>['instances'];
+  filteredInstances: ReturnType<typeof useInstances>['instances'];
+  filters: InstanceListFilterState;
+  engines: string[];
+  restartAllErr: string | null;
+  onFiltersChange: (v: InstanceListFilterState) => void;
+  onSelect: (id: string) => void;
+  onReload: () => void;
+  onShowWizard: () => void;
+  onShowAdd: () => void;
+}) {
+  return (
+    <>
+      {restartAllErr && (
+        <p style={{ color: '#e74c3c', margin: '0 0 16px', fontSize: 14 }}>{restartAllErr}</p>
+      )}
+
+      {isUnauthorizedError(error) && (
+        <div style={authBanner}>
+          <p style={{ margin: '0 0 12px', color: '#f9e2af', fontSize: 14 }}>
+            Dashboard API 需要鉴权
+            {!getHubAuthToken() ? '（本机尚未配置 Token）' : '（当前 Token 无效）'}。
+            请填写与启动命令中 <code style={inlineCode}>SHEPAW_HUB_TOKEN</code> 相同的值。
+          </p>
+          <HubAuthTokenPanel onSaved={() => void onReload()} />
+        </div>
+      )}
+
+      {!loading && instances.length > 0 && (
+        <InstanceListFilters
+          value={filters}
+          engines={engines}
+          onChange={onFiltersChange}
+          shown={filteredInstances.length}
+          total={instances.length}
+        />
+      )}
+
+      {!loading && instances.length === 0 && (
+        <div style={empty}>
+          <p style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600 }}>还没有 Agent 实例</p>
+          <p style={{ color: '#a6adc8', fontSize: 14, margin: '0 0 16px' }}>
+            用引导向导在几分钟内把本机引擎接到 Shepaw App，或手动添加实例。
+          </p>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button type="button" style={addBtn} onClick={onShowWizard}>
+              开始引导
+            </button>
+            <button type="button" style={secondaryBtn} onClick={onShowAdd}>
+              手动添加
+            </button>
+          </div>
+          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 16 }}>
+            CLI：<code style={inlineCode}>shepaw-hub quickstart</code>
+          </p>
+        </div>
+      )}
+
+      {!loading && instances.length > 0 && filteredInstances.length === 0 && (
+        <div style={empty}>
+          <p>没有符合筛选条件的实例。</p>
+          <button
+            style={secondaryBtn}
+            type="button"
+            onClick={() => onFiltersChange({ search: '', busy: 'all', engine: 'all' })}
+          >
+            清除筛选
+          </button>
+        </div>
+      )}
+
+      <div style={grid}>
+        {filteredInstances.map((p) => (
+          <InstanceCard
+            key={p.id}
+            instance={p}
+            onSelect={onSelect}
+            onReload={onReload}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div style={layoutStyle}>
-      <div style={{ ...container, ...(wide ? { maxWidth: 1280 } : {}) }}>{children}</div>
+      <div style={container}>{children}</div>
     </div>
   );
 }
@@ -377,7 +481,7 @@ const layoutStyle: React.CSSProperties = {
 };
 
 const container: React.CSSProperties = {
-  maxWidth: 1100,
+  maxWidth: 1280,
   margin: '0 auto',
   padding: '24px 20px',
 };
@@ -402,6 +506,41 @@ const subtitle: React.CSSProperties = {
   margin: '4px 0 0',
   color: '#a6adc8',
   fontSize: 14,
+};
+
+const pageLayout: React.CSSProperties = {
+  display: 'flex',
+  gap: 0,
+  alignItems: 'stretch',
+  minHeight: 480,
+};
+
+const sidebar: React.CSSProperties = {
+  width: 168,
+  flexShrink: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '4px 12px 4px 0',
+  borderRight: '1px solid #313244',
+};
+
+const navBtn = (active: boolean): React.CSSProperties => ({
+  background: active ? '#313244' : 'transparent',
+  color: active ? '#89b4fa' : '#cdd6f4',
+  border: 'none',
+  borderRadius: 6,
+  padding: '10px 14px',
+  cursor: 'pointer',
+  fontWeight: active ? 600 : 400,
+  fontSize: 14,
+  textAlign: 'left',
+});
+
+const contentPanel: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  padding: '4px 0 4px 24px',
 };
 
 const authBanner: React.CSSProperties = {
