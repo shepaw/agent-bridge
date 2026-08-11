@@ -208,6 +208,7 @@ export {
   getCursorAcpCommand,
   checkCustomEngineInstallStatus,
   probeCursorApiKey,
+  probeCursorCliLogin,
   isHealthyCursorCli,
   checkCursorInstallStatus,
   checkEngineInstallStatus,

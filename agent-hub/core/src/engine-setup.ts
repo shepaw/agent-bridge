@@ -150,6 +150,7 @@ export function detectLocalDirPermissionIssue(): string | null {
 
 const INSTALL_STATUS_TTL_MS = 60_000;
 const CURSOR_HEALTH_TTL_MS = 60_000;
+const CURSOR_LOGIN_PROBE_TTL_MS = 60_000;
 const CURSOR_API_PROBE_TTL_MS = 5 * 60_000;
 
 interface CacheEntry<T> {
@@ -159,6 +160,7 @@ interface CacheEntry<T> {
 
 const installStatusCache = new Map<string, CacheEntry<EngineInstallStatus>>();
 const cursorHealthCache = new Map<string, CacheEntry<boolean>>();
+const cursorLoginProbeCache = new Map<string, CacheEntry<boolean>>();
 const cursorApiProbeCache = new Map<string, CacheEntry<'valid' | 'invalid' | 'unknown'>>();
 
 function cacheGet<T>(map: Map<string, CacheEntry<T>>, key: string): T | undefined {
@@ -180,6 +182,7 @@ function cacheSet<T>(map: Map<string, CacheEntry<T>>, key: string, value: T, ttl
 export function clearEngineProbeCaches(): void {
   installStatusCache.clear();
   cursorHealthCache.clear();
+  cursorLoginProbeCache.clear();
   cursorApiProbeCache.clear();
 }
 
@@ -256,6 +259,25 @@ export function checkCursorInstallStatus(opts: EngineProbeOptions = {}): EngineI
 
 const CURSOR_API_PROBE_URL = 'https://api.cursor.com/v0/me';
 
+/** True when `agent status` reports an active CLI login (`agent login`). */
+export function probeCursorCliLogin(binaryPath: string): boolean {
+  const cached = cacheGet(cursorLoginProbeCache, binaryPath);
+  if (cached !== undefined) return cached;
+  try {
+    const result = spawnSync(binaryPath, ['status'], {
+      env: { ...process.env, NO_OPEN_BROWSER: '1', CURSOR_AGENT_DISABLE_DEBUG_LOG: '1' },
+      encoding: 'utf8',
+      timeout: 8_000,
+      stdio: 'pipe',
+    });
+    const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    const loggedIn = result.status === 0 && /logged in/i.test(combined);
+    return cacheSet(cursorLoginProbeCache, binaryPath, loggedIn, CURSOR_LOGIN_PROBE_TTL_MS);
+  } catch {
+    return cacheSet(cursorLoginProbeCache, binaryPath, false, CURSOR_LOGIN_PROBE_TTL_MS);
+  }
+}
+
 /** Probe whether a Cursor User API Key is accepted (sync; cached ~5min). */
 export function probeCursorApiKey(apiKey: string): 'valid' | 'invalid' | 'unknown' {
   const trimmed = apiKey.trim();
@@ -331,28 +353,34 @@ function resolveCursorAuthAvailability(
   opts: EngineProbeOptions = {},
 ): EngineAvailability | null {
   const key = cursorApiKey?.trim();
-  if (key === undefined || key.length === 0) {
-    return {
-      ...status,
-      available: false,
-      unavailableReason:
-        '未认证：请运行 cursor-agent login，或在引擎设置中配置有效的 CURSOR_API_KEY（Cursor → Settings → Integrations → User API Keys）',
-    };
-  }
-  // List UI: presence of a key is enough; avoid blocking on api.cursor.com.
-  if (opts.skipRemoteAuthProbe === true) {
+  if (key !== undefined && key.length > 0) {
+    // List UI: presence of a key is enough; avoid blocking on api.cursor.com.
+    if (opts.skipRemoteAuthProbe === true) {
+      return null;
+    }
+    const probe = probeCursorApiKey(key);
+    if (probe === 'invalid') {
+      return {
+        ...status,
+        available: false,
+        unavailableReason:
+          'CURSOR_API_KEY 无效（API 返回 401）。请在 Cursor → Settings → Integrations 重新生成 User API Key 并更新引擎凭据',
+      };
+    }
     return null;
   }
-  const probe = probeCursorApiKey(key);
-  if (probe === 'invalid') {
-    return {
-      ...status,
-      available: false,
-      unavailableReason:
-        'CURSOR_API_KEY 无效（API 返回 401）。请在 Cursor → Settings → Integrations 重新生成 User API Key 并更新引擎凭据',
-    };
+
+  const binaryPath = status.binaryPath;
+  if (binaryPath !== null && probeCursorCliLogin(binaryPath)) {
+    return null;
   }
-  return null;
+
+  return {
+    ...status,
+    available: false,
+    unavailableReason:
+      '未认证：请运行 agent login（或 cursor-agent login），或在引擎设置中配置 CURSOR_API_KEY',
+  };
 }
 
 function nodeInstallStep(platform: HubPlatform): EngineSetupStep {

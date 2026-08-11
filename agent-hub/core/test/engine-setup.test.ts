@@ -21,6 +21,7 @@ import {
   resolveCursorCliBinary,
   resolveEngineAvailability,
   probeCursorApiKey,
+  probeCursorCliLogin,
 } from '../src/engine-setup.js';
 
 describe('engine-setup', () => {
@@ -151,6 +152,19 @@ describe('engine-setup', () => {
   it('probeCursorApiKey rejects empty and bogus keys', () => {
     expect(probeCursorApiKey('')).toBe('invalid');
     expect(probeCursorApiKey('not-a-real-key')).toBe('invalid');
+  });
+
+  it('resolveEngineAvailability accepts cursor when CLI login is active', () => {
+    const status = checkCursorInstallStatus({ skipVersion: true });
+    if (!status.installed || status.binaryPath === null) {
+      return;
+    }
+    if (!probeCursorCliLogin(status.binaryPath)) {
+      return;
+    }
+    clearEngineProbeCaches();
+    const avail = resolveEngineAvailability('cursor', { skipVersion: true, skipRemoteAuthProbe: true });
+    expect(avail.available).toBe(true);
   });
 
   it('resolveEngineAvailability blocks cursor with invalid API key', () => {
