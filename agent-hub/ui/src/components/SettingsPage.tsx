@@ -7,7 +7,7 @@ import type { SettingsTab } from '../utils/settingsRoute.js';
 /**
  * Settings content panels (nav lives in App shell).
  *   - 全局: dashboard auth token + device-wide tool-call approval default
- *   - 引擎: per-engine overrides
+ *   - 引擎: opened from Create Instance「管理引擎」(not a left-nav item)
  *   - 扫码配对: peer service + shepaw://peer QR + optional channel
  */
 

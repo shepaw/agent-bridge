@@ -27,7 +27,6 @@ const NAV_ITEMS: { id: AppNav; label: string }[] = [
   { id: 'peer', label: '扫码配对' },
   { id: 'store', label: '储物袋' },
   { id: 'global', label: '全局设置' },
-  { id: 'engines', label: '引擎管理' },
 ];
 
 function getInitialInstanceRoute() {
@@ -50,8 +49,8 @@ function navTitle(nav: AppNav, hasSelected: boolean): { title: string; subtitle:
   }
   if (nav === 'store') return { title: '储物袋', subtitle: '本机 · 配对设备 · Agent 空间' };
   if (nav === 'peer') return { title: '扫码配对', subtitle: '启动 Peer · 扫码连接 App' };
-  if (nav === 'global') return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
-  return { title: '引擎管理', subtitle: '内置与自定义引擎' };
+  if (nav === 'engines') return { title: '引擎管理', subtitle: '从创建实例进入 · 配置内置与自定义引擎' };
+  return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
 }
 
 export function App() {

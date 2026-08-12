@@ -175,7 +175,16 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           <label style={lbl}>Label</label>
           <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Agent" />
 
-          <label style={lbl}>Engine <span style={req}>*</span></label>
+          <div style={fieldHead}>
+            <label style={{ ...lbl, margin: 0 }}>Engine <span style={req}>*</span></label>
+            <button
+              type="button"
+              style={manageEngineBtn}
+              onClick={() => onOpenEngineSettings(engine || engineOptions[0]?.id || 'codebuddy')}
+            >
+              管理引擎
+            </button>
+          </div>
           {engineOptions.length > 0 ? (
             <div style={engineList} role="listbox" aria-label="Engine">
               {engineOptions.map((e) => {
@@ -253,7 +262,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
 
           {!hasAvailableEngine && engineOptions.length > 0 && (
             <p style={{ color: '#fab387', fontSize: 12, margin: '4px 0 0' }}>
-              当前没有可用引擎。请点击上方「去配置」完成安装与凭据设置。
+              当前没有可用引擎。请点击「管理引擎」完成安装与凭据设置。
             </p>
           )}
 
@@ -391,6 +400,13 @@ const form: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 8, padding: 20,
 };
 const lbl: React.CSSProperties = { color: '#a6adc8', fontSize: 13 };
+const fieldHead: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+};
+const manageEngineBtn: React.CSSProperties = {
+  background: 'transparent', border: 'none', color: '#89b4fa',
+  cursor: 'pointer', fontSize: 12, padding: 0, whiteSpace: 'nowrap',
+};
 const req: React.CSSProperties = { color: '#f38ba8' };
 const inp: React.CSSProperties = {
   background: '#11111b', border: '1px solid #45475a', borderRadius: 5,
