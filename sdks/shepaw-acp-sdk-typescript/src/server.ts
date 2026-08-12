@@ -22,6 +22,7 @@
 import { createServer as createHttpServer, IncomingMessage, Server as HttpServer, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
+import { hostname } from 'node:os';
 import { basename, dirname } from 'node:path';
 
 import { WebSocket, WebSocketServer } from 'ws';
@@ -38,8 +39,10 @@ import {
 import type { AgentIdentity } from './identity.js';
 import { loadOrCreateIdentity } from './identity.js';
 import { jsonrpcNotification, jsonrpcResponse } from './jsonrpc.js';
+import { MailboxClient } from './mailbox.js';
 import { NoiseHandshakeError, NoiseSession, NoiseTransportError } from './noise.js';
 import type { AuthorizedPeer, AuthorizedPeers } from './peers.js';
+import { openJson, sealJson } from './sealbox.js';
 import {
   addPeer,
   derivedPeerFingerprint,
@@ -150,6 +153,13 @@ export interface ACPAgentServerOptions {
    * Hub uses this to fan-out the device to every managed agent.
    */
   onPeerEnrolled?: (event: PeerEnrolledEvent) => void;
+  /**
+   * Max concurrent chat tasks across all sessions. Default 5.
+   * When at capacity, `agent.chat` returns `{status:'busy'}` and the caller
+   * should leave a sealed message in the channel mailbox.
+   * Set to 0 to disable the gate (unlimited, legacy behaviour).
+   */
+  maxConcurrency?: number;
 }
 
 /** Fired when an enrollment token is consumed and the peer is authorized. */
@@ -249,6 +259,10 @@ export class ACPAgentServer {
   private startedAtMs = 0;
   private tunnelConfig: ChannelTunnelConfig | undefined;
   private tunnelClient: TunnelClient | undefined;
+  private mailboxClient: MailboxClient | undefined;
+  private mailboxTimer: NodeJS.Timeout | undefined;
+  private mailboxBusy = false;
+  private readonly maxConcurrency: number;
   private peersWatcher: FSWatcher | undefined;
   private peersReloadTimer: NodeJS.Timeout | undefined;
   private readonly onPeerEnrolledHook: ((event: PeerEnrolledEvent) => void) | undefined;
@@ -298,6 +312,8 @@ export class ACPAgentServer {
     this.convMgr = new ConversationManager({ maxHistory: opts.maxHistory ?? 20 });
     this.tunnelConfig = opts.tunnelConfig;
     this.onPeerEnrolledHook = opts.onPeerEnrolled;
+    // 0 = unlimited (legacy); default 5
+    this.maxConcurrency = opts.maxConcurrency ?? 5;
   }
 
   // ── override points ────────────────────────────────────────────
@@ -509,8 +525,22 @@ export class ACPAgentServer {
         config: this.tunnelConfig,
         localHost: host === '0.0.0.0' || host === '::' || host === '' ? '127.0.0.1' : host,
         localPort: port,
+        // 连接即注册：握手携带 agent 身份，channel 服务端 upsert 注册记录。
+        agentInfo: {
+          agentId: this.agentId,
+          agentFp: this.identity.fingerprint,
+          agentName: this.name,
+          deviceId: hostname(),
+          capacity: this.maxConcurrency > 0 ? this.maxConcurrency : undefined,
+        },
+        onControlMessage: (msg) => {
+          if (msg.type === 'mail_waiting') {
+            void this.drainMailbox();
+          }
+        },
       });
       await this.tunnelClient.start();
+      this.startMailboxPoller();
       const publicUrl = this.tunnelConfig.getPublicEndpoint({
         agentId: this.agentId,
         fingerprint: this.identity.fingerprint,
@@ -544,6 +574,8 @@ export class ACPAgentServer {
     this.chatQueues.clear();
 
     this.stopPeersWatcher();
+
+    this.stopMailboxPoller();
 
     if (this.tunnelClient !== undefined) {
       await this.tunnelClient.stop().catch(() => undefined);
@@ -1223,6 +1255,27 @@ export class ACPAgentServer {
       return;
     }
 
+    // 跨会话并发闸门：满员时回 busy，不入队、不占 activeTasks。
+    // history_supplement 是轻量操作，不计入闸门。
+    if (
+      !isHistorySupplement &&
+      this.maxConcurrency > 0 &&
+      this.activeTasks.size >= this.maxConcurrency
+    ) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          result: {
+            task_id: taskId,
+            status: 'busy',
+            active: this.activeTasks.size,
+            capacity: this.maxConcurrency,
+          },
+        }),
+      );
+      return;
+    }
+
     // Acknowledge.
     await wsSend(ws, jsonrpcResponse(msgId, { result: { task_id: taskId, status: 'accepted' } }));
 
@@ -1346,6 +1399,163 @@ export class ACPAgentServer {
         const msg = err instanceof Error ? err.message : String(err);
         await ctx.error(msg, -32603);
       }
+    } finally {
+      this.activeTasks.delete(taskId);
+      // 有空位时优先消化信箱 backlog，避免实时流量饿死留言
+      void this.drainMailbox();
+    }
+  }
+
+  // ── channel mailbox ────────────────────────────────────────────
+
+  private startMailboxPoller(): void {
+    if (this.tunnelConfig === undefined) return;
+    this.mailboxClient = new MailboxClient({
+      serverUrl: this.tunnelConfig.serverUrl,
+      channelId: this.tunnelConfig.channelId,
+      secret: this.tunnelConfig.secret,
+      agentId: this.agentId,
+    });
+    // 定时兜底：即使 mail_waiting 丢了也能消化 backlog
+    this.mailboxTimer = setInterval(() => void this.drainMailbox(), 30_000);
+    this.mailboxTimer.unref?.();
+    void this.drainMailbox();
+  }
+
+  private stopMailboxPoller(): void {
+    if (this.mailboxTimer !== undefined) {
+      clearInterval(this.mailboxTimer);
+      this.mailboxTimer = undefined;
+    }
+    this.mailboxClient = undefined;
+  }
+
+  /**
+   * Pull sealed inbound messages while we have capacity; run onChat offline;
+   * seal reply to caller's static pubkey and deposit.
+   */
+  private async drainMailbox(): Promise<void> {
+    if (this.mailboxBusy || this.mailboxClient === undefined) return;
+    if (this.maxConcurrency > 0 && this.activeTasks.size >= this.maxConcurrency) return;
+
+    this.mailboxBusy = true;
+    try {
+      while (this.maxConcurrency <= 0 || this.activeTasks.size < this.maxConcurrency) {
+        const batch = await this.mailboxClient.claimPending(1);
+        if (batch.length === 0) break;
+        for (const mail of batch) {
+          await this.processMailboxItem(mail);
+        }
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[Mailbox] drain failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.mailboxBusy = false;
+    }
+  }
+
+  private async processMailboxItem(mail: {
+    id: string;
+    message_id: string;
+    session_id: string;
+    caller_fp: string;
+    ciphertext: string;
+  }): Promise<void> {
+    if (this.mailboxClient === undefined) return;
+
+    let payload: {
+      message?: string;
+      session_id?: string;
+      message_id?: string;
+      history?: ConversationMessage[];
+    };
+    try {
+      payload = openJson(mail.ciphertext, this.identity.staticPrivateKey);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[Mailbox] decrypt failed for ${mail.id}: ${err instanceof Error ? err.message : String(err)}`);
+      await this.mailboxClient.ackInbound([mail.id]); // 坏密文丢弃，避免死循环
+      return;
+    }
+
+    const peer = this.peers.peers.find((p) => p.fingerprint === mail.caller_fp.toLowerCase());
+    if (peer === undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(`[Mailbox] unknown caller_fp ${mail.caller_fp}, dropping`);
+      await this.mailboxClient.ackInbound([mail.id]);
+      return;
+    }
+
+    const message = typeof payload.message === 'string' ? payload.message : '';
+    if (!message) {
+      await this.mailboxClient.ackInbound([mail.id]);
+      return;
+    }
+
+    const sessionId = mail.session_id || payload.session_id || mail.message_id;
+    const taskId = `mailbox_${mail.message_id}`;
+    const abortController = new AbortController();
+    this.activeTasks.set(taskId, abortController);
+
+    const sink = { texts: [] as string[] };
+    // Offline TaskContext: lifecycle/text go to sink; interactive UI is unsupported.
+    const ctx = new TaskContext({
+      ws: { readyState: 3 } as unknown as WebSocket, // CLOSED stub
+      taskId,
+      sessionId,
+      pendingHubRequests: this.pendingHubRequests,
+      pendingResponses: this.pendingResponses,
+      offlineSink: sink,
+    });
+
+    try {
+      if (!this.convMgr.hasSession(sessionId) && Array.isArray(payload.history) && payload.history.length > 0) {
+        this.convMgr.initializeSession(sessionId, payload.history);
+      }
+      this.convMgr.addUserMessage(sessionId, message);
+
+      const kwargs: ChatKwargs = {
+        session_id: sessionId,
+        history: payload.history,
+        messages: this.convMgr.getMessages(sessionId),
+        attachments: undefined,
+        system_prompt: this.systemPrompt,
+        group_context: undefined,
+        ui_component_version: undefined,
+        user_id: mail.caller_fp,
+        message_id: mail.message_id,
+        is_history_supplement: false,
+        params: {},
+      };
+      await this.onChat(ctx, message, kwargs);
+      const replyText = ctx.collectedText;
+
+      if (replyText.length > 0) {
+        this.convMgr.addAssistantMessage(sessionId, replyText);
+        const ciphertext = sealJson(
+          {
+            reply_to: mail.message_id,
+            session_id: sessionId,
+            message_id: `reply_${mail.message_id}`,
+            content: replyText,
+            ts: Date.now(),
+          },
+          peer.publicKey,
+        );
+        await this.mailboxClient.depositReply({
+          callerFp: mail.caller_fp,
+          replyTo: mail.message_id,
+          sessionId,
+          messageId: `reply_${mail.message_id}`,
+          ciphertext,
+        });
+      }
+      await this.mailboxClient.ackInbound([mail.id]);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[Mailbox] process ${mail.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+      // 不 ack → visibility timeout 后重试
     } finally {
       this.activeTasks.delete(taskId);
     }

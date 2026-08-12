@@ -199,6 +199,27 @@ export interface TunnelClientOptions {
    * tunnel into your app's logger.
    */
   onLog?: (line: string) => void;
+  /**
+   * Optional agent identity for the channel-side agent registry. When set,
+   * the handshake URL carries `agent_id`/`agent_fp`/`name`/`device_id` and the
+   * channel service upserts a registry entry on connect ("connect = register").
+   * Device-level tunnels (hub router) leave this unset and register their
+   * instances out-of-band via `POST /api/v1/agents/register` instead.
+   * The HMAC signing string stays the legacy `{channel_id}\n{ts}\n{nonce}`
+   * form for compatibility with older channel services.
+   */
+  agentInfo?: {
+    agentId: string;
+    agentFp?: string;
+    agentName?: string;
+    deviceId?: string;
+    capacity?: number;
+  };
+  /**
+   * Called for tunnel control messages the client doesn't handle itself
+   * (e.g. `mail_waiting`). Unknown types without a handler are still logged.
+   */
+  onControlMessage?: (msg: { type: string; agent_id?: string; [k: string]: unknown }) => void;
 }
 
 export class TunnelClient {
@@ -206,6 +227,8 @@ export class TunnelClient {
   private readonly localHost: string;
   private readonly localPort: number;
   private readonly log: (line: string) => void;
+  private readonly agentInfo: TunnelClientOptions['agentInfo'];
+  private readonly onControlMessage: TunnelClientOptions['onControlMessage'];
 
   private running = false;
   private stopRequested = false;
@@ -221,6 +244,8 @@ export class TunnelClient {
     this.localHost = opts.localHost ?? '127.0.0.1';
     this.localPort = opts.localPort;
     this.log = opts.onLog ?? ((line) => console.log(line));
+    this.agentInfo = opts.agentInfo;
+    this.onControlMessage = opts.onControlMessage;
   }
 
   async start(): Promise<void> {
@@ -296,8 +321,31 @@ export class TunnelClient {
         ? `&endpoint=${encodeURIComponent(this.config.channelEndpoint)}`
         : '');
 
+    // Agent registry params (optional). Appended after the signature — the
+    // server accepts the legacy signing string regardless, so these are pure
+    // extra metadata; older channel services ignore unknown query params.
+    let agentQuery = '';
+    if (this.agentInfo !== undefined && this.agentInfo.agentId.length > 0) {
+      const info = this.agentInfo;
+      agentQuery += `&agent_id=${encodeURIComponent(info.agentId)}`;
+      if (info.agentFp !== undefined && info.agentFp.length > 0) {
+        agentQuery += `&agent_fp=${encodeURIComponent(info.agentFp)}`;
+      }
+      if (info.agentName !== undefined && info.agentName.length > 0) {
+        agentQuery += `&name=${encodeURIComponent(info.agentName)}`;
+      }
+      if (info.deviceId !== undefined && info.deviceId.length > 0) {
+        agentQuery += `&device_id=${encodeURIComponent(info.deviceId)}`;
+      }
+      if (info.capacity !== undefined && info.capacity > 0) {
+        agentQuery += `&capacity=${encodeURIComponent(String(info.capacity))}`;
+      }
+    }
+
+    const fullUrl = url + agentQuery;
+
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(url, {
+      const ws = new WebSocket(fullUrl, {
         handshakeTimeout: 30_000,
       });
       const onError = (err: Error) => {
@@ -430,8 +478,19 @@ export class TunnelClient {
           }
         }
         return;
+      case 'mail_waiting':
+        if (this.onControlMessage !== undefined) {
+          this.onControlMessage(msg as { type: string; agent_id?: string });
+        } else {
+          this.log(`[Tunnel] mail_waiting (no handler) agent=${(msg as { agent_id?: string }).agent_id ?? ''}`);
+        }
+        return;
       default:
-        this.log(`[Tunnel] Unknown message type: ${msg.type}`);
+        if (this.onControlMessage !== undefined) {
+          this.onControlMessage(msg as { type: string; agent_id?: string });
+        } else {
+          this.log(`[Tunnel] Unknown message type: ${msg.type}`);
+        }
     }
   }
 

@@ -133,6 +133,11 @@ export interface TaskContextInit {
   /** Optional early-submitResponse buffer shared with the server. */
   earlyResponses?: Map<string, Record<string, unknown>>;
   takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
+  /**
+   * Offline / mailbox mode: when set, `sendText` appends here and lifecycle
+   * notifications are no-ops (no live caller WebSocket).
+   */
+  offlineSink?: { texts: string[] };
 }
 
 export class TaskContext {
@@ -142,6 +147,7 @@ export class TaskContext {
   private readonly pendingHubRequests: Map<string, Deferred<unknown>>;
   private readonly pendingResponses: Map<string, Deferred<Record<string, unknown>>>;
   private readonly takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
+  private readonly offlineSink?: { texts: string[] };
 
   constructor(init: TaskContextInit) {
     this.ws = init.ws;
@@ -150,11 +156,21 @@ export class TaskContext {
     this.pendingHubRequests = init.pendingHubRequests;
     this.pendingResponses = init.pendingResponses;
     this.takeEarlyResponse = init.takeEarlyResponse;
+    this.offlineSink = init.offlineSink;
+  }
+
+  /** Collected assistant text in offline/mailbox mode (empty string online). */
+  get collectedText(): string {
+    return this.offlineSink?.texts.join('') ?? '';
   }
 
   // ── Streaming text ────────────────────────────────────────────
 
   async sendText(content: string): Promise<void> {
+    if (this.offlineSink !== undefined) {
+      this.offlineSink.texts.push(content);
+      return;
+    }
     await this.sendRaw(
       jsonrpcNotification('ui.textContent', {
         task_id: this.taskId,
@@ -165,6 +181,7 @@ export class TaskContext {
   }
 
   async sendTextFinal(): Promise<void> {
+    if (this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('ui.textContent', {
         task_id: this.taskId,
@@ -177,6 +194,7 @@ export class TaskContext {
   // ── Task lifecycle ────────────────────────────────────────────
 
   async started(): Promise<void> {
+    if (this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('task.started', {
         task_id: this.taskId,
@@ -186,6 +204,7 @@ export class TaskContext {
   }
 
   async completed(): Promise<void> {
+    if (this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('task.completed', {
         task_id: this.taskId,
@@ -196,6 +215,7 @@ export class TaskContext {
   }
 
   async error(message: string, code = -32603): Promise<void> {
+    if (this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('task.error', {
         task_id: this.taskId,

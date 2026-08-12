@@ -101,6 +101,9 @@ export type {
   ChannelTunnelConfigInit,
   TunnelClientOptions,
 } from './tunnel.js';
+export { seal, open, sealJson, openJson, SealBoxError } from './sealbox.js';
+export { MailboxClient } from './mailbox.js';
+export type { MailboxClientOptions, InboundMail } from './mailbox.js';
 
 // ── Permissions / approval routing ──────────────────────────────────
 

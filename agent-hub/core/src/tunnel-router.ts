@@ -31,6 +31,7 @@ import { ChannelTunnelConfig, TunnelClient, loadOrCreateIdentity } from 'shepaw-
 
 import { loadOrCreateHubConfig, type HubConfig, type InstanceConfig, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from './config.js';
 import { instancePaths } from './paths.js';
+import { AgentRegistry } from './registry.js';
 
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '']);
 
@@ -70,6 +71,7 @@ export class GatewayTunnelRouter {
   private httpServer: Server | undefined;
   private wsServer: WebSocketServer | undefined;
   private tunnelClient: TunnelClient | undefined;
+  private registry: AgentRegistry | undefined;
 
   /** Cache of agentId → instanceId, rebuilt lazily. Cheap; identities are tiny. */
   private agentIdCache: Map<string, string> | undefined;
@@ -119,12 +121,27 @@ export class GatewayTunnelRouter {
       });
       await this.tunnelClient.start();
       this.log(`[Router] Channel tunnel started → ${this.tunnelConfig.serverUrl}`);
+
+      // 设备级隧道不带单一 agent 身份；各实例经 REST 注册到 channel 注册中心
+      // （兼作心跳，失败不影响路由）。
+      this.registry = new AgentRegistry({
+        serverUrl: this.tunnelConfig.serverUrl,
+        channelId: this.tunnelConfig.channelId,
+        secret: this.tunnelConfig.secret,
+        loadConfig: this.loadConfig,
+        onLog: (line) => this.log(line),
+      });
+      this.registry.start();
     } else {
       this.log('[Router] No channel tunnel configured (LAN-only dispatch).');
     }
   }
 
   async stop(): Promise<void> {
+    if (this.registry !== undefined) {
+      this.registry.stop();
+      this.registry = undefined;
+    }
     if (this.tunnelClient !== undefined) {
       await this.tunnelClient.stop().catch(() => undefined);
       this.tunnelClient = undefined;
