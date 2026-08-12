@@ -30,6 +30,7 @@ import type {
   StoreListResult,
   StoreMappingsResult,
   StoreRootsResult,
+  StoreRecentResult,
   StoreReadResult,
   StoreWriteResult,
 } from './types.js';
@@ -343,6 +344,21 @@ export const api = {
     health: (): Promise<StoreHealth> => request('/store/health'),
 
     roots: (): Promise<StoreRootsResult> => request('/store/roots'),
+
+    recent: (opts?: {
+      device?: string;
+      spaces?: string[];
+      prefix?: string;
+      limit?: number;
+    }): Promise<StoreRecentResult> => {
+      const q = new URLSearchParams();
+      if (opts?.device) q.set('device', opts.device);
+      if (opts?.spaces?.length) q.set('spaces', opts.spaces.join(','));
+      if (opts?.prefix) q.set('prefix', opts.prefix);
+      if (opts?.limit) q.set('limit', String(opts.limit));
+      const qs = q.toString();
+      return request(`/store/recent${qs ? `?${qs}` : ''}`);
+    },
 
     mappings: (): Promise<StoreMappingsResult> => request('/store/mappings'),
 

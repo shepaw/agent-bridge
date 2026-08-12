@@ -431,6 +431,23 @@ export interface StoreListResult {
   entries: StoreEntry[];
 }
 
+export interface StoreRecentEntry {
+  uri: string;
+  space: string;
+  device: string;
+  path: string;
+  size: number;
+  sha256: string;
+  mtime: number;
+  kind: 'file';
+}
+
+export interface StoreRecentResult {
+  device: string;
+  writable: boolean;
+  entries: StoreRecentEntry[];
+}
+
 export interface StoreReadResult {
   uri: string;
   size: number;

@@ -179,11 +179,20 @@ export async function handleStoreHttp(
       space: parsed.space,
       device: parsed.device,
       path: parsed.path || undefined,
+      limit: 1000,
     };
     if (Number.isFinite(depth)) payload.depth = depth;
     let data = executeLocalStoreOp('list', payload, self);
-    if (data._error && parsed.device !== self) {
-      data = await callStoreOnDevice(parsed.device, 'list', payload);
+    if (parsed.device !== self) {
+      // Prefer live peer when connected. Local empty dirs are NOT an error
+      // (missing mirror), so we must fall back on empty as well as _error.
+      const localEntries = Array.isArray(data.entries) ? data.entries : [];
+      const remote = await callStoreOnDevice(parsed.device, 'list', payload);
+      if (!remote._error) {
+        data = remote;
+      } else if (data._error || localEntries.length === 0) {
+        data = remote;
+      }
     }
     if (data._error) {
       sendJson(res, 404, { error: data._error, message: data.message });

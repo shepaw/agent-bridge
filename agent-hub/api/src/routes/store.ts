@@ -51,6 +51,8 @@ function httpStatusForError(code: string): number {
     code === 'hash_mismatch' ||
     code === 'staging_state' ||
     code === 'peer_offline' ||
+    code === 'master_offline' ||
+    code === 'not_paired' ||
     code === 'remote_only'
   ) {
     return 400;
@@ -166,21 +168,32 @@ async function listLocalOrRemote(
   if (Number.isFinite(depth) && depth > 0) payload.depth = depth;
 
   const local = executeLocalStoreOp('list', payload, self);
+  if (parsed.device === self) return local;
+
+  // Remote device: ask live peer via peer HTTP (WS connections live in peer process).
+  // Prefer live result when online; fall back to local mirror; otherwise surface offline.
+  const remote = await peerListRemote(uri, depth);
+  if (remote && !remote._error) return remote;
+
   if (!local._error) {
     const entries = Array.isArray(local.entries) ? local.entries : [];
-    // Local miss for remote device: empty dirs may mean mirror missing — try peer live.
-    if (entries.length === 0 && parsed.device !== self) {
-      const remote = await peerListRemote(uri, depth);
-      if (remote && !remote._error) return remote;
-    }
-    return local;
+    if (entries.length > 0) return local;
   }
 
-  if (parsed.device !== self) {
-    const remote = await peerListRemote(uri, depth);
-    if (remote) return remote;
+  if (remote) {
+    const code = String(remote._error ?? 'peer_offline');
+    const message =
+      code === 'master_offline' || code === 'peer_offline'
+        ? '配对设备未在线，且本机没有该设备的储物袋镜像'
+        : String(remote.message ?? code);
+    return { _error: code, message };
   }
-  return local;
+
+  if (local._error) return local;
+  return {
+    _error: 'peer_offline',
+    message: 'Peer 服务未运行，无法读取配对设备储物袋',
+  };
 }
 
 storeRouter.get('/health', (_req: Request, res: Response) => {
@@ -243,6 +256,88 @@ storeRouter.get('/roots', (_req: Request, res: Response) => {
         port: peerStatus.port,
         host: peerStatus.host,
       },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Recent files across spaces for a device (flat, sorted by mtime desc).
+ * Query: device= (defaults to self), spaces=comma list, prefix=, limit=50
+ */
+storeRouter.get('/recent', async (req: Request, res: Response) => {
+  try {
+    const self = hubStoreDeviceId();
+    const device =
+      typeof req.query.device === 'string' && /^[a-f0-9]{16}$/i.test(req.query.device.trim())
+        ? req.query.device.trim().toLowerCase()
+        : self;
+    const limitRaw = typeof req.query.limit === 'string' ? Number(req.query.limit) : 50;
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, limitRaw), 200) : 50;
+    const prefix =
+      typeof req.query.prefix === 'string' ? req.query.prefix.replace(/^\/+|\/+$/g, '') : '';
+
+    let spaces: string[];
+    if (typeof req.query.spaces === 'string' && req.query.spaces.trim()) {
+      spaces = req.query.spaces.split(',').map((s) => s.trim()).filter(Boolean);
+    } else if (device === self) {
+      spaces = [...LOCAL_BROWSER_SPACES];
+    } else {
+      spaces = PEER_BROWSER_SPACES;
+    }
+
+    type RecentRow = {
+      uri: string;
+      space: string;
+      device: string;
+      path: string;
+      size: number;
+      sha256: string;
+      mtime: number;
+      kind: 'file';
+    };
+    const files: RecentRow[] = [];
+    let lastRemoteError: Record<string, unknown> | null = null;
+    let listedOk = false;
+
+    for (const space of spaces) {
+      const uri = buildUri(space, device, prefix);
+      // depth omitted / 0 → recursive file list (no dirs)
+      const result = await listLocalOrRemote(uri, 0, self);
+      if (result._error) {
+        if (device !== self) lastRemoteError = result;
+        continue;
+      }
+      listedOk = true;
+      const entries = Array.isArray(result.entries) ? result.entries : [];
+      for (const raw of entries) {
+        if (!raw || typeof raw !== 'object') continue;
+        const e = raw as Record<string, unknown>;
+        const path = typeof e.path === 'string' ? e.path : '';
+        if (!path) continue;
+        if (e.kind === 'dir') continue;
+        if (prefix && path !== prefix && !path.startsWith(`${prefix}/`)) continue;
+        files.push({
+          uri: buildUri(space, device, path),
+          space,
+          device,
+          path,
+          size: typeof e.size === 'number' ? e.size : 0,
+          sha256: typeof e.sha256 === 'string' ? e.sha256 : '',
+          mtime: typeof e.mtime === 'number' ? e.mtime : 0,
+          kind: 'file',
+        });
+      }
+    }
+
+    if (!listedOk && lastRemoteError && sendOpError(res, lastRemoteError)) return;
+
+    files.sort((a, b) => b.mtime - a.mtime);
+    res.json({
+      device,
+      writable: device === self,
+      entries: files.slice(0, limit),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
