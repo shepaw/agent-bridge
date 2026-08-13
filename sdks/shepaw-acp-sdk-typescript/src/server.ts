@@ -40,6 +40,7 @@ import type { AgentIdentity } from './identity.js';
 import { loadOrCreateIdentity } from './identity.js';
 import { jsonrpcNotification, jsonrpcResponse } from './jsonrpc.js';
 import { MailboxClient } from './mailbox.js';
+import { GrantSyncClient } from './grant-sync.js';
 import { NoiseHandshakeError, NoiseSession, NoiseTransportError } from './noise.js';
 import type { AuthorizedPeer, AuthorizedPeers } from './peers.js';
 import { openJson, sealJson } from './sealbox.js';
@@ -262,6 +263,8 @@ export class ACPAgentServer {
   private mailboxClient: MailboxClient | undefined;
   private mailboxTimer: NodeJS.Timeout | undefined;
   private mailboxBusy = false;
+  private grantSync: GrantSyncClient | undefined;
+  private grantTimer: NodeJS.Timeout | undefined;
   private readonly maxConcurrency: number;
   private peersWatcher: FSWatcher | undefined;
   private peersReloadTimer: NodeJS.Timeout | undefined;
@@ -529,6 +532,7 @@ export class ACPAgentServer {
         agentInfo: {
           agentId: this.agentId,
           agentFp: this.identity.fingerprint,
+          agentPubKey: Buffer.from(this.identity.staticPublicKey).toString('base64'),
           agentName: this.name,
           deviceId: hostname(),
           capacity: this.maxConcurrency > 0 ? this.maxConcurrency : undefined,
@@ -536,11 +540,14 @@ export class ACPAgentServer {
         onControlMessage: (msg) => {
           if (msg.type === 'mail_waiting') {
             void this.drainMailbox();
+          } else if (msg.type === 'access_grant') {
+            void this.syncGrants();
           }
         },
       });
       await this.tunnelClient.start();
       this.startMailboxPoller();
+      this.startGrantSync();
       const publicUrl = this.tunnelConfig.getPublicEndpoint({
         agentId: this.agentId,
         fingerprint: this.identity.fingerprint,
@@ -576,6 +583,7 @@ export class ACPAgentServer {
     this.stopPeersWatcher();
 
     this.stopMailboxPoller();
+    this.stopGrantSync();
 
     if (this.tunnelClient !== undefined) {
       await this.tunnelClient.stop().catch(() => undefined);
@@ -1428,6 +1436,40 @@ export class ACPAgentServer {
       this.mailboxTimer = undefined;
     }
     this.mailboxClient = undefined;
+  }
+
+  private startGrantSync(): void {
+    if (this.tunnelConfig === undefined) return;
+    this.grantSync = new GrantSyncClient({
+      serverUrl: this.tunnelConfig.serverUrl,
+      channelId: this.tunnelConfig.channelId,
+      secret: this.tunnelConfig.secret,
+      agentId: this.agentId,
+      peersPath: this.peers.path,
+      onLog: (line) => console.log(line),
+    });
+    this.grantTimer = setInterval(() => void this.syncGrants(), 60_000);
+    this.grantTimer.unref?.();
+    void this.syncGrants();
+  }
+
+  private stopGrantSync(): void {
+    if (this.grantTimer !== undefined) {
+      clearInterval(this.grantTimer);
+      this.grantTimer = undefined;
+    }
+    this.grantSync = undefined;
+  }
+
+  private async syncGrants(): Promise<void> {
+    if (this.grantSync === undefined) return;
+    try {
+      await this.grantSync.syncOnce();
+      // addPeer/removePeer rewrite the file; watcher reloads, but refresh eagerly.
+      this.reloadPeers();
+    } catch (err) {
+      console.log(`[GrantSync] ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

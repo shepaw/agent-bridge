@@ -104,6 +104,8 @@ export type {
 export { seal, open, sealJson, openJson, SealBoxError } from './sealbox.js';
 export { MailboxClient } from './mailbox.js';
 export type { MailboxClientOptions, InboundMail } from './mailbox.js';
+export { GrantSyncClient } from './grant-sync.js';
+export type { GrantSyncOptions } from './grant-sync.js';
 
 // ── Permissions / approval routing ──────────────────────────────────
 

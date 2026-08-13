@@ -14,13 +14,16 @@
  * re-registering refreshes `last_seen_at`, which is what the channel
  * dashboard uses for the online indicator. Failures are logged and swallowed
  * — registry reporting must never take down traffic routing.
+ *
+ * After each successful register, approved/revoked access grants are pulled
+ * and applied to that instance's `authorized_peers.json`.
  */
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 
-import { loadOrCreateIdentity } from 'shepaw-acp-sdk';
+import { GrantSyncClient, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 
 import type { HubConfig } from './config.js';
 import { loadOrCreateHubConfig } from './config.js';
@@ -45,6 +48,7 @@ export class AgentRegistry {
   private readonly log: (line: string) => void;
 
   private timer: NodeJS.Timeout | undefined;
+  private readonly grantSyncByAgent = new Map<string, GrantSyncClient>();
 
   constructor(opts: AgentRegistryOptions) {
     this.serverUrl = opts.serverUrl.replace(/\/+$/, '');
@@ -66,6 +70,7 @@ export class AgentRegistry {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    this.grantSyncByAgent.clear();
   }
 
   /** Register (heartbeat) every configured instance. Best-effort per instance. */
@@ -81,10 +86,11 @@ export class AgentRegistry {
   }
 
   private async registerInstance(instanceId: string, label: string): Promise<void> {
-    const idPath = instancePaths(instanceId).identityPath;
-    if (!existsSync(idPath)) return; // gateway hasn't generated identity yet
+    const paths = instancePaths(instanceId);
+    if (!existsSync(paths.identityPath)) return; // gateway hasn't generated identity yet
 
-    const identity = loadOrCreateIdentity({ path: idPath });
+    const identity = loadOrCreateIdentity({ path: paths.identityPath });
+    const agentPubKey = Buffer.from(identity.staticPublicKey).toString('base64');
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce = randomBytes(16).toString('hex');
@@ -98,6 +104,7 @@ export class AgentRegistry {
         channel_id: this.channelId,
         agent_id: identity.agentId,
         agent_fp: identity.fingerprint,
+        agent_pubkey: agentPubKey,
         name: label,
         path_prefix: `/p/${instanceId}/`,
         device_id: hostname(),
@@ -114,6 +121,25 @@ export class AgentRegistry {
       return;
     }
     this.log(`[Registry] ${identity.agentId} (${label}) registered`);
+
+    // Sync channel-mediated access grants into this instance's peers file.
+    try {
+      let sync = this.grantSyncByAgent.get(identity.agentId);
+      if (sync === undefined) {
+        sync = new GrantSyncClient({
+          serverUrl: this.serverUrl,
+          channelId: this.channelId,
+          secret: this.secret,
+          agentId: identity.agentId,
+          peersPath: paths.peersPath,
+          onLog: (line) => this.log(line),
+        });
+        this.grantSyncByAgent.set(identity.agentId, sync);
+      }
+      await sync.syncOnce();
+    } catch (err) {
+      this.log(`[Registry] Grant sync ${identity.agentId} failed: ${formatErr(err)}`);
+    }
   }
 }
 

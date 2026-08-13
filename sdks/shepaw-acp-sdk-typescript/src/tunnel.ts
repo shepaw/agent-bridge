@@ -211,6 +211,8 @@ export interface TunnelClientOptions {
   agentInfo?: {
     agentId: string;
     agentFp?: string;
+    /** Base64 raw 32-byte static public key — stored on channel for approved callers. */
+    agentPubKey?: string;
     agentName?: string;
     deviceId?: string;
     capacity?: number;
@@ -330,6 +332,9 @@ export class TunnelClient {
       agentQuery += `&agent_id=${encodeURIComponent(info.agentId)}`;
       if (info.agentFp !== undefined && info.agentFp.length > 0) {
         agentQuery += `&agent_fp=${encodeURIComponent(info.agentFp)}`;
+      }
+      if (info.agentPubKey !== undefined && info.agentPubKey.length > 0) {
+        agentQuery += `&agent_pubkey=${encodeURIComponent(info.agentPubKey)}`;
       }
       if (info.agentName !== undefined && info.agentName.length > 0) {
         agentQuery += `&name=${encodeURIComponent(info.agentName)}`;
@@ -483,6 +488,13 @@ export class TunnelClient {
           this.onControlMessage(msg as { type: string; agent_id?: string });
         } else {
           this.log(`[Tunnel] mail_waiting (no handler) agent=${(msg as { agent_id?: string }).agent_id ?? ''}`);
+        }
+        return;
+      case 'access_grant':
+        if (this.onControlMessage !== undefined) {
+          this.onControlMessage(msg as { type: string; agent_id?: string });
+        } else {
+          this.log(`[Tunnel] access_grant (no handler) agent=${(msg as { agent_id?: string }).agent_id ?? ''}`);
         }
         return;
       default:
