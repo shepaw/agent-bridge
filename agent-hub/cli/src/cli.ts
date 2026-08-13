@@ -1202,18 +1202,16 @@ cli
       await startServer({ port, host, authToken });
 
       const baseUrl = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
-      const url = authToken
-        ? `${baseUrl}/?token=${encodeURIComponent(authToken)}`
-        : baseUrl;
-      console.log(`Dashboard ready: ${url}`);
+      console.log(`Dashboard ready: ${baseUrl}`);
       if (authToken) {
-        console.log('  (URL includes token once; the dashboard stores it in localStorage and strips it from the address bar.)');
+        console.log('  Auth enabled: open the URL and enter SHEPAW_HUB_TOKEN in the login dialog.');
+        console.log('  (Token is not passed via URL — paste it in the dashboard when prompted.)');
       }
 
       if (shouldOpen) {
         try {
           const { default: open } = await import('open');
-          await open(url);
+          await open(baseUrl);
         } catch {
           // Silently ignore if `open` fails (headless env, etc.)
         }

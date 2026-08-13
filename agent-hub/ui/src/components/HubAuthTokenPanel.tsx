@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { getHubAuthToken, setHubAuthToken } from '../api/client.js';
+import {
+  fetchHubAuthRequired,
+  getHubAuthToken,
+  setHubAuthToken,
+  verifyHubAuthToken,
+} from '../api/client.js';
 
 /**
  * Persist the dashboard Bearer token in localStorage so API / WebSocket
@@ -16,9 +21,7 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
   const refresh = async () => {
     setHasToken(Boolean(getHubAuthToken()));
     try {
-      const res = await fetch('/api/health');
-      const body = (await res.json()) as { authRequired?: boolean };
-      setAuthRequired(Boolean(body.authRequired));
+      setAuthRequired(await fetchHubAuthRequired());
     } catch {
       setAuthRequired(null);
     }
@@ -39,13 +42,10 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
     setNotice(null);
     setHubAuthToken(next);
     try {
-      const res = await fetch('/api/instances', {
-        headers: { Authorization: `Bearer ${next}` },
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
+      const result = await verifyHubAuthToken(next);
+      if (!result.ok) {
         setHubAuthToken(null);
-        setErr(body.error ?? `校验失败（HTTP ${res.status}）`);
+        setErr(result.error);
         setHasToken(false);
         return;
       }

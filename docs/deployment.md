@@ -128,14 +128,10 @@ export SHEPAW_HUB_TOKEN="$(openssl rand -hex 24)"
 shepaw-hub web --host 0.0.0.0 --port 4000 --no-open
 ```
 
-浏览器打开后，启动日志中的 `Dashboard ready:` 链接在设置了
-`SHEPAW_HUB_TOKEN` 时会自动带上 `?token=`；打开后 Dashboard 会写入
-localStorage 并从地址栏去掉。也可在 **设置 → 全局设置 → Dashboard 鉴权 Token**
-中手动填写，或使用：
-
-```text
-http://<主机>:4000/?token=<你的 SHEPAW_HUB_TOKEN>
-```
+浏览器打开启动日志中的 `Dashboard ready:` 地址。若设置了
+`SHEPAW_HUB_TOKEN`，首次访问会弹出鉴权对话框，输入与启动命令相同的
+Token 后即可使用（Token 保存在浏览器 localStorage，不会出现在 URL 中）。
+之后可在 **设置 → 全局设置 → Dashboard 鉴权 Token** 中修改或清除。
 
 未设置 `SHEPAW_HUB_TOKEN` 时，`--host 0.0.0.0` 会被拒绝启动。
 

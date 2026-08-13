@@ -3,6 +3,7 @@ import { api } from '../api/client.js';
 import type { EngineInfo, HubMeta } from '../api/types.js';
 import { rememberCwd } from '../utils/cwdHistory.js';
 import { CwdPathInput } from './CwdPathInput.js';
+import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
 
 const FALLBACK_ENGINES = [

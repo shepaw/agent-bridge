@@ -19,6 +19,7 @@ export function PeerPairingPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [booting, setBooting] = useState(true);
+  const [channelExpanded, setChannelExpanded] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoQrDone = useRef(false);
 
@@ -69,6 +70,11 @@ export function PeerPairingPanel() {
     timerRef.current = setInterval(tick, 1000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pairing]);
+
+  // Already configured — keep the section open so operators can manage it.
+  useEffect(() => {
+    if (gateway?.channel) setChannelExpanded(true);
+  }, [gateway?.channel]);
 
   const start = async () => {
     setBusy(true); setErr(null);
@@ -213,8 +219,29 @@ export function PeerPairingPanel() {
       </div>
 
       <div style={section}>
-        <h4 style={sectionTitle}>共享 Channel（远程访问）</h4>
-        <ChannelSettingsPanel />
+        <button
+          type="button"
+          style={collapseHeader}
+          aria-expanded={channelExpanded}
+          onClick={() => setChannelExpanded((v) => !v)}
+        >
+          <span style={collapseTitleRow}>
+            <span style={chevron}>{channelExpanded ? '▾' : '▸'}</span>
+            <span style={sectionTitleInline}>共享 Channel（远程访问）</span>
+            {gateway?.channel && !channelExpanded && (
+              <span style={configuredBadge}>已配置</span>
+            )}
+          </span>
+          <span style={collapseAction}>{channelExpanded ? '收起' : '展开配置'}</span>
+        </button>
+        {!channelExpanded && (
+          <p style={channelCollapsedHint}>
+            Hub 运行在内网（局域网 / VPN）时，默认仅同一网络内的设备可扫码连接。
+            若希望外网（如手机移动网络）也能访问，可借助<strong style={{ color: '#a6adc8', fontWeight: 600 }}>共享 Channel 代理</strong>，
+            将加密流量安全转发到本机，无需对公网开放 Agent 端口。
+          </p>
+        )}
+        {channelExpanded && <ChannelSettingsPanel />}
       </div>
 
       <div style={section}>
@@ -267,6 +294,47 @@ const copyBtn: React.CSSProperties = { background: '#313244', color: '#cdd6f4', 
 const linkHint: React.CSSProperties = { color: '#6c7086', fontSize: 11, marginTop: 8, lineHeight: 1.5 };
 const sectionFirst: React.CSSProperties = { marginTop: 0 };
 const section: React.CSSProperties = { marginTop: 16, borderTop: '1px solid #313244', paddingTop: 14 };
+const collapseHeader: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  width: '100%',
+  padding: 0,
+  margin: '0 0 10px',
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+const collapseTitleRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+};
+const chevron: React.CSSProperties = { color: '#89b4fa', fontSize: 14, lineHeight: 1 };
+const sectionTitleInline: React.CSSProperties = { color: '#cdd6f4', fontSize: 14, fontWeight: 600 };
+const configuredBadge: React.CSSProperties = {
+  background: '#313244',
+  color: '#a6e3a1',
+  fontSize: 11,
+  fontWeight: 600,
+  borderRadius: 4,
+  padding: '2px 6px',
+  marginLeft: 4,
+};
+const collapseAction: React.CSSProperties = {
+  color: '#6c7086',
+  fontSize: 12,
+  flexShrink: 0,
+  marginLeft: 12,
+};
+const channelCollapsedHint: React.CSSProperties = {
+  color: '#6c7086',
+  fontSize: 12,
+  margin: 0,
+  lineHeight: 1.55,
+};
 const authBox: React.CSSProperties = {
   background: '#181825', border: '1px solid #f9e2af', borderRadius: 8,
   padding: '14px 16px', marginBottom: 8,

@@ -63,26 +63,42 @@ export function getHubAuthToken(): string | undefined {
   return getAuthToken();
 }
 
+/** Whether the Hub API requires a Bearer token (public /api/health probe). */
+export async function fetchHubAuthRequired(): Promise<boolean> {
+  const res = await fetch('/api/health');
+  const body = (await res.json()) as { authRequired?: boolean };
+  return Boolean(body.authRequired);
+}
+
+/** Validate a token against a protected endpoint. */
+export async function verifyHubAuthToken(
+  token: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const res = await fetch('/api/instances', {
+    headers: { Authorization: `Bearer ${token.trim()}` },
+  });
+  if (res.ok) return { ok: true };
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  return { ok: false, error: body.error ?? `校验失败（HTTP ${res.status}）` };
+}
+
 /**
- * If the page was opened with `?token=...`, persist it and strip the query
- * (avoids leaking the secret via referrer / screenshots of the address bar).
+ * Remove a legacy `?token=` from the address bar without persisting it.
+ * Tokens must be entered in the dashboard UI (localStorage), not via URL.
  */
-export function bootstrapHubAuthTokenFromUrl(
+export function stripHubAuthTokenFromUrl(
   search: string = typeof window !== 'undefined' ? window.location.search : '',
-): boolean {
-  if (typeof window === 'undefined') return false;
+): void {
+  if (typeof window === 'undefined') return;
   try {
     const params = new URLSearchParams(search);
-    const fromQuery = params.get('token')?.trim();
-    if (!fromQuery) return false;
-    setHubAuthToken(fromQuery);
+    if (!params.has('token')) return;
     params.delete('token');
     const next = params.toString();
     const url = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`;
     window.history.replaceState(null, '', url);
-    return true;
   } catch {
-    return false;
+    // ignore
   }
 }
 
