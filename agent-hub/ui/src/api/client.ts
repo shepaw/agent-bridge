@@ -101,8 +101,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const body = await res.json() as T | { error: string };
-  if (!res.ok) throw new Error((body as { error: string }).error ?? `HTTP ${res.status}`);
+  const text = await res.text();
+  let body: T | { error?: string } | null = null;
+  if (text) {
+    try {
+      body = JSON.parse(text) as T | { error?: string };
+    } catch {
+      body = null;
+    }
+  }
+  if (!res.ok) {
+    if (res.status === 413) {
+      throw new Error('文件太大，上传失败（单文件上限约 5MB）');
+    }
+    const msg =
+      (body && typeof body === 'object' && 'error' in body && body.error)
+        ? String(body.error)
+        : `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
   return body as T;
 }
 

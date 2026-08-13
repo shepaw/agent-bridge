@@ -117,6 +117,18 @@ function spaceLabel(space: string): string {
   return map[space] ?? space;
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    for (let j = 0; j < slice.length; j += 1) {
+      binary += String.fromCharCode(slice[j]!);
+    }
+  }
+  return btoa(binary);
+}
+
 function isDirEntry(entry: StoreEntry): boolean {
   return entry.kind === 'dir' || (!entry.kind && !entry.sha256 && entry.size === 0);
 }
@@ -491,6 +503,11 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     if (!uri || !writable) return;
     const parsed = parseCurrent(uri);
     if (!parsed) return;
+    const maxBytes = 5 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setErr(`文件太大（${formatSize(file.size)}），单文件上限 5MB`);
+      return;
+    }
     const base = parsed.path ? `${parsed.path}/` : '';
     const filePath = `${base}${file.name}`;
     const target = entryUri(parsed.space, parsed.device, filePath);
@@ -498,10 +515,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     setErr(null);
     try {
       const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]!);
-      await api.store.write({ uri: target, contentBase64: btoa(binary) });
+      await api.store.write({ uri: target, contentBase64: bytesToBase64(new Uint8Array(buf)) });
       await loadList(uri);
       if (roots) void loadRecent(side, roots);
     } catch (e) {
@@ -634,8 +648,8 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
 
         {/* ── Home: folders first, then recent ───────────────────── */}
         {showHome && (
-          <>
-            <section style={{ marginBottom: 20 }}>
+          <div style={homeScroll}>
+            <section style={{ marginBottom: 20, flexShrink: 0 }}>
               <h4 style={sectionTitle}>分区文件夹</h4>
               {side.kind === 'agent' && activeAgent ? (
                 <div style={spaceGrid}>
@@ -663,7 +677,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
               )}
             </section>
 
-            <section>
+            <section style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
               <h4 style={sectionTitle}>最近文件</h4>
               {loading && <p style={muted}>加载中…</p>}
               {!loading && recent.length === 0 && (
@@ -695,12 +709,12 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                 </div>
               )}
             </section>
-          </>
+          </div>
         )}
 
         {/* ── Folder browser ─────────────────────────────────────── */}
         {uri && (
-          <>
+          <div style={browserPane}>
             <div style={crumbRow}>
               {breadcrumb.map((c, i) => (
                 <span key={`${c.label}-${i}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -847,7 +861,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                 </div>
               )}
             </div>
-          </>
+          </div>
         )}
       </main>
     </div>
@@ -855,7 +869,8 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
 }
 
 const shell: React.CSSProperties = {
-  display: 'flex', gap: 0, alignItems: 'stretch', minHeight: 520,
+  display: 'flex', gap: 0, alignItems: 'stretch',
+  height: 'calc(100vh - 140px)', minHeight: 420,
   background: '#1e1e2e', border: '1px solid #313244', borderRadius: 10, overflow: 'hidden',
 };
 const sideNav: React.CSSProperties = {
@@ -876,12 +891,21 @@ const sideItem = (active: boolean): React.CSSProperties => ({
 const sideIcon: React.CSSProperties = { flexShrink: 0, color: '#89b4fa', fontSize: 14, lineHeight: '18px' };
 const sideLabel: React.CSSProperties = { fontSize: 13, fontWeight: 600, lineHeight: 1.3 };
 const sideSub: React.CSSProperties = { fontSize: 10, color: '#6c7086', marginTop: 2 };
-const mainPane: React.CSSProperties = { flex: 1, minWidth: 0, padding: '16px 18px', overflow: 'auto' };
+const mainPane: React.CSSProperties = {
+  flex: 1, minWidth: 0, minHeight: 0, padding: '16px 18px',
+  display: 'flex', flexDirection: 'column', overflow: 'hidden',
+};
 const mainHeader: React.CSSProperties = {
-  display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14,
+  display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14, flexShrink: 0,
 };
 const mainTitle: React.CSSProperties = { margin: 0, color: '#cdd6f4', fontSize: 16 };
 const mainHint: React.CSSProperties = { margin: '4px 0 0', color: '#a6adc8', fontSize: 12 };
+const homeScroll: React.CSSProperties = {
+  flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+};
+const browserPane: React.CSSProperties = {
+  flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+};
 const sectionTitle: React.CSSProperties = { margin: '0 0 10px', color: '#cdd6f4', fontSize: 13, fontWeight: 600 };
 const roBadge: React.CSSProperties = {
   background: '#313244', color: '#fab387', borderRadius: 4, padding: '4px 8px', fontSize: 11, flexShrink: 0,
@@ -903,7 +927,7 @@ const spaceCode: React.CSSProperties = {
 const recentList: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 2,
   background: '#11111b', border: '1px solid #313244', borderRadius: 8,
-  maxHeight: 280, overflowY: 'auto',
+  flex: 1, minHeight: 160, overflowY: 'auto',
 };
 const recentRow: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
@@ -924,7 +948,7 @@ const recentRight: React.CSSProperties = {
 };
 const fileIconStyle: React.CSSProperties = { flexShrink: 0, fontSize: 16, width: 22, textAlign: 'center' };
 const crumbRow: React.CSSProperties = {
-  display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 10,
+  display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 10, flexShrink: 0,
 };
 const crumbBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: '#89b4fa', cursor: 'pointer', fontSize: 12, padding: '2px 4px',
@@ -933,7 +957,7 @@ const navBtn: React.CSSProperties = {
   background: 'transparent', border: '1px solid #45475a', color: '#a6adc8',
   borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap', marginLeft: 4,
 };
-const toolbar: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 };
+const toolbar: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, flexShrink: 0 };
 const primaryBtn: React.CSSProperties = {
   background: '#89b4fa', color: '#1e1e2e', border: 'none', borderRadius: 6,
   padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontSize: 13,
@@ -947,7 +971,7 @@ const dangerBtn: React.CSSProperties = {
   padding: '6px 12px', cursor: 'pointer', fontSize: 12,
 };
 const newBox: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12,
+  display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, flexShrink: 0,
   padding: 12, background: '#181825', border: '1px solid #313244', borderRadius: 6,
 };
 const inp: React.CSSProperties = {
@@ -956,12 +980,13 @@ const inp: React.CSSProperties = {
 };
 const browserSplit: React.CSSProperties = {
   display: 'grid', gridTemplateColumns: 'minmax(280px, 1.2fr) minmax(200px, 1fr)', gap: 12,
+  flex: 1, minHeight: 0,
 };
 const browserFull: React.CSSProperties = {
-  display: 'block',
+  display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
 };
 const listBox: React.CSSProperties = {
-  minHeight: 280, maxHeight: 480, overflowY: 'auto',
+  flex: 1, minHeight: 200, overflowY: 'auto',
   background: '#11111b', border: '1px solid #313244', borderRadius: 6,
 };
 const listHeader: React.CSSProperties = {
@@ -980,7 +1005,7 @@ const colName: React.CSSProperties = {
 const colSize: React.CSSProperties = { width: 72, flexShrink: 0, textAlign: 'right', color: '#6c7086', fontSize: 11 };
 const colTime: React.CSSProperties = { width: 88, flexShrink: 0, textAlign: 'right', color: '#6c7086', fontSize: 11 };
 const previewBox: React.CSSProperties = {
-  minHeight: 280, maxHeight: 480, overflowY: 'auto',
+  minHeight: 0, overflowY: 'auto',
   background: '#11111b', border: '1px solid #313244', borderRadius: 6, padding: 12,
 };
 const previewHeaderRow: React.CSSProperties = {
@@ -999,5 +1024,5 @@ const previewPre: React.CSSProperties = {
   color: '#cdd6f4', fontSize: 12, fontFamily: 'ui-monospace, Menlo, monospace',
 };
 const previewImg: React.CSSProperties = {
-  maxWidth: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 4,
+  maxWidth: '100%', maxHeight: 'calc(100vh - 280px)', objectFit: 'contain', borderRadius: 4,
 };

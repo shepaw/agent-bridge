@@ -75,7 +75,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       },
     }),
   );
-  app.use(express.json());
+  app.use(express.json({ limit: '8mb' }));
 
   // Auth for all /api routes (health is exempt inside middleware).
   app.use('/api', createAuthMiddleware(authToken));
