@@ -60,9 +60,8 @@ import {
   InstanceNotFoundError,
   removeCustomEngineFromHub,
   isKnownEngine,
+  parseSessionMode,
   resolvePublicHost,
-  type ApprovalMode,
-  type ApprovalPolicyConfig,
   type InstanceConfig,
   type TunnelConfig,
   CustomEngineExistsError,
@@ -211,6 +210,7 @@ cli
   .option('--tunnel-secret <secret>', 'HMAC-SHA256 signing secret for this channel')
   .option('--extra-arg <arg>', 'Extra argument passed through to gateway serve (repeatable)', { default: [] })
   .option('--env <KEY=VALUE>', 'Set a instance env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
+  .option('--session-mode <mode>', 'Native agent session mode (engine-specific, e.g. agent/plan/acceptEdits/on-request)')
   .action(async (opts: {
     engine: string;
     cwd: string;
@@ -223,6 +223,7 @@ cli
     tunnelSecret?: string;
     extraArg?: string | string[];
     env?: string | string[];
+    sessionMode?: string;
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
@@ -267,6 +268,7 @@ cli
       // Auto-derive baseUrl from tunnel if not explicitly set
       const baseUrl = opts.baseUrl ?? (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
 
+      const resolvedMode = parseSessionMode(engine, opts.sessionMode);
       const instance: Parameters<typeof addInstance>[1] = {
         id,
         label: opts.label ?? id,
@@ -278,15 +280,18 @@ cli
         extraArgs,
         createdAt: new Date().toISOString(),
         tunnel,
+        ...(resolvedMode !== undefined && { sessionMode: resolvedMode }),
         plainEnvVars: Object.keys(plainEnvVars).length > 0 ? plainEnvVars : undefined,
       };
 
       const next = addInstance(cfg, instance);
       ensureInstanceDir(id);
+      const saved = next.instances.find((p) => p.id === id);
 
       console.log(`Registered instance "${id}".`);
       console.log(`  label:     ${instance.label}`);
       console.log(`  engine:    ${instance.engine}`);
+      if (saved?.sessionMode) console.log(`  mode:      ${saved.sessionMode}`);
       console.log(`  cwd:       ${instance.cwd}`);
       console.log(`  bind:      ${instance.host}:${instance.port}`);
       if (instance.baseUrl) console.log(`  base URL:  ${instance.baseUrl}`);
@@ -298,7 +303,6 @@ cli
       }
       console.log('');
       console.log(`Next: shepaw-hub start ${id}`);
-      void next;
     } catch (err) {
       exitWithError(err);
     }
@@ -351,6 +355,7 @@ cli
       console.log(`Instance: ${p.id}`);
       console.log(`  label:       ${p.label}`);
       console.log(`  engine:      ${p.engine}`);
+      if (p.sessionMode) console.log(`  session mode: ${p.sessionMode}`);
       console.log(`  cwd:         ${p.cwd}`);
       console.log(`  bind:        ${p.host}:${p.port}`);
       console.log(`  base URL:    ${p.baseUrl || '(none — pair URL uses bind host)'}`);
@@ -425,6 +430,7 @@ cli
   .option('--clear-tunnel', 'Remove tunnel configuration from this instance')
   .option('--env <KEY=VALUE>', 'Set/update an env var, e.g. ANTHROPIC_API_KEY=sk-... (repeatable)', { default: [] })
   .option('--clear-env', 'Remove all stored env vars from this instance')
+  .option('--session-mode <mode>', 'Native agent session mode (engine-specific)')
   .action((id: string, opts: {
     label?: string;
     host?: string;
@@ -437,6 +443,7 @@ cli
     clearTunnel?: boolean;
     env?: string | string[];
     clearEnv?: boolean;
+    sessionMode?: string;
   }) => {
     try {
       const cfg = loadOrCreateHubConfig();
@@ -450,11 +457,16 @@ cli
         tunnel?: TunnelConfig;
         mergeEnvVars?: Record<string, string>;
         clearEnvVars?: boolean;
+        sessionMode?: string;
       } = {};
       if (opts.label !== undefined) patch.label = opts.label;
       if (opts.host !== undefined) patch.host = opts.host;
       if (opts.baseUrl !== undefined) patch.baseUrl = opts.baseUrl;
       if (opts.cwd !== undefined) patch.cwd = opts.cwd;
+      if (opts.sessionMode !== undefined) {
+        const parsed = parseSessionMode(getInstance(cfg, id).engine, opts.sessionMode);
+        if (parsed !== undefined) patch.sessionMode = parsed;
+      }
       if (opts.extraArg !== undefined) {
         patch.extraArgs = Array.isArray(opts.extraArg)
           ? opts.extraArg
@@ -499,32 +511,6 @@ cli
       updateInstance(cfg, id, patch);
       console.log(`Updated instance "${id}".`);
       console.log('Restart for changes to take effect:  shepaw-hub stop ' + id + ' && shepaw-hub start ' + id);
-    } catch (err) {
-      exitWithError(err);
-    }
-  });
-
-cli
-  .command('instance-set-approval <id>', 'Set a per-instance tool-call approval override')
-  .option('--mode <mode>', 'ask | auto | custom')
-  .option('--allow-kinds <csv>', 'Tool kinds to auto-approve, e.g. read,search,fetch')
-  .option('--ask-kinds <csv>', 'Tool kinds to ALWAYS review, e.g. execute,delete')
-  .option('--allow-pattern <regex>', 'Regex to auto-approve (repeatable)')
-  .option('--deny-pattern <regex>', 'Regex to auto-deny (repeatable)')
-  .option('--inherit', 'Remove the override so the instance inherits the device default')
-  .action((id: string, opts: ApprovalCliOpts & { inherit?: boolean }) => {
-    try {
-      const cfg = loadOrCreateHubConfig();
-      if (opts.inherit) {
-        updateInstance(cfg, id, { approval: undefined });
-        console.log(`Instance "${id}" now inherits the device-wide approval policy.`);
-        return;
-      }
-      const approval = buildApprovalFromOpts(opts);
-      updateInstance(cfg, id, { approval });
-      printApproval(`Approval policy for "${id}"`, approval);
-      console.log('');
-      console.log(`Restart to apply:  shepaw-hub stop ${id} && shepaw-hub start ${id}`);
     } catch (err) {
       exitWithError(err);
     }
@@ -1004,32 +990,6 @@ cli
   });
 
 cli
-  .command('gateway-set-approval', 'Set the device-wide tool-call approval policy (all agents)')
-  .option('--mode <mode>', 'ask (always review) | auto (approve all but deny/ask rules) | custom')
-  .option('--allow-kinds <csv>', 'Tool kinds to auto-approve, e.g. read,search,fetch')
-  .option('--ask-kinds <csv>', 'Tool kinds to ALWAYS review (overrides allow), e.g. execute,delete')
-  .option('--allow-pattern <regex>', 'Regex (on title+command) to auto-approve (repeatable)')
-  .option('--deny-pattern <regex>', 'Regex to auto-deny (repeatable; highest precedence)')
-  .option('--clear', 'Remove the device-wide approval policy (falls back to always-ask)')
-  .action((opts: ApprovalCliOpts & { clear?: boolean }) => {
-    try {
-      const cfg = loadOrCreateHubConfig();
-      if (opts.clear) {
-        setHubGateway(cfg, { approval: null });
-        console.log('Cleared device-wide approval policy (agents default to always-ask).');
-        return;
-      }
-      const approval = buildApprovalFromOpts(opts);
-      setHubGateway(cfg, { approval });
-      printApproval('Device-wide approval policy', approval);
-      console.log('');
-      console.log('Restart affected agents to apply: shepaw-hub instance stop/start <id>');
-    } catch (err) {
-      exitWithError(err);
-    }
-  });
-
-cli
   .command('gateway-show', 'Show the gateway channel + router configuration')
   .action(() => {
     try {
@@ -1048,12 +1008,6 @@ cli
         console.log(`  secret:      ${'*'.repeat(8)} (set)`);
       } else {
         console.log('  channel:     (none — LAN-only)');
-      }
-      console.log('');
-      if (gw?.approval) {
-        printApproval('Approval policy (device default)', gw.approval);
-      } else {
-        console.log('Approval policy (device default): (none — agents always ask)');
       }
       console.log('');
       console.log(`Router:  ${running ? `running (pid ${state!.pid})` : 'stopped'}`);
@@ -1273,11 +1227,11 @@ cli
 
 cli.help((sections) => {
   const restoreMap: Array<[RegExp, string]> = [
-    [/instance-(add|list|show|remove|update|set-approval)/g, 'instance $1'],
+    [/instance-(add|list|show|remove|update)/g, 'instance $1'],
     [/peers-(list|add|remove)/g, 'peers $1'],
     [/logs-(rotate)/g, 'logs $1'],
     [/enroll-(list|revoke)/g, 'enroll $1'],
-    [/gateway-(set-channel|clear-channel|set-approval|show|start|stop|status)/g, 'gateway $1'],
+    [/gateway-(set-channel|clear-channel|show|start|stop|status)/g, 'gateway $1'],
     [/peer-(start|stop|status|pair|devices|devices-remove)/g, 'peer $1'],
   ];
   for (const s of sections) {
@@ -1292,62 +1246,6 @@ cli.version('0.2.0');
 cli.parse();
 
 // ── helpers ────────────────────────────────────────────────────────
-
-interface ApprovalCliOpts {
-  mode?: string;
-  allowKinds?: string;
-  askKinds?: string;
-  allowPattern?: string | string[];
-  denyPattern?: string | string[];
-}
-
-const APPROVAL_KIND_SET = new Set([
-  'read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other',
-]);
-
-function toArray(v: string | string[] | undefined): string[] {
-  if (v === undefined) return [];
-  return (Array.isArray(v) ? v : [v]).map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-function parseKindCsv(v: string | undefined, flag: string): string[] {
-  const kinds = (v ?? '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length > 0);
-  for (const k of kinds) {
-    if (!APPROVAL_KIND_SET.has(k)) {
-      throw new Error(
-        `Invalid tool kind "${k}" for ${flag}. Valid: ${[...APPROVAL_KIND_SET].join(', ')}.`,
-      );
-    }
-  }
-  return kinds;
-}
-
-/** Build an ApprovalPolicyConfig from CLI options, validating mode + kinds. */
-function buildApprovalFromOpts(opts: ApprovalCliOpts): ApprovalPolicyConfig {
-  const rawMode = (opts.mode ?? 'custom').trim().toLowerCase();
-  if (rawMode !== 'ask' && rawMode !== 'auto' && rawMode !== 'custom') {
-    throw new Error(`Invalid --mode "${opts.mode}". Use one of: ask, auto, custom.`);
-  }
-  return {
-    mode: rawMode as ApprovalMode,
-    allowKinds: parseKindCsv(opts.allowKinds, '--allow-kinds'),
-    askKinds: parseKindCsv(opts.askKinds, '--ask-kinds'),
-    allowPatterns: toArray(opts.allowPattern),
-    denyPatterns: toArray(opts.denyPattern),
-  };
-}
-
-function printApproval(title: string, p: ApprovalPolicyConfig): void {
-  console.log(`${title}:`);
-  console.log(`  mode:           ${p.mode}`);
-  console.log(`  allow kinds:    ${p.allowKinds.length > 0 ? p.allowKinds.join(', ') : '(none)'}`);
-  console.log(`  always-ask:     ${p.askKinds.length > 0 ? p.askKinds.join(', ') : '(none)'}`);
-  console.log(`  allow patterns: ${p.allowPatterns.length > 0 ? p.allowPatterns.join(' | ') : '(none)'}`);
-  console.log(`  deny patterns:  ${p.denyPatterns.length > 0 ? p.denyPatterns.join(' | ') : '(none)'}`);
-}
 
 /**
  * When a shared channel is configured, remote pairing only works if the

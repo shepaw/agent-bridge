@@ -3,8 +3,8 @@
  * are auto-approved (skipped), which are auto-denied, and which always require
  * remote review in the Shepaw app.
  *
- * Configured via env vars (injected by shepaw-hub from per-project / gateway
- * config):
+ * Configured via env vars (optional; Hub no longer injects these — remaining
+ * `session/request_permission` calls are forwarded to the Shepaw app):
  *
  *   PAW_ACP_APPROVAL_MODE           ask | auto | custom   (default: ask)
  *   PAW_ACP_APPROVAL_ALLOW_KINDS    comma list of ToolKind to auto-allow

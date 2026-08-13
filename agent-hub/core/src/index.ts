@@ -10,7 +10,6 @@ export {
   addInstance,
   addCustomEngineToHub,
   allocateInstanceId,
-  clearEngineApproval,
   DEFAULT_ROUTER_HOST,
   DEFAULT_ROUTER_PORT,
   deleteEngineEnvVar,
@@ -26,7 +25,6 @@ export {
   InstanceNotFoundError,
   removeCustomEngineFromHub,
   removeInstance,
-  resolveApprovalPolicy,
   resolveEngineEnvVars,
   saveHubConfig,
   setEngineEnvVar,
@@ -39,8 +37,6 @@ export {
 } from './config.js';
 export type {
   AgentEngine,
-  ApprovalMode,
-  ApprovalPolicyConfig,
   CredentialHint,
   EngineOverrides,
   EngineOverridesMap,
@@ -197,6 +193,7 @@ export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {
+  applyInstanceSessionMode,
   chatInstanceAcpRpc,
   closeInstanceAcpRpcClient,
   getInstanceConversationHistory,
@@ -253,6 +250,13 @@ export {
   validateCustomEngineId,
 } from './engines.js';
 export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo, EngineOverrideInstanceion } from './engines.js';
+export {
+  defaultSessionModeId,
+  getEngineSessionCatalog,
+  isKnownSessionMode,
+  parseSessionMode,
+} from './engine-modes.js';
+export type { EngineSessionMode, EngineSessionModeCatalog } from './engine-modes.js';
 export {
   BUILTIN_ENGINE_AVATARS,
   GENERIC_DEFAULT_AVATAR,

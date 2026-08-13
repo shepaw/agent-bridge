@@ -20,6 +20,10 @@ import {
   type ModelsListResult,
   type ModelsSetCurrentParams,
   type ModelsSetCurrentResult,
+  type ModesListParams,
+  type ModesListResult,
+  type ModesSetCurrentParams,
+  type ModesSetCurrentResult,
   type SessionHistoryParams,
   type SessionHistoryResult,
   type SessionInfo,
@@ -45,6 +49,12 @@ import { log } from './debug.js';
 import {
   writeStoreWriteContext,
 } from './store-write-context.js';
+import {
+  buildStorePouchCard,
+  pouchCardEnabled,
+  prependStorePouchCard,
+  resolveStoreDeviceIdFromEnv,
+} from './store-pouch-card.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
@@ -80,6 +90,9 @@ export class AcpProxyAgent extends ACPAgentServer {
 
   /** Last active Shepaw session — used for model picker when no session in params. */
   private lastShepawSessionId: string | undefined;
+
+  /** Sessions that already received the device pouch card (once per Shepaw session). */
+  private readonly pouchCardSessions = new Set<string>();
 
   constructor(opts: AcpProxyAgentOptions) {
     const spec = opts.engineSpec ?? resolveEngineSpec(opts.engine);
@@ -153,16 +166,31 @@ export class AcpProxyAgent extends ACPAgentServer {
 
     // Peer / app attachments arrive as path refs (or small base64). Resolve
     // outside the project cwd and pass ContentBlocks into Cursor.
-    const { blocks, materialized } = preparePromptFromAttachments(
+    const prepared = preparePromptFromAttachments(
       message,
       kwargs.attachments,
     );
-    if (materialized.length > 0) {
+    if (prepared.materialized.length > 0) {
       log(
         'onChat attachments=%d paths=%s',
-        materialized.length,
-        materialized.map((m) => m.absPath).join(', '),
+        prepared.materialized.length,
+        prepared.materialized.map((m) => m.absPath).join(', '),
       );
+    }
+
+    let blocks = prepared.blocks;
+    if (
+      pouchCardEnabled(process.env) &&
+      !this.pouchCardSessions.has(shepawSessionId)
+    ) {
+      blocks = prependStorePouchCard(
+        blocks,
+        buildStorePouchCard({
+          deviceId: resolveStoreDeviceIdFromEnv(process.env),
+        }),
+      );
+      this.pouchCardSessions.add(shepawSessionId);
+      log('injected device pouch card for session %s', shepawSessionId);
     }
 
     await this.subprocess.runPromptTurn(
@@ -284,6 +312,16 @@ export class AcpProxyAgent extends ACPAgentServer {
   override async onModelsSetCurrent(params: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
     const sessionId = params.session_id ?? this.lastShepawSessionId;
     return this.subprocess.setModel(params.model, sessionId);
+  }
+
+  override async onModesList(params: ModesListParams): Promise<ModesListResult> {
+    await this.subprocess.ensureCommandsWarm();
+    return this.subprocess.modesList(params.session_id);
+  }
+
+  override async onModesSetCurrent(params: ModesSetCurrentParams): Promise<ModesSetCurrentResult> {
+    const sessionId = params.session_id ?? this.lastShepawSessionId;
+    return this.subprocess.setMode(params.mode, sessionId);
   }
 
   override getRuntimeStatus(): AgentRuntimeStatus {

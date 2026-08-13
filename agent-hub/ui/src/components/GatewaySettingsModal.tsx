@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
-import type { ApprovalPolicy, GatewayInfo } from '../api/types.js';
-import { ApprovalPolicyEditor, emptyApprovalPolicy } from './ApprovalPolicyEditor.js';
+import type { GatewayInfo } from '../api/types.js';
 
 /**
  * Shared Channel Service tunnel + tunnel router controls. Used on the Peer
@@ -144,83 +143,9 @@ export function ChannelSettingsPanel() {
   );
 }
 
-/** Device-wide default tool-call approval policy (global settings tab). */
-export function ApprovalSettingsPanel() {
-  const [info, setInfo] = useState<GatewayInfo | null>(null);
-  const [approval, setApproval] = useState<ApprovalPolicy>(emptyApprovalPolicy());
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const load = async () => {
-    try {
-      const g = await api.gateway.get();
-      setInfo(g);
-      setApproval(g.approval ?? emptyApprovalPolicy());
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const saveApproval = async () => {
-    setBusy(true); setErr(null); setNotice(null);
-    try {
-      await api.gateway.setApproval(approval);
-      setNotice('已保存审核策略。重启相关 Agent 后生效。');
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const clearApproval = async () => {
-    setBusy(true); setErr(null); setNotice(null);
-    try {
-      await api.gateway.clearApproval();
-      setNotice('已移除审核策略（所有工具调用都将请求 App 审核）。');
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <p style={{ margin: '0 0 10px', color: '#6c7086', fontSize: 12 }}>
-        决定哪些工具调用自动放行/拒绝、哪些必须在 App 端审核。单个 Agent 或引擎可在各自设置中覆盖。
-      </p>
-      <ApprovalPolicyEditor value={approval} onChange={setApproval} />
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button style={primaryBtn} disabled={busy} onClick={() => void saveApproval()}>保存策略</button>
-        {info?.approval && (
-          <button style={secondaryBtn} disabled={busy} onClick={() => void clearApproval()}>移除策略</button>
-        )}
-      </div>
-      {notice && <p style={{ color: '#a6e3a1', fontSize: 13, marginTop: 10 }}>{notice}</p>}
-      {err && <p style={{ color: '#f38ba8', fontSize: 13, marginTop: 10 }}>{err}</p>}
-    </>
-  );
-}
-
 /** Combined panel for legacy modal callers. */
 export function GatewaySettingsPanel() {
-  return (
-    <>
-      <ChannelSettingsPanel />
-      <div style={section}>
-        <h4 style={sectionTitle}>工具调用审核策略（设备级默认）</h4>
-        <ApprovalSettingsPanel />
-      </div>
-    </>
-  );
+  return <ChannelSettingsPanel />;
 }
 
 /** Modal wrapper retained for any legacy callers. */
@@ -284,8 +209,6 @@ const secondaryBtn: React.CSSProperties = {
   background: 'transparent', color: '#cdd6f4', border: '1px solid #45475a',
   borderRadius: 6, padding: '8px 16px', cursor: 'pointer', fontWeight: 600,
 };
-const section: React.CSSProperties = { marginTop: 16, borderTop: '1px solid #313244', paddingTop: 14 };
-const sectionTitle: React.CSSProperties = { margin: '0 0 8px', color: '#cdd6f4', fontSize: 14 };
 const dangerBtn: React.CSSProperties = {
   background: '#452632', color: '#f38ba8', border: '1px solid #f38ba8',
   borderRadius: 5, padding: '6px 14px', cursor: 'pointer', fontSize: 13,

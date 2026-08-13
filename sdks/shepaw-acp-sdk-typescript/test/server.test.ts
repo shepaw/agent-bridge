@@ -794,6 +794,115 @@ describe('ACPAgentServer v2.1 — agent.models.*', () => {
   });
 });
 
+// ── agent.modes.list / agent.modes.setCurrent ──────────────────────
+
+describe('ACPAgentServer v2.1 — agent.modes.*', () => {
+  class ModesAgent extends ACPAgentServer {
+    current: string | undefined = 'agent';
+
+    override async onChat(ctx: TaskContext): Promise<void> {
+      await ctx.sendText('ok');
+    }
+
+    override async onModesList() {
+      return {
+        modes: [
+          { value: 'agent', display_name: 'Agent', description: 'Full tools' },
+          { value: 'plan', display_name: 'Plan', description: 'Plan only' },
+        ],
+        current: this.current,
+      };
+    }
+
+    override async onModesSetCurrent(p: { mode: string }) {
+      if (p.mode !== 'agent' && p.mode !== 'plan') {
+        throw new Error(`unknown mode: ${p.mode}`);
+      }
+      this.current = p.mode;
+      return { mode: p.mode, display_name: p.mode === 'agent' ? 'Agent' : 'Plan' };
+    }
+  }
+
+  let agent: ModesAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-modes-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new ModesAgent({ name: 'Modes', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop?.();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  it('agent.modes.list returns modes + current', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request<{
+      modes: Array<{ value: string; display_name: string }>;
+      current?: string;
+    }>('agent.modes.list');
+    expect(resp.result?.current).toBe('agent');
+    expect(resp.result?.modes).toHaveLength(2);
+    expect(resp.result?.modes[0]).toMatchObject({ value: 'agent', display_name: 'Agent' });
+
+    await client.close();
+  });
+
+  it('agent.modes.setCurrent updates and returns display_name', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request<{ mode: string; display_name?: string }>(
+      'agent.modes.setCurrent',
+      { mode: 'plan' },
+    );
+    expect(resp.result).toEqual({ mode: 'plan', display_name: 'Plan' });
+
+    const list = await client.request<{ current?: string }>('agent.modes.list');
+    expect(list.result?.current).toBe('plan');
+
+    await client.close();
+  });
+
+  it('agent.modes.setCurrent rejects missing mode param with -32602', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+
+    const resp = await client.request('agent.modes.setCurrent');
+    expect(resp).toHaveProperty('error');
+    const asErr = resp as unknown as { error: { code: number } };
+    expect(asErr.error.code).toBe(-32602);
+
+    await client.close();
+  });
+});
+
 // ── registerFormHandler (non-blocking form flow) ───────────────────
 
 describe('ACPAgentServer v2.1 — registerFormHandler', () => {

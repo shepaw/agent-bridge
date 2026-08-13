@@ -45,7 +45,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
 
-import type { ApprovalPolicyConfig, InstanceConfig } from './config.js';
+import type { InstanceConfig } from './config.js';
 import {
   augmentSpawnPath,
   getCursorAcpCommand,
@@ -54,7 +54,7 @@ import {
   resolveEngineAvailability,
   SPAWN_PATH_PREFIXES,
 } from './engine-setup.js';
-import { loadOrCreateHubConfig, resolveApprovalPolicy, isEngineDisabled, resolveEngineEnvVars } from './config.js';
+import { loadOrCreateHubConfig, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand, isKnownEngine } from './engines.js';
 import { instancePaths, hubRoot } from './paths.js';
@@ -77,27 +77,6 @@ export interface InstanceState {
 }
 
 export type StopResult = 'graceful' | 'hard' | 'not-running';
-
-/**
- * Serialize an approval policy into the `PAW_ACP_APPROVAL_*` env vars the ACP
- * proxy reads (see acp-proxy-ts `permission/policy.ts`). Returns an empty map
- * when no policy is configured so the proxy falls back to always-ask.
- */
-function approvalPolicyEnv(
-  policy: ApprovalPolicyConfig | undefined,
-): Record<string, string> {
-  if (policy === undefined) return {};
-  const env: Record<string, string> = { PAW_ACP_APPROVAL_MODE: policy.mode };
-  if (policy.allowKinds.length > 0) env.PAW_ACP_APPROVAL_ALLOW_KINDS = policy.allowKinds.join(',');
-  if (policy.askKinds.length > 0) env.PAW_ACP_APPROVAL_ASK_KINDS = policy.askKinds.join(',');
-  if (policy.allowPatterns.length > 0) {
-    env.PAW_ACP_APPROVAL_ALLOW_PATTERNS = policy.allowPatterns.join('\n');
-  }
-  if (policy.denyPatterns.length > 0) {
-    env.PAW_ACP_APPROVAL_DENY_PATTERNS = policy.denyPatterns.join('\n');
-  }
-  return env;
-}
 
 // ── public API ─────────────────────────────────────────────────────
 
@@ -268,10 +247,9 @@ export async function startInstance(instance: InstanceConfig): Promise<{
               PAW_ACP_TUNNEL_SECRET: instance.tunnel.secret,
             }
           : {}),
-        // Tool-call approval policy (request #4): resolve the effective policy
-        // (instance override → gateway default) and hand it to the ACP proxy as
-        // PAW_ACP_APPROVAL_* env so it can auto-skip/deny without a round trip.
-        ...approvalPolicyEnv(resolveApprovalPolicy(hubCfg, instance)),
+        ...(instance.sessionMode !== undefined && instance.sessionMode.length > 0
+          ? { PAW_ACP_SESSION_MODE: instance.sessionMode }
+          : {}),
       }),
     });
 

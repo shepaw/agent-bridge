@@ -19,6 +19,10 @@ describe('loadPolicyFromEnv', () => {
     expect(cfg.denyPatterns).toEqual([]);
   });
 
+  it('honours an explicit ask mode', () => {
+    expect(loadPolicyFromEnv({ PAW_ACP_APPROVAL_MODE: 'ask' }).mode).toBe('ask');
+  });
+
   it('parses mode, kinds and patterns, filtering invalid kinds', () => {
     const cfg = loadPolicyFromEnv({
       PAW_ACP_APPROVAL_MODE: 'custom',
@@ -40,8 +44,14 @@ describe('loadPolicyFromEnv', () => {
 });
 
 describe('PermissionPolicy.decide', () => {
-  it('always asks with the default policy', () => {
+  it('asks with the default policy', () => {
     const p = new PermissionPolicy(DEFAULT_POLICY);
+    expect(p.decide(toolCall('execute', 'run', { command: 'ls' })).decision).toBe('ask');
+    expect(p.canAutoDecide).toBe(false);
+  });
+
+  it('always asks when mode is ask', () => {
+    const p = new PermissionPolicy({ ...DEFAULT_POLICY, mode: 'ask' });
     expect(p.decide(toolCall('execute', 'run', { command: 'ls' })).decision).toBe('ask');
     expect(p.canAutoDecide).toBe(false);
   });

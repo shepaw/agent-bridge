@@ -54,6 +54,7 @@ import {
   getInstanceConversationHistory,
   InstanceGatewayOfflineError,
   closeInstanceAcpRpcClient,
+  applyInstanceSessionMode,
   loadOrCreateHubConfig,
   nextFreePort,
   probeInstanceRuntime,
@@ -78,6 +79,7 @@ import {
   type InstanceConfig,
   type TunnelConfig,
   isKnownEngine,
+  parseSessionMode,
   isAlive,
   resolvePublicHost,
   ensureAgentStoreMappings,
@@ -85,7 +87,6 @@ import {
   workspaceStoreUri,
   agentPrivateStoreUri,
 } from '@shepaw/agent-hub-core';
-import { parseApprovalBody } from './approval.js';
 
 export const instancesRouter = Router();
 
@@ -283,7 +284,7 @@ instancesRouter.post('/restart-all', async (_req: Request, res: Response) => {
 
 instancesRouter.post('/', async (req: Request, res: Response) => {
   try {
-    const { engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars } = req.body as Record<string, unknown>;
+    const { engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars, sessionMode } = req.body as Record<string, unknown>;
     const cfg = loadOrCreateHubConfig();
     const id = allocateInstanceId(cfg.instances.map((p) => p.id));
     const resolvedEngine = parseEngine(engine ?? 'codebuddy');
@@ -322,6 +323,7 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
       }
     }
 
+    const resolvedSessionMode = parseSessionMode(resolvedEngine, sessionMode);
     const displayLabel = typeof label === 'string' && label.length > 0 ? label : id;
     const instance: Omit<InstanceConfig, 'envVars'> & { plainEnvVars?: Record<string, string> } = {
       id,
@@ -334,6 +336,7 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
       extraArgs: Array.isArray(extraArgs) ? extraArgs.filter((x): x is string => typeof x === 'string') : [],
       createdAt: new Date().toISOString(),
       tunnel: resolvedTunnel,
+      ...(resolvedSessionMode !== undefined && { sessionMode: resolvedSessionMode }),
       plainEnvVars: Object.keys(mergedEnvVars).length > 0 ? mergedEnvVars : undefined,
     };
 
@@ -424,11 +427,19 @@ instancesRouter.patch('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const existing = getInstance(cfg, req.params.id!);
-    const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars } = req.body as Record<string, unknown>;
+    const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars, sessionMode } = req.body as Record<string, unknown>;
     const patch: Parameters<typeof updateInstance>[2] = {};
+    let nextSessionMode: string | undefined;
     if (typeof label === 'string') patch.label = label;
     if (typeof host === 'string') patch.host = host;
     if (typeof cwd === 'string') patch.cwd = cwd;
+    if (sessionMode !== undefined) {
+      const parsed = parseSessionMode(existing.engine, sessionMode);
+      if (parsed !== undefined) {
+        patch.sessionMode = parsed;
+        nextSessionMode = parsed;
+      }
+    }
     if (Array.isArray(extraArgs)) patch.extraArgs = extraArgs.filter((x): x is string => typeof x === 'string');
     if (clearTunnel === true) {
       (patch as Record<string, unknown>).tunnel = undefined;
@@ -467,6 +478,20 @@ instancesRouter.patch('/:id', async (req: Request, res: Response) => {
     const next = updateInstance(cfg, req.params.id!, patch);
     const updated = next.instances.find((p) => p.id === req.params.id)!;
 
+    if (nextSessionMode !== undefined) {
+      const runtime = await probeInstanceRuntime(updated);
+      if (runtime.availability === 'online' || runtime.availability === 'degraded') {
+        try {
+          await applyInstanceSessionMode(updated.id, nextSessionMode);
+        } catch (err) {
+          console.warn(
+            `[shepaw-hub] saved sessionMode="${nextSessionMode}" for ${updated.id} ` +
+              `but live apply failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
+
     // If a new tunnel was set, update lastTunnelServerUrl and lastTunnelSecretHint in hub meta.
     if (patch.tunnel) {
       const root = hubRoot();
@@ -486,47 +511,6 @@ instancesRouter.patch('/:id', async (req: Request, res: Response) => {
       res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: String(err) });
-    }
-  }
-});
-
-// ── per-instance approval ───────────────────────────────────────────
-
-/**
- * PUT /api/instances/:id/approval — set a per-instance tool-call approval
- * override. Body is an ApprovalPolicyConfig. Replaces the device-wide /
- * engine-level default for this instance only.
- */
-instancesRouter.put('/:id/approval', async (req: Request, res: Response) => {
-  try {
-    const cfg = loadOrCreateHubConfig();
-    getInstance(cfg, req.params.id!); // throws 404 if missing
-    const approval = parseApprovalBody(req.body as Record<string, unknown>);
-    const next = updateInstance(cfg, req.params.id!, { approval });
-    const updated = next.instances.find((p) => p.id === req.params.id)!;
-    res.json(await enrichInstance(updated));
-  } catch (err) {
-    if (err instanceof InstanceNotFoundError) {
-      res.status(404).json({ error: err.message });
-    } else {
-      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-});
-
-/** DELETE /api/instances/:id/approval — clear the override (inherit engine/global default). */
-instancesRouter.delete('/:id/approval', async (req: Request, res: Response) => {
-  try {
-    const cfg = loadOrCreateHubConfig();
-    getInstance(cfg, req.params.id!);
-    const next = updateInstance(cfg, req.params.id!, { approval: undefined });
-    const updated = next.instances.find((p) => p.id === req.params.id)!;
-    res.json(await enrichInstance(updated));
-  } catch (err) {
-    if (err instanceof InstanceNotFoundError) {
-      res.status(404).json({ error: err.message });
-    } else {
-      res.status(500).json({ error: String(err) });
     }
   }
 });

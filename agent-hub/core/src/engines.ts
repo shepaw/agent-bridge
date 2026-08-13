@@ -3,6 +3,7 @@
  */
 
 import { BUILTIN_ENGINE_ACP_COMMANDS, getCursorAcpCommand } from './engine-setup.js';
+import { getEngineSessionCatalog } from './engine-modes.js';
 import { validateInstanceId } from './paths.js';
 
 export const BUILTIN_ENGINE_IDS = [
@@ -60,6 +61,9 @@ export interface EngineInfo {
   readonly available?: boolean;
   /** Human-readable reason when {@link available} is false. */
   readonly unavailableReason?: string | null;
+  /** Native session modes this engine can be started in. Empty = none. */
+  readonly sessionModes?: ReadonlyArray<{ id: string; name: string; description: string }>;
+  readonly defaultSessionMode?: string;
 }
 
 export class CustomEngineExistsError extends Error {
@@ -174,26 +178,35 @@ export function listEngineInfos(
   customEngines: ReadonlyArray<CustomEngineDefinition>,
   overrides?: Readonly<Record<string, EngineOverrideInstanceion>>,
 ): EngineInfo[] {
+  const withModes = (id: string, info: EngineInfo): EngineInfo => {
+    const catalog = getEngineSessionCatalog(id);
+    return {
+      ...info,
+      sessionModes: [...catalog.modes],
+      ...(catalog.defaultModeId !== undefined && { defaultSessionMode: catalog.defaultModeId }),
+    };
+  };
+
   const builtin: EngineInfo[] = BUILTIN_ENGINE_IDS.map((id) => {
     const ov = overrides?.[id];
-    return {
+    return withModes(id, {
       id,
       displayName: ov?.displayName ?? BUILTIN_ENGINE_LABELS[id],
       acpCommand: id === 'cursor' ? getCursorAcpCommand() : BUILTIN_ENGINE_ACP_COMMANDS[id],
       builtin: true,
       ...(ov?.disabled && { disabled: true }),
-    };
+    });
   });
 
   const custom: EngineInfo[] = customEngines.map((e) => {
     const ov = overrides?.[e.id];
-    return {
+    return withModes(e.id, {
       id: e.id,
       displayName: ov?.displayName ?? e.displayName,
       acpCommand: formatShellCommand(e.command, e.args),
       builtin: false,
       ...(ov?.disabled && { disabled: true }),
-    };
+    });
   });
 
   return [...builtin, ...custom];

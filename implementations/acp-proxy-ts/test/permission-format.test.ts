@@ -93,6 +93,9 @@ describe('pickOption', () => {
     expect(pickOption(OPTIONS, 'allow')).toBe('opt-allow');
     expect(pickOption([OPTIONS[1]!, OPTIONS[2]!], 'allow')).toBe('opt-always');
   });
+  it('prefers allow_always when asked to cache the grant', () => {
+    expect(pickOption(OPTIONS, 'allow', true)).toBe('opt-always');
+  });
   it('picks reject for deny', () => {
     expect(pickOption(OPTIONS, 'deny')).toBe('opt-reject');
   });

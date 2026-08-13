@@ -1,11 +1,9 @@
 /**
  * Gateway (shared channel + tunnel router) routes.
  *
- * GET    /api/gateway            — channel config (secret masked) + router status + approval
+ * GET    /api/gateway            — channel config (secret masked) + router status
  * PUT    /api/gateway/channel    — set the shared Channel Service tunnel
  * DELETE /api/gateway/channel    — remove the shared channel (LAN-only)
- * PUT    /api/gateway/approval   — set the device-wide tool-call approval policy
- * DELETE /api/gateway/approval   — remove the approval policy (agents always ask)
  * POST   /api/gateway/start      — start the device tunnel router
  * POST   /api/gateway/stop       — stop the device tunnel router
  */
@@ -21,7 +19,6 @@ import {
   startGatewayRouter,
   stopGatewayRouter,
 } from '@shepaw/agent-hub-core';
-import { parseApprovalBody } from './approval.js';
 
 export const gatewayRouter = Router();
 
@@ -52,7 +49,6 @@ gatewayRouter.get('/', (_req: Request, res: Response) => {
     channel: gw?.tunnel
       ? { serverUrl: gw.tunnel.serverUrl, channelId: gw.tunnel.channelId, secretSet: true }
       : null,
-    approval: gw?.approval ?? null,
     status: gatewayStatePayload(),
   });
 });
@@ -90,27 +86,6 @@ gatewayRouter.delete('/channel', (_req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     setHubGateway(cfg, { tunnel: null });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-gatewayRouter.put('/approval', (req: Request, res: Response) => {
-  try {
-    const approval = parseApprovalBody((req.body ?? {}) as Record<string, unknown>);
-    const cfg = loadOrCreateHubConfig();
-    setHubGateway(cfg, { approval });
-    res.json({ ok: true, approval });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-gatewayRouter.delete('/approval', (_req: Request, res: Response) => {
-  try {
-    const cfg = loadOrCreateHubConfig();
-    setHubGateway(cfg, { approval: null });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

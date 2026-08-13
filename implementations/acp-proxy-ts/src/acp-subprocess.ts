@@ -12,7 +12,7 @@ import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
 import { TaskCancelledError } from 'shepaw-acp-sdk';
-import type { ModelsListResult, ModelsSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
+import type { ModelsListResult, ModelsSetCurrentResult, ModesListResult, ModesSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
 import { resolveCodexCliBinary, spawnCommand } from './engines.js';
@@ -23,6 +23,14 @@ import {
   findModelConfigOption,
   mergeConfigOptions,
 } from './config-options.js';
+import {
+  advertisedModesList,
+  describeSessionModePlan,
+  displayNameForMode,
+  planRequestedMode,
+  requestedSessionMode,
+  resolveRequestedModeId,
+} from './session-mode.js';
 import { log } from './debug.js';
 import { flushAgentMessage, mapSessionUpdate } from './session-mapper.js';
 import {
@@ -145,8 +153,9 @@ export interface RunPromptTurnOptions {
 export interface AcpSubprocessOptions {
   readonly spec: AcpEngineSpec;
   readonly cwd: string;
+  /** Extra env vars forwarded to the ACP agent subprocess. */
   readonly env?: Record<string, string | undefined>;
-  /** Approval policy consulted before asking the app. Defaults to always-ask. */
+  /** Approval policy consulted before asking the app. Defaults to ask. */
   readonly policy?: PermissionPolicy;
   /** Display name used in permission prompts, e.g. "Claude". */
   readonly agentDisplayName?: string;
@@ -177,6 +186,12 @@ export class AcpSubprocess {
   /** Preferred model value applied to newly created sessions. */
   private preferredModelValue: string | undefined;
 
+  /** Preferred session mode (Hub `PAW_ACP_SESSION_MODE` or App picker). */
+  private preferredModeId: string | undefined;
+
+  /** Latest advertised session modes per Shepaw session. */
+  private readonly modesByShepawSession = new Map<string, acp.SessionModeState>();
+
   /** Current in-flight turn — used by permission/fs handlers. */
   private currentTurn: TurnContext | undefined;
 
@@ -184,6 +199,8 @@ export class AcpSubprocess {
   private cachedCommands: acp.AvailableCommand[] = [];
   /** Config options captured by a throwaway warmup session (before any chat). */
   private warmConfigOptions: acp.SessionConfigOption[] | undefined;
+  /** Session modes captured by the warmup session. */
+  private warmModes: acp.SessionModeState | undefined;
 
   /**
    * Upstream session ids created only for slash-command / model-config warmup.
@@ -201,6 +218,7 @@ export class AcpSubprocess {
     this.extraEnv = opts.env ?? {};
     this.policy = opts.policy ?? new PermissionPolicy();
     this.agentDisplayName = opts.agentDisplayName ?? opts.spec.defaultAgentName ?? 'The agent';
+    this.preferredModeId = requestedSessionMode({ ...process.env, ...this.extraEnv });
     const agentKey = opts.spec.id || this.agentDisplayName;
     this.transcriptSink = SessionTranscriptSink.fromEnv(process.env, agentKey);
     if (this.transcriptSink) {
@@ -244,6 +262,7 @@ export class AcpSubprocess {
         this.warmConfigOptions,
         session.newSessionResponse.configOptions,
       );
+      this.warmModes = session.modes ?? session.newSessionResponse.modes ?? this.warmModes;
       const idleMs = 400;
       const maxMs = 4_000;
       const startedAt = Date.now();
@@ -518,6 +537,9 @@ export class AcpSubprocess {
             writeTextFile: true,
           },
           terminal: true,
+          session: {
+            configOptions: { boolean: {} },
+          },
         },
         clientInfo: {
           name: 'shepaw-acp-proxy',
@@ -608,6 +630,75 @@ export class AcpSubprocess {
     }
 
     return { model: modelValue };
+  }
+
+  modesList(shepawSessionId?: string): ModesListResult {
+    const fromSession = (sid: string): ModesListResult => {
+      const session = this.sessions.get(sid);
+      return advertisedModesList({
+        configOptions: this.configByShepawSession.get(sid),
+        modes: this.modesByShepawSession.get(sid)
+          ?? session?.modes
+          ?? session?.newSessionResponse.modes,
+        currentOverride: this.preferredModeId,
+      });
+    };
+
+    if (shepawSessionId !== undefined && shepawSessionId.length > 0) {
+      const scoped = fromSession(shepawSessionId);
+      if (scoped.modes.length > 0) return scoped;
+    }
+    for (const sid of this.sessions.keys()) {
+      const list = fromSession(sid);
+      if (list.modes.length > 0) return list;
+    }
+    return advertisedModesList({
+      configOptions: this.warmConfigOptions,
+      modes: this.warmModes,
+      currentOverride: this.preferredModeId,
+    });
+  }
+
+  async setMode(modeValue: string, shepawSessionId?: string): Promise<ModesSetCurrentResult> {
+    const listed = this.modesList(shepawSessionId);
+    let resolved = modeValue;
+    if (listed.modes.length > 0) {
+      const matched = resolveRequestedModeId(
+        listed.modes.map((m) => ({ id: m.value, name: m.display_name })),
+        modeValue,
+      );
+      if (matched === undefined) {
+        throw new Error(
+          `Unknown session mode "${modeValue}". Available: ${listed.modes.map((m) => m.value).join(', ')}.`,
+        );
+      }
+      resolved = matched;
+    }
+    this.preferredModeId = resolved;
+
+    if (shepawSessionId !== undefined) {
+      const session = this.sessions.get(shepawSessionId);
+      if (session !== undefined) {
+        await this.applySessionMode(session, shepawSessionId, resolved);
+        return {
+          mode: resolved,
+          display_name: displayNameForMode(this.modesList(shepawSessionId).modes, resolved),
+        };
+      }
+    }
+
+    for (const [sid, session] of this.sessions) {
+      await this.applySessionMode(session, sid, resolved);
+      return {
+        mode: resolved,
+        display_name: displayNameForMode(this.modesList(sid).modes, resolved),
+      };
+    }
+
+    return {
+      mode: resolved,
+      display_name: displayNameForMode(listed.modes, resolved),
+    };
   }
 
   /** Run one user prompt turn, streaming updates to TaskContext. */
@@ -772,6 +863,7 @@ export class AcpSubprocess {
     }
     this.sessions.clear();
     this.configByShepawSession.clear();
+    this.modesByShepawSession.clear();
   }
 
   private rememberConfigOptions(
@@ -781,6 +873,23 @@ export class AcpSubprocess {
     if (configOptions === undefined || configOptions === null) return;
     const merged = mergeConfigOptions(this.configByShepawSession.get(shepawSessionId), configOptions);
     this.configByShepawSession.set(shepawSessionId, merged);
+  }
+
+  private rememberSessionModes(
+    shepawSessionId: string,
+    modes: acp.SessionModeState | undefined | null,
+  ): void {
+    if (modes === undefined || modes === null) return;
+    this.modesByShepawSession.set(shepawSessionId, modes);
+  }
+
+  private rememberCurrentModeId(shepawSessionId: string, modeId: string): void {
+    const prev = this.modesByShepawSession.get(shepawSessionId);
+    if (prev !== undefined) {
+      this.modesByShepawSession.set(shepawSessionId, { ...prev, currentModeId: modeId });
+      return;
+    }
+    this.modesByShepawSession.set(shepawSessionId, { currentModeId: modeId, availableModes: [] });
   }
 
   private async getOrCreateSession(
@@ -813,10 +922,12 @@ export class AcpSubprocess {
         if (attempt.kind === 'restored') {
           const restored = attempt.session;
           this.sessions.set(shepawSessionId, restored);
+          this.rememberSessionModes(shepawSessionId, restored.modes ?? restored.newSessionResponse.modes);
           opts.onAcpSessionId?.(shepawSessionId, restored.sessionId);
           console.error(
             `[acp-proxy] resumed bound session shepaw=${shepawSessionId} → upstream=${restored.sessionId}`,
           );
+          await this.applyPreferredSessionMode(restored, shepawSessionId);
           if (this.preferredModelValue !== undefined) {
             await this.applyModelToSession(restored, shepawSessionId, this.preferredModelValue);
           }
@@ -878,11 +989,13 @@ export class AcpSubprocess {
     this.sessions.set(shepawSessionId, session);
     opts.onAcpSessionId?.(shepawSessionId, session.sessionId);
     this.rememberConfigOptions(shepawSessionId, session.newSessionResponse.configOptions);
+    this.rememberSessionModes(shepawSessionId, session.modes ?? session.newSessionResponse.modes);
     log('created ACP session %s for shepaw session %s', session.sessionId, shepawSessionId);
     console.error(
       `[acp-proxy] created new session shepaw=${shepawSessionId} → upstream=${session.sessionId}`,
     );
 
+    await this.applyPreferredSessionMode(session, shepawSessionId);
     if (this.preferredModelValue !== undefined) {
       await this.applyModelToSession(session, shepawSessionId, this.preferredModelValue);
     }
@@ -1059,6 +1172,70 @@ export class AcpSubprocess {
     await this.start();
   }
 
+  /**
+   * Switch the upstream session into the preferred mode (Hub env or App picker).
+   * Unset → leave the agent's default. Remaining `request_permission` calls
+   * are forwarded to the App.
+   */
+  private async applyPreferredSessionMode(
+    session: acp.ActiveSession,
+    shepawSessionId: string,
+  ): Promise<void> {
+    if (this.preferredModeId === undefined) return;
+    await this.applySessionMode(session, shepawSessionId, this.preferredModeId);
+  }
+
+  private async applySessionMode(
+    session: acp.ActiveSession,
+    shepawSessionId: string,
+    requested: string,
+  ): Promise<void> {
+    if (this.connection === undefined) return;
+
+    const opts =
+      this.configByShepawSession.get(shepawSessionId) ??
+      session.newSessionResponse.configOptions ??
+      [];
+    const advertised = this.modesByShepawSession.get(shepawSessionId)
+      ?? session.modes
+      ?? session.newSessionResponse.modes;
+    const plan = planRequestedMode({
+      requested,
+      configOptions: opts,
+      modes: advertised,
+    });
+    if (plan === undefined) return;
+
+    try {
+      if (plan.kind === 'config-select') {
+        const response = (await this.connection.agent.request(
+          acp.methods.agent.session.setConfigOption,
+          {
+            sessionId: session.sessionId,
+            configId: plan.configId,
+            value: plan.value,
+            type: 'select' as const,
+          },
+        )) as acp.SetSessionConfigOptionResponse;
+        this.rememberConfigOptions(shepawSessionId, response.configOptions);
+      } else {
+        await this.connection.agent.request(acp.methods.agent.session.setMode, {
+          sessionId: session.sessionId,
+          modeId: plan.modeId,
+        });
+        this.rememberCurrentModeId(shepawSessionId, plan.modeId);
+      }
+      log('applied session mode %s (%s) for %s', requested, describeSessionModePlan(plan), session.sessionId);
+    } catch (err) {
+      log(
+        'failed to apply session mode %s (%s): %s',
+        requested,
+        describeSessionModePlan(plan),
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   private async applyModelToSession(
     session: acp.ActiveSession,
     shepawSessionId: string,
@@ -1126,6 +1303,12 @@ export class AcpSubprocess {
         this.cachedCommands = update.availableCommands ?? [];
       } else if (update.sessionUpdate === 'config_option_update') {
         this.rememberConfigOptions(shepawSessionId, update.configOptions);
+      } else if (update.sessionUpdate === 'current_mode_update') {
+        const modeId = (update as { currentModeId?: string }).currentModeId;
+        if (typeof modeId === 'string' && modeId.length > 0) {
+          this.rememberCurrentModeId(shepawSessionId, modeId);
+          this.preferredModeId = modeId;
+        }
       }
 
       if (update.sessionUpdate === 'agent_message_chunk') {
@@ -1172,7 +1355,11 @@ export class AcpSubprocess {
     //    blocked ones without a remote round trip. `ask` falls through.
     const verdict = this.policy.decide(toolCall);
     if (verdict.decision !== 'ask') {
-      const optionId = pickOption(params.options, verdict.decision);
+      const optionId = pickOption(
+        params.options,
+        verdict.decision,
+        verdict.decision === 'allow',
+      );
       log(
         'permission %s by policy (%s) for %s [%s]',
         verdict.decision,

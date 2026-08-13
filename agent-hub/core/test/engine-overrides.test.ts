@@ -1,9 +1,7 @@
 /**
- * Coverage for per-engine overrides and the three-tier approval resolution:
- *   instance.approval → engineOverrides[engine].approval → gateway.approval
- *
- * Also covers: disabled-engine rejection at add/start, engine-default env
- * merge precedence (instance overrides engine), and persistence round-trip.
+ * Coverage for per-engine overrides: disabled-engine rejection at add/start,
+ * engine-default env merge precedence (instance overrides engine), and
+ * persistence round-trip.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -14,19 +12,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   addInstance,
-  clearEngineApproval,
   deleteEngineEnvVar,
   engineEnvVarKeys,
   isEngineDisabled,
   loadOrCreateHubConfig,
-  resolveApprovalPolicy,
   resolveEngineEnvVars,
   setEngineEnvVar,
   setEngineOverride,
-  setHubGateway,
   updateCustomEngineInHub,
   updateInstance,
-  type ApprovalPolicyConfig,
 } from '../src/config.js';
 import { addCustomEngineToHub } from '../src/config.js';
 
@@ -63,73 +57,34 @@ function addTestInstance(id: string, engine = 'claude-code'): void {
   loadOrCreateHubConfig(); // no-op; addInstance persists
 }
 
-const ASK: ApprovalPolicyConfig = { mode: 'ask', allowKinds: [], askKinds: [], allowPatterns: [], denyPatterns: [] };
-const AUTO: ApprovalPolicyConfig = { mode: 'auto', allowKinds: ['read'], askKinds: [], allowPatterns: [], denyPatterns: [] };
-const CUSTOM: ApprovalPolicyConfig = { mode: 'custom', allowKinds: [], askKinds: ['execute'], allowPatterns: ['^ls'], denyPatterns: [] };
-
-describe('engine override approval — three-tier resolution', () => {
-  it('falls back to gateway default when neither instance nor engine set a policy', () => {
-    addTestInstance('p1');
-    const cfg = loadOrCreateHubConfig();
-    const instance = cfg.instances.find((p) => p.id === 'p1')!;
-    expect(resolveApprovalPolicy(cfg, instance)).toBeUndefined();
-
-    const withGateway = setHubGateway(cfg, { approval: AUTO });
-    expect(resolveApprovalPolicy(withGateway, instance)).toEqual(AUTO);
+describe('instance sessionMode', () => {
+  it('fills the engine default when omitted', () => {
+    addTestInstance('p1', 'cursor');
+    expect(loadOrCreateHubConfig().instances.find((p) => p.id === 'p1')?.sessionMode).toBe('agent');
   });
 
-  it('engine override beats gateway default', () => {
-    addTestInstance('p1');
-    let cfg = loadOrCreateHubConfig();
-    cfg = setHubGateway(cfg, { approval: AUTO });
-    cfg = setEngineOverride(cfg, 'claude-code', { approval: CUSTOM });
-
-    const instance = cfg.instances.find((p) => p.id === 'p1')!;
-    expect(resolveApprovalPolicy(cfg, instance)).toEqual(CUSTOM);
-  });
-
-  it('instance override beats engine override and gateway default', () => {
-    addTestInstance('p1');
-    let cfg = loadOrCreateHubConfig();
-    cfg = setHubGateway(cfg, { approval: AUTO });
-    cfg = setEngineOverride(cfg, 'claude-code', { approval: CUSTOM });
-    cfg = updateInstance(cfg, 'p1', { approval: ASK });
-
-    const instance = cfg.instances.find((p) => p.id === 'p1')!;
-    expect(resolveApprovalPolicy(cfg, instance)).toEqual(ASK);
-  });
-
-  it('clearEngineApproval makes the engine fall back to gateway default', () => {
-    addTestInstance('p1');
-    let cfg = loadOrCreateHubConfig();
-    cfg = setHubGateway(cfg, { approval: AUTO });
-    cfg = setEngineOverride(cfg, 'claude-code', { approval: CUSTOM });
-    cfg = clearEngineApproval(cfg, 'claude-code');
-
-    const instance = cfg.instances.find((p) => p.id === 'p1')!;
-    expect(resolveApprovalPolicy(cfg, instance)).toEqual(AUTO);
-  });
-
-  it('engine override only applies to the matching engine', () => {
+  it('persists an explicit mode and rejects unknown catalog ids', () => {
     addTestInstance('p1', 'claude-code');
-    addTestInstance('p2', 'codebuddy');
     let cfg = loadOrCreateHubConfig();
-    cfg = setEngineOverride(cfg, 'claude-code', { approval: CUSTOM });
+    cfg = updateInstance(cfg, 'p1', { sessionMode: 'bypassPermissions' });
+    expect(loadOrCreateHubConfig().instances.find((p) => p.id === 'p1')?.sessionMode).toBe('bypassPermissions');
+    expect(() => updateInstance(cfg, 'p1', { sessionMode: 'yolo' })).toThrow(/Unknown session mode/);
+  });
 
-    const p1 = cfg.instances.find((p) => p.id === 'p1')!;
-    const p2 = cfg.instances.find((p) => p.id === 'p2')!;
-    expect(resolveApprovalPolicy(cfg, p1)).toEqual(CUSTOM);
-    expect(resolveApprovalPolicy(cfg, p2)).toBeUndefined();
+  it('allowUnknownSessionMode persists a live-advertised id', () => {
+    addTestInstance('p1', 'cursor');
+    const cfg = loadOrCreateHubConfig();
+    updateInstance(cfg, 'p1', { sessionMode: 'yolo', allowUnknownSessionMode: true });
+    expect(loadOrCreateHubConfig().instances.find((p) => p.id === 'p1')?.sessionMode).toBe('yolo');
   });
 });
 
 describe('engine override persistence', () => {
-  it('round-trips disabled / displayName / approval / envVars through hub.json', () => {
+  it('round-trips disabled / displayName / envVars through hub.json', () => {
     let cfg = loadOrCreateHubConfig();
     cfg = setEngineOverride(cfg, 'claude-code', {
       disabled: true,
       displayName: 'My Claude',
-      approval: CUSTOM,
       mergeEnvVars: { ANTHROPIC_API_KEY: 'sk-test-123' },
     });
 
@@ -137,7 +92,6 @@ describe('engine override persistence', () => {
     const ov = reloaded.engineOverrides?.['claude-code'];
     expect(ov?.disabled).toBe(true);
     expect(ov?.displayName).toBe('My Claude');
-    expect(ov?.approval).toEqual(CUSTOM);
     expect(engineEnvVarKeys(reloaded, 'claude-code')).toEqual(['ANTHROPIC_API_KEY']);
     // env value is encrypted at rest (not plaintext)
     expect(JSON.stringify(ov?.envVars)).not.toContain('sk-test-123');
@@ -145,8 +99,8 @@ describe('engine override persistence', () => {
 
   it('clearing all fields of an override drops the entry', () => {
     let cfg = loadOrCreateHubConfig();
-    cfg = setEngineOverride(cfg, 'claude-code', { disabled: true, approval: CUSTOM });
-    cfg = setEngineOverride(cfg, 'claude-code', { disabled: null, approval: null });
+    cfg = setEngineOverride(cfg, 'claude-code', { disabled: true });
+    cfg = setEngineOverride(cfg, 'claude-code', { disabled: null });
 
     expect(loadOrCreateHubConfig().engineOverrides?.['claude-code']).toBeUndefined();
   });
@@ -244,7 +198,7 @@ describe('setEngineOverride validation', () => {
   it('accepts override for a registered custom engine', () => {
     let cfg = loadOrCreateHubConfig();
     cfg = addCustomEngineToHub(cfg, { id: 'mycli', displayName: 'My', acpCommand: 'my-bin' });
-    cfg = setEngineOverride(cfg, 'mycli', { approval: AUTO });
-    expect(cfg.engineOverrides?.['mycli']?.approval).toEqual(AUTO);
+    cfg = setEngineOverride(cfg, 'mycli', { disabled: true });
+    expect(cfg.engineOverrides?.['mycli']?.disabled).toBe(true);
   });
 });

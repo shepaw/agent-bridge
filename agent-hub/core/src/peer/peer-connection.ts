@@ -11,7 +11,8 @@ import { WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { decodeFrame, encodeFrame, NoiseSession, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
-import { getInstance, loadOrCreateHubConfig } from '../config.js';
+import { getInstance, loadOrCreateHubConfig, updateInstance } from '../config.js';
+import { parseSessionMode } from '../engine-modes.js';
 import { instancePaths } from '../paths.js';
 import { listAgents } from './peer-agent-host.js';
 import {
@@ -216,6 +217,23 @@ export function resetPeerSessionsForTest(): void {
 /** Test-only: direct registry access for white-box assertions (TTL sweeps etc.). */
 export function getPeerSessionsForTest(): Map<string, PeerSessionState> {
   return peerSessions;
+}
+
+/** Persist an App-chosen mode so instance restart keeps it. */
+function persistPeerSessionMode(agentId: string, mode: string): void {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    const instance = getInstance(cfg, agentId);
+    const parsed = parseSessionMode(instance.engine, mode, { allowUnknown: true });
+    if (parsed === undefined || parsed === instance.sessionMode) return;
+    updateInstance(cfg, agentId, { sessionMode: parsed, allowUnknownSessionMode: true });
+  } catch (err) {
+    // Non-fatal: the live session already switched.
+    console.warn(
+      `[shepaw-hub] failed to persist sessionMode for ${agentId}: ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
 }
 
 /**
@@ -584,6 +602,9 @@ export async function drivePeerConnection(opts: {
       const result = await getAcpClient(agentId).modesSetCurrent(mode, sessionId);
       ok = result !== null;
       displayName = result?.display_name;
+      if (ok && result !== null) {
+        persistPeerSessionMode(agentId, result.mode);
+      }
     } catch (err) {
       log(`agent_modes_set req failed: ${err instanceof Error ? err.message : String(err)}`);
     }

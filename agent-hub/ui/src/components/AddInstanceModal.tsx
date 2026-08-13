@@ -3,7 +3,7 @@ import { api } from '../api/client.js';
 import type { EngineInfo, HubMeta } from '../api/types.js';
 import { rememberCwd } from '../utils/cwdHistory.js';
 import { CwdPathInput } from './CwdPathInput.js';
-import { DirectoryPickerModal } from './DirectoryPickerModal.js';
+import { SessionModeSelect } from './SessionModeSelect.js';
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'codex',
@@ -14,6 +14,7 @@ const FALLBACK_ENGINES = [
 interface AddInstanceDraft {
   label: string;
   engine: string;
+  sessionMode: string;
   cwd: string;
   host: string;
   baseUrl: string;
@@ -26,6 +27,7 @@ interface AddInstanceDraft {
 const EMPTY_DRAFT: AddInstanceDraft = {
   label: '',
   engine: '',
+  sessionMode: '',
   cwd: '',
   host: '127.0.0.1',
   baseUrl: '',
@@ -50,6 +52,7 @@ interface AddInstanceModalProps {
 export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: AddInstanceModalProps) {
   const [label, setLabel] = useState(draft.label);
   const [engine, setEngine] = useState(draft.engine);
+  const [sessionMode, setSessionMode] = useState(draft.sessionMode);
   const [engineOptions, setEngineOptions] = useState<EngineInfo[]>([]);
   const [cwd, setCwd] = useState(draft.cwd);
   const [host, setHost] = useState(draft.host);
@@ -71,6 +74,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
     draft = {
       label,
       engine,
+      sessionMode,
       cwd,
       host,
       baseUrl,
@@ -79,7 +83,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       tunnelSecret,
       showTunnel,
     };
-  }, [label, engine, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showTunnel]);
+  }, [label, engine, sessionMode, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showTunnel]);
 
   useEffect(() => {
     api.engines.list()
@@ -99,6 +103,20 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const selectedEngine = engineOptions.find((e) => e.id === engine);
   const selectedUnavailable = selectedEngine?.available === false;
   const hasAvailableEngine = engineOptions.some((e) => e.available !== false);
+  const sessionModes = selectedEngine?.sessionModes ?? [];
+
+  useEffect(() => {
+    const modes = selectedEngine?.sessionModes ?? [];
+    if (modes.length === 0) {
+      setSessionMode('');
+      return;
+    }
+    setSessionMode((current) =>
+      modes.some((m) => m.id === current)
+        ? current
+        : (selectedEngine?.defaultSessionMode ?? modes[0]!.id),
+    );
+  }, [engine, selectedEngine]);
 
   useEffect(() => {
     api.instances.meta().then((meta) => {
@@ -145,6 +163,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
         host,
         baseUrl: resolvedBaseUrl,
         tunnel,
+        ...(sessionMode ? { sessionMode } : {}),
       });
       rememberCwd(cwd);
       clearDraft();
@@ -265,6 +284,13 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
               当前没有可用引擎。请点击「管理引擎」完成安装与凭据设置。
             </p>
           )}
+
+          <label style={lbl}>Agent 模式</label>
+          <SessionModeSelect
+            modes={sessionModes}
+            value={sessionMode}
+            onChange={setSessionMode}
+          />
 
           <label style={lbl}>Working Directory <span style={req}>*</span></label>
           <CwdPathInput

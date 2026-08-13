@@ -169,6 +169,14 @@ export async function listInstanceConversations(instanceId: string): Promise<Ses
   return raw.map(parseSessionInfo).filter((session): session is SessionInfo => session !== null);
 }
 
+/** Apply a native session mode to a running instance (`agent.modes.setCurrent`). */
+export async function applyInstanceSessionMode(
+  instanceId: string,
+  mode: string,
+): Promise<{ mode: string; display_name?: string } | null> {
+  return withAcpClient(instanceId, (client) => client.modesSetCurrent(mode));
+}
+
 /** Noise + JSON-RPC smoke test: open a WS and call `agent.sessions.list`. */
 export async function pingInstanceAcpRpc(instanceId: string): Promise<{ sessionCount: number }> {
   const sessions = await withAcpClient(instanceId, (client) => client.sessions());

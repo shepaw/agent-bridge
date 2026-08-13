@@ -15,11 +15,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addInstance,
   loadOrCreateHubConfig,
-  resolveApprovalPolicy,
   saveHubConfig,
   setHubGateway,
-  updateInstance,
-  type ApprovalPolicyConfig,
 } from '../src/config.js';
 import { createHubPairing, listHubAgentCatalog } from '../src/pairing.js';
 
@@ -124,51 +121,5 @@ describe('pairing URLs with a shared gateway channel', () => {
     const catalog = listHubAgentCatalog(loadOrCreateHubConfig());
     expect(catalog[0]!.wsUrl).toMatch(/^ws:\/\//);
     expect(catalog[0]!.wsUrl).not.toContain('/proxy/');
-  });
-});
-
-describe('approval policy config', () => {
-  const POLICY: ApprovalPolicyConfig = {
-    mode: 'custom',
-    allowKinds: ['read', 'search'],
-    askKinds: ['execute'],
-    allowPatterns: ['^npm test'],
-    denyPatterns: ['rm -rf'],
-  };
-
-  it('round-trips the device-wide approval policy', () => {
-    const cfg = setHubGateway(loadOrCreateHubConfig(), { approval: POLICY });
-    saveHubConfig(cfg.path, cfg);
-    expect(loadOrCreateHubConfig().gateway?.approval).toEqual(POLICY);
-  });
-
-  it('clears the policy with approval: null', () => {
-    let cfg = setHubGateway(loadOrCreateHubConfig(), { approval: POLICY });
-    saveHubConfig(cfg.path, cfg);
-    cfg = setHubGateway(loadOrCreateHubConfig(), { approval: null });
-    saveHubConfig(cfg.path, cfg);
-    expect(loadOrCreateHubConfig().gateway?.approval).toBeUndefined();
-  });
-
-  it('resolves instance override over gateway default', () => {
-    seedInstance('alpha');
-    let cfg = setHubGateway(loadOrCreateHubConfig(), { approval: POLICY });
-    const override: ApprovalPolicyConfig = { ...POLICY, mode: 'auto' };
-    cfg = updateInstance(cfg, 'alpha', { approval: override });
-    saveHubConfig(cfg.path, cfg);
-
-    const reloaded = loadOrCreateHubConfig();
-    const instance = reloaded.instances.find((p) => p.id === 'alpha')!;
-    expect(resolveApprovalPolicy(reloaded, instance)).toEqual(override);
-  });
-
-  it('falls back to the gateway default when a instance has no override', () => {
-    seedInstance('beta');
-    const cfg = setHubGateway(loadOrCreateHubConfig(), { approval: POLICY });
-    saveHubConfig(cfg.path, cfg);
-
-    const reloaded = loadOrCreateHubConfig();
-    const instance = reloaded.instances.find((p) => p.id === 'beta')!;
-    expect(resolveApprovalPolicy(reloaded, instance)).toEqual(POLICY);
   });
 });

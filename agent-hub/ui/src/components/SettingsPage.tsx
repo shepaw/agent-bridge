@@ -1,4 +1,3 @@
-import { ApprovalSettingsPanel } from './GatewaySettingsModal.js';
 import { EngineManager } from './EngineManager.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
@@ -6,7 +5,7 @@ import type { SettingsTab } from '../utils/settingsRoute.js';
 
 /**
  * Settings content panels (nav lives in App shell).
- *   - 全局: dashboard auth token + device-wide tool-call approval default
+ *   - 全局: dashboard auth token
  *   - 引擎: opened from Create Instance「管理引擎」(not a left-nav item)
  *   - 扫码配对: peer service + shepaw://peer QR + optional channel
  */
@@ -34,18 +33,13 @@ export function SettingsPage({
             </p>
             <HubAuthTokenPanel onSaved={onAuthTokenSaved} />
           </section>
-          <section style={card}>
-            <h3 style={cardTitle}>工具调用审核策略（设备级默认）</h3>
-            <p style={cardHint}>决定本机 Agent 的默认工具审核行为；引擎或实例可单独覆盖。</p>
-            <ApprovalSettingsPanel />
-          </section>
         </div>
       )}
 
       {tab === 'engines' && (
         <section style={card}>
           <h3 style={cardTitle}>引擎管理</h3>
-          <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认环境变量与审核策略。</p>
+          <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认环境变量。</p>
           <EngineManager
             focusEngineId={focusEngineId}
             onFocusEngineHandled={onFocusEngineHandled}

@@ -238,16 +238,22 @@ function styleForKind(kind: acp.PermissionOptionKind): 'primary' | 'secondary' |
 
 /**
  * Pick the ACP optionId that best expresses an auto-decision. For `allow`
- * prefer `allow_once` (least escalation), else `allow_always`. For `deny`
- * prefer `reject_once`, else `reject_always`. Returns undefined when no
- * matching option exists (caller should fall back to `cancelled`).
+ * prefer `allow_always` when `preferAlways` is set (so the agent caches the
+ * grant and stops re-asking), else `allow_once`. For `deny` prefer
+ * `reject_once`, else `reject_always`. Returns undefined when no matching
+ * option exists (caller should fall back to `cancelled`).
  */
 export function pickOption(
   options: ReadonlyArray<acp.PermissionOption>,
   want: 'allow' | 'deny',
+  preferAlways = false,
 ): string | undefined {
   const order: acp.PermissionOptionKind[] =
-    want === 'allow' ? ['allow_once', 'allow_always'] : ['reject_once', 'reject_always'];
+    want === 'allow'
+      ? preferAlways
+        ? ['allow_always', 'allow_once']
+        : ['allow_once', 'allow_always']
+      : ['reject_once', 'reject_always'];
   for (const kind of order) {
     const found = options.find((o) => o.kind === kind);
     if (found !== undefined) return found.optionId;

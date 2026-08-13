@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
-import type { Instance, Peer, EnrollToken } from '../api/types.js';
+import type { EngineInfo, Instance, Peer, EnrollToken } from '../api/types.js';
 import { LogViewer } from './LogViewer.js';
 import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
 import { SessionsPanel } from './SessionsPanel.js';
 import { AttachmentsPanel } from './AttachmentsPanel.js';
-import { InstanceApprovalSection } from './InstanceApprovalSection.js';
+import { SessionModeSelect } from './SessionModeSelect.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { maskSecret } from '../utils/maskSecret.js';
 import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
@@ -92,7 +92,9 @@ export function InstanceDetail({
   const [showTunnelAdvanced, setShowTunnelAdvanced] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
+  const [editSessionMode, setEditSessionMode] = useState('');
   const [showDirPicker, setShowDirPicker] = useState(false);
+  const [engineInfos, setEngineInfos] = useState<EngineInfo[]>([]);
 
   const load = async () => {
     try {
@@ -114,6 +116,12 @@ export function InstanceDetail({
   };
 
   useEffect(() => { void load(); }, [instanceId]);
+
+  useEffect(() => {
+    void api.engines.list()
+      .then((r) => setEngineInfos(r.engines))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     setSelectedSessionId(initialSessionId ?? null);
@@ -292,6 +300,13 @@ export function InstanceDetail({
     // Auto-expand the advanced tunnel section only when the instance already
     // has a per-instance tunnel, so existing config stays visible/editable.
     setShowTunnelAdvanced(!!p.tunnel);
+    setEditSessionMode(
+      (() => {
+        const modes = engineInfos.find((e) => e.id === p.engine)?.sessionModes ?? [];
+        if (p.sessionMode && modes.some((m) => m.id === p.sessionMode)) return p.sessionMode;
+        return engineInfos.find((e) => e.id === p.engine)?.defaultSessionMode ?? p.sessionMode ?? '';
+      })(),
+    );
     setEditErr(null);
     setShowEdit(true);
   };
@@ -339,6 +354,7 @@ export function InstanceDetail({
         host: editHost || undefined,
         baseUrl: editBaseUrl || undefined,
         extraArgs: editExtraArgs.trim() ? editExtraArgs.trim().split(/\s+/) : [],
+        ...(editSessionMode ? { sessionMode: editSessionMode } : {}),
         ...tunnelPatch,
       });
       setShowEdit(false);
@@ -423,6 +439,14 @@ export function InstanceDetail({
               <div style={infoGrid}>
                 <InfoItem label="Bind" value={`${instance.host}:${instance.port}`} />
                 <InfoItem label="CWD" value={instance.cwd} />
+                <InfoItem
+                  label="Agent 模式"
+                  value={
+                    engineInfos.find((e) => e.id === instance.engine)?.sessionModes?.find((m) => m.id === instance.sessionMode)?.name
+                    ?? instance.sessionMode
+                    ?? '默认'
+                  }
+                />
                 {instance.baseUrl && <InfoItem label="Base URL" value={instance.baseUrl} />}
                 <InfoItem label="Runtime" value={formatRuntimeSummary(instance.status)} />
                 {instance.status.activeTasks !== null && (
@@ -721,7 +745,7 @@ export function InstanceDetail({
               <div style={panelHeaderRow}>
                 <div>
                   <h3 style={{ ...panelTitle, margin: 0 }}>配置</h3>
-                  <p style={{ ...panelHint, margin: '4px 0 0' }}>编辑实例参数、审核策略与高级选项。</p>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>编辑实例参数、Agent 模式与高级选项。</p>
                 </div>
                 {!showEdit && (
                   <button style={actionBtn('#f9e2af')} onClick={() => openEdit(instance)}>
@@ -736,6 +760,14 @@ export function InstanceDetail({
                     <div style={editField}>
                       <label style={editLbl}>Label</label>
                       <input style={editInp} value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder={instanceId} />
+                    </div>
+                    <div style={editField}>
+                      <label style={editLbl}>Agent 模式</label>
+                      <SessionModeSelect
+                        modes={engineInfos.find((e) => e.id === instance.engine)?.sessionModes ?? []}
+                        value={editSessionMode}
+                        onChange={setEditSessionMode}
+                      />
                     </div>
                     <div style={editField}>
                       <label style={editLbl}>Working Directory <span style={{ color: '#f38ba8' }}>*</span></label>
@@ -981,7 +1013,11 @@ export function InstanceDetail({
                 </>
               )}
 
-              <InstanceApprovalSection instance={instance} onChanged={load} />
+              <InstanceSessionModeSection
+                instance={instance}
+                engineInfo={engineInfos.find((e) => e.id === instance.engine)}
+                onChanged={load}
+              />
 
               <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #313244' }}>
                 <button style={actionBtn('#e74c3c')} onClick={() => void removeInstance()}>
@@ -1020,6 +1056,75 @@ function InfoItem({ label, value }: { label: string; value: string }) {
     <div style={infoItem}>
       <span style={{ color: '#a6adc8', fontSize: 12 }}>{label}</span>
       <span style={{ color: '#cdd6f4', fontSize: 13, wordBreak: 'break-all' }}>{value}</span>
+    </div>
+  );
+}
+
+function InstanceSessionModeSection({
+  instance,
+  engineInfo,
+  onChanged,
+}: {
+  instance: Instance;
+  engineInfo: EngineInfo | undefined;
+  onChanged: () => void;
+}) {
+  const modes = engineInfo?.sessionModes ?? [];
+  const catalogValue = (raw: string | undefined): string => {
+    if (raw && modes.some((m) => m.id === raw)) return raw;
+    return engineInfo?.defaultSessionMode ?? '';
+  };
+  const [value, setValue] = useState(catalogValue(instance.sessionMode));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setValue(catalogValue(instance.sessionMode));
+  }, [instance.sessionMode, engineInfo?.defaultSessionMode]);
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      await api.instances.update(instance.id, { sessionMode: value });
+      setNotice(
+        instance.status.running
+          ? '已保存，并尝试应用到当前会话。'
+          : '已保存默认模式。',
+      );
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #313244' }}>
+      <h4 style={{ margin: '0 0 6px', color: '#cdd6f4', fontSize: 14 }}>Agent 模式</h4>
+      <p style={{ margin: '0 0 10px', color: '#6c7086', fontSize: 12 }}>
+        使用该引擎自带的会话模式。工具确认仍会转到 App。远端 App 也可像切换模型一样切换当前会话模式。
+      </p>
+      <SessionModeSelect modes={modes} value={value} onChange={setValue} disabled={busy} />
+      {modes.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <button
+            style={{
+              background: '#89b4fa', color: '#1e1e2e', border: 'none', borderRadius: 6,
+              padding: '8px 16px', cursor: 'pointer', fontWeight: 600,
+            }}
+            disabled={busy || value === (instance.sessionMode ?? '')}
+            onClick={() => void save()}
+          >
+            {busy ? '保存中…' : '保存模式'}
+          </button>
+        </div>
+      )}
+      {notice && <p style={{ color: '#a6e3a1', fontSize: 13, marginTop: 8 }}>{notice}</p>}
+      {err && <p style={{ color: '#f38ba8', fontSize: 13, marginTop: 8 }}>{err}</p>}
     </div>
   );
 }

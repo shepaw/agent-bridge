@@ -58,10 +58,10 @@ export interface Instance {
   createdAt: string;
   /** Tunnel config for Shepaw Channel Service. Secret is present but should be masked in UI. */
   tunnel?: TunnelConfig;
+  /** Native ACP session mode for this engine (e.g. auto, agent, acceptEdits). */
+  sessionMode?: string;
   /** Only key names are exposed — values are never returned by the API. */
   envVarKeys: string[];
-  /** Per-instance tool-call approval override; null/undefined = inherit. */
-  approval?: ApprovalPolicy | null;
   status: InstanceStatus;
   /** Auto-mapped store URIs for workspace + agent private space. */
   store?: {
@@ -101,13 +101,13 @@ export interface EngineInfo {
   builtin: boolean;
   /** True when an operator has disabled this engine. */
   disabled?: boolean;
-  /** Per-engine approval override; null = inherit (engine/global). */
-  approval?: ApprovalPolicy | null;
   /** Engine-default env var key names (values never exposed). */
   envVarKeys?: string[];
   /** False when disabled or upstream CLI is missing. */
   available?: boolean;
   unavailableReason?: string | null;
+  sessionModes?: Array<{ id: string; name: string; description: string }>;
+  defaultSessionMode?: string;
 }
 
 export interface CreateCustomEngineInput {
@@ -125,8 +125,6 @@ export interface UpdateCustomEngineInput {
 export interface EngineOverridePatch {
   disabled?: boolean | null;
   displayName?: string | null;
-  approval?: ApprovalPolicy;
-  clearApproval?: boolean;
 }
 
 export interface MaskedEnvVar {
@@ -298,24 +296,12 @@ export interface GatewayRouterStatus {
   lastResult: string | null;
 }
 
-/** Device-wide tool-call approval policy. */
-export type ApprovalMode = 'ask' | 'auto' | 'custom';
-export interface ApprovalPolicy {
-  mode: ApprovalMode;
-  allowKinds: string[];
-  askKinds: string[];
-  allowPatterns: string[];
-  denyPatterns: string[];
-}
-
 /** Gateway (shared channel + router) config from GET /api/gateway. */
 export interface GatewayInfo {
   routerHost: string;
   routerPort: number;
   /** Shared Channel Service tunnel; `secretSet` indicates a secret is stored. */
   channel: { serverUrl: string; channelId: string; secretSet: boolean } | null;
-  /** Device-wide default approval policy, or null when agents always ask. */
-  approval: ApprovalPolicy | null;
   status: GatewayRouterStatus;
 }
 
@@ -331,6 +317,7 @@ export interface CreateInstanceInput {
   extraArgs?: string[];
   tunnel?: TunnelConfig;
   envVars?: Record<string, string>;
+  sessionMode?: string;
 }
 
 export interface UpdateInstanceInput {
@@ -343,8 +330,7 @@ export interface UpdateInstanceInput {
   clearTunnel?: boolean;
   envVars?: Record<string, string>;
   clearEnvVars?: boolean;
-  approval?: ApprovalPolicy;
-  clearApproval?: boolean;
+  sessionMode?: string;
 }
 
 /** Directory entry from GET /api/fs/browse. */

@@ -1,5 +1,4 @@
 import type {
-  ApprovalPolicy,
   CreateCustomEngineInput,
   CreateInstanceInput,
   EnrollToken,
@@ -160,12 +159,6 @@ export const api = {
         error?: string;
       }>;
     }> => request('/instances/restart-all', { method: 'POST' }),
-
-    setApproval: (id: string, policy: ApprovalPolicy): Promise<Instance> =>
-      request(`/instances/${id}/approval`, { method: 'PUT', body: JSON.stringify(policy) }),
-
-    clearApproval: (id: string): Promise<Instance> =>
-      request(`/instances/${id}/approval`, { method: 'DELETE' }),
   },
 
   peers: {
@@ -259,9 +252,6 @@ export const api = {
     setOverride: (id: string, patch: EngineOverridePatch): Promise<{ ok: boolean }> =>
       request(`/engines/${encodeURIComponent(id)}/override`, { method: 'PUT', body: JSON.stringify(patch) }),
 
-    clearApproval: (id: string): Promise<{ ok: boolean }> =>
-      request(`/engines/${encodeURIComponent(id)}/approval`, { method: 'DELETE' }),
-
     setup: (id: string): Promise<EngineSetupResponse> =>
       request(`/engines/${encodeURIComponent(id)}/setup`),
 
@@ -316,12 +306,6 @@ export const api = {
 
     clearChannel: (): Promise<{ ok: boolean }> =>
       request('/gateway/channel', { method: 'DELETE' }),
-
-    setApproval: (input: ApprovalPolicy): Promise<{ ok: boolean; approval: ApprovalPolicy }> =>
-      request('/gateway/approval', { method: 'PUT', body: JSON.stringify(input) }),
-
-    clearApproval: (): Promise<{ ok: boolean }> =>
-      request('/gateway/approval', { method: 'DELETE' }),
 
     start: (): Promise<{ pid: number; alreadyRunning: boolean; status: GatewayRouterStatus }> =>
       request('/gateway/start', { method: 'POST' }),

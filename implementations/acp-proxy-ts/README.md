@@ -10,6 +10,14 @@ Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
   (incl. Cursor load-only), using `sessions.json` mappings. Hung restores are
   bounded by a timeout that restarts the upstream agent before falling back to
   `session/new`.
+- **Session mode** — after `session/new` / resume / load, applies the instance
+  `PAW_ACP_SESSION_MODE` (Cursor `agent`/`plan`/`ask`, Claude `acceptEdits`, Codex
+  `on-request`/`never`, OpenCode `build`/`plan`, …) via `session/set_mode` or `session/set_config_option`. Unset
+  leaves the agent's default. The App can list/switch modes the same way as
+  models (`agent.modes.list` / `agent.modes.setCurrent`, peer frames
+  `agent_modes_req` / `agent_modes_set_req`). Remaining
+  `session/request_permission` calls are forwarded to the App
+  (`PAW_ACP_APPROVAL_MODE` defaults to `ask`).
 - **Model picker** — maps ACP `configOptions` (category `model`) to Shepaw
   `agent.models.list` / `agent.models.setCurrent` via `session/set_config_option`
 - **Terminal proxy** — runs shell commands on the gateway host when agents request
@@ -105,6 +113,14 @@ the shim with `SHEPAW_STORE_CLI=off` (overrides: `SHEPAW_STORE_CLI_SCRIPT`,
 `SHEPAW_STORE_CLI_SHIM_DIR`). This complements, not replaces, the MCP
 `store_*` tools — tool-native agents use MCP, hint-following agents use the
 CLI.
+
+**Device pouch card:** on the first prompt of each Shepaw session, the gateway
+prepends a short card: the pouch is this device's `store://<space>/<device_id>/…`
+tree; placement follows space partitions (`files` / `public` / `runtime` /
+`memory` / `workspaces` / `backups`). `device_id` comes from
+`SHEPAW_HUB_STORE_DEVICE` or `NEXUSPOUCH_DEVICE` when set. Disable with
+`SHEPAW_STORE_POUCH_CARD=off`. The card is skipped when no store backend is
+configured.
 
 **Session transcript bypass (P3):** with a running Nexuspouch HTTP API, set
 `NEXUSPOUCH_URL` (default `http://127.0.0.1:8787` when `NEXUSPOUCH_ROOT` is set),

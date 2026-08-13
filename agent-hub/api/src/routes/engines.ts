@@ -5,8 +5,7 @@
  * POST   /api/engines                       — register a custom local CLI
  * PUT    /api/engines/:id                   — edit a custom engine (displayName / acpCommand)
  * DELETE /api/engines/:id                   — remove a custom engine
- * PUT    /api/engines/:id/override          — set per-engine override (disabled / displayName / approval / env merge)
- * DELETE /api/engines/:id/approval          — clear per-engine approval (inherit)
+ * PUT    /api/engines/:id/override          — set per-engine override (disabled / displayName / env merge)
  * GET    /api/engines/:id/envvars           — list engine-default env var keys (masked)
  * PUT    /api/engines/:id/envvars/:key      — set one engine-default env var
  * GET    /api/engines/:id/icon              — engine logo (SVG/PNG)
@@ -17,7 +16,6 @@
 import { Router, type Request, type Response } from 'express';
 import {
   addCustomEngineToHub,
-  clearEngineApproval,
   clearEngineProbeCaches,
   CustomEngineExistsError,
   CustomEngineInUseError,
@@ -46,7 +44,6 @@ import {
   resolveEngineAvatarFile,
 } from '@shepaw/agent-hub-core';
 import { hubRoot } from '@shepaw/agent-hub-core';
-import { parseApprovalBody } from './approval.js';
 
 export const enginesRouter = Router();
 
@@ -78,7 +75,6 @@ enginesRouter.get('/', (_req: Request, res: Response) => {
       return {
         ...enriched,
         disabled,
-        approval: ov?.approval ?? null,
         envVarKeys: engineEnvVarKeys(cfg, info.id),
       };
     });
@@ -223,9 +219,8 @@ enginesRouter.delete('/:id', (req: Request, res: Response) => {
 
 /**
  * PUT /api/engines/:id/override — set per-engine override fields.
- * Body (all optional): { disabled?, displayName?, approval?, clearApproval? }
+ * Body (all optional): { disabled?, displayName? }
  * `displayName: null` / `disabled: null` clear that field.
- * `approval` is an ApprovalPolicyConfig; `clearApproval: true` clears it.
  */
 enginesRouter.put('/:id/override', (req: Request, res: Response) => {
   try {
@@ -239,11 +234,6 @@ enginesRouter.put('/:id/override', (req: Request, res: Response) => {
     if (body.displayName === null) patch.displayName = null;
     else if (typeof body.displayName === 'string') patch.displayName = body.displayName;
 
-    if (body.clearApproval === true) patch.approval = null;
-    else if (body.approval !== undefined && body.approval !== null) {
-      patch.approval = parseApprovalBody(body.approval as Record<string, unknown>);
-    }
-
     const cfg = loadOrCreateHubConfig();
     const next = setEngineOverride(cfg, req.params.id!, patch);
     res.json({ ok: true, override: next.engineOverrides?.[req.params.id!] ?? null });
@@ -252,22 +242,6 @@ enginesRouter.put('/:id/override', (req: Request, res: Response) => {
       res.status(404).json({ error: err.message });
     } else {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-});
-
-/** DELETE /api/engines/:id/approval — clear per-engine approval (inherit down). */
-enginesRouter.delete('/:id/approval', (req: Request, res: Response) => {
-  try {
-    requireKnownEngine(req.params.id!);
-    const cfg = loadOrCreateHubConfig();
-    clearEngineApproval(cfg, req.params.id!);
-    res.json({ ok: true });
-  } catch (err) {
-    if (err instanceof CustomEngineNotFoundError) {
-      res.status(404).json({ error: err.message });
-    } else {
-      res.status(500).json({ error: String(err) });
     }
   }
 });

@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import type {
-  ApprovalPolicy,
   EngineEnvVarHint,
   EngineInfo,
   EngineInstallStatus,
   EngineSetupGuide,
   MaskedEnvVar,
 } from '../api/types.js';
-import { ApprovalPolicyEditor, emptyApprovalPolicy } from './ApprovalPolicyEditor.js';
 import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
 
 type EnvDraft = { key: string; value: string };
@@ -20,7 +18,7 @@ function emptyEnvDraft(): EnvDraft {
 /**
  * Engine management: list every engine (built-in + custom) and configure
  * per-engine overrides — enable/disable, display name + ACP command (custom
- * only), default credentials, and a default tool-call approval policy.
+ * only), and default credentials.
  */
 export function EngineManager({
   focusEngineId = null,
@@ -83,7 +81,7 @@ export function EngineManager({
 
       <h4 style={{ ...sectionTitle, marginTop: 20 }}>引擎列表（{engines.length}）</h4>
       <p style={hint}>
-        每个引擎可单独设置默认环境变量与审核策略。审核策略优先级：实例覆盖 {'>'} 引擎默认 {'>'} 全局默认。环境变量支持任意自定义键值。
+        每个引擎可单独设置默认环境变量。环境变量支持任意自定义键值。新建实例时可选择该引擎的原生会话模式。
       </p>
 
       <div style={listCol}>
@@ -127,9 +125,6 @@ function EngineRow({
   const [displayName, setDisplayName] = useState(engine.displayName);
   const [acpCommand, setAcpCommand] = useState(engine.acpCommand);
 
-  // Approval
-  const [approval, setApproval] = useState<ApprovalPolicy>(engine.approval ?? emptyApprovalPolicy());
-
   // Env vars
   const [envVars, setEnvVars] = useState<MaskedEnvVar[]>([]);
   const [envDrafts, setEnvDrafts] = useState<EnvDraft[]>([emptyEnvDraft()]);
@@ -139,7 +134,6 @@ function EngineRow({
   useEffect(() => {
     setDisplayName(engine.displayName);
     setAcpCommand(engine.acpCommand);
-    setApproval(engine.approval ?? emptyApprovalPolicy());
   }, [engine]);
 
   useEffect(() => {
@@ -188,33 +182,6 @@ function EngineRow({
     try {
       await api.engines.update(engine.id, { displayName, acpCommand });
       setNotice('已保存引擎设置。');
-      onChanged();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveApproval = async () => {
-    setBusy(true); setErr(null); setNotice(null);
-    try {
-      await api.engines.setOverride(engine.id, { approval });
-      setNotice('已保存引擎审核策略。使用该引擎的实例重启后生效（除非实例自行覆盖）。');
-      onChanged();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const clearApproval = async () => {
-    setBusy(true); setErr(null); setNotice(null);
-    try {
-      await api.engines.clearApproval(engine.id);
-      setApproval(emptyApprovalPolicy());
-      setNotice('已清除引擎审核策略（回退到全局默认）。');
       onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -331,7 +298,6 @@ function EngineRow({
             </span>
           )}
           {engine.disabled && <span style={{ ...tag, background: '#452632', color: '#f38ba8' }}>已禁用</span>}
-          {engine.approval && <span style={{ ...tag, background: '#2a3a4a', color: '#89dceb' }}>审核: {engine.approval.mode}</span>}
           {engine.envVarKeys && engine.envVarKeys.length > 0 && (
             <span style={tag}>{engine.envVarKeys.length} 个凭据</span>
           )}
@@ -503,17 +469,6 @@ function EngineRow({
                   {busy ? '保存中…' : '保存环境变量'}
                 </button>
               </div>
-            </div>
-          </div>
-
-          <div style={subSection}>
-            <h5 style={subTitle}>工具审核策略（引擎默认）</h5>
-            <ApprovalPolicyEditor value={approval} onChange={setApproval} />
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button style={primaryBtn} disabled={busy} onClick={() => void saveApproval()}>保存策略</button>
-              {engine.approval && (
-                <button style={secondaryBtn} disabled={busy} onClick={() => void clearApproval()}>清除（继承全局）</button>
-              )}
             </div>
           </div>
 

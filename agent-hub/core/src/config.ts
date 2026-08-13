@@ -52,6 +52,7 @@ import {
   CustomEngineInUseError,
   CustomEngineNotFoundError,
 } from './engines.js';
+import { defaultSessionModeId, parseSessionMode } from './engine-modes.js';
 
 export {
   BUILTIN_ENGINE_IDS,
@@ -135,37 +136,6 @@ export interface GatewayConfig {
   readonly routerHost: string;
   /** Local port the dispatch server (and the tunnel's local target) uses. */
   readonly routerPort: number;
-  /**
-   * Device-wide default tool-call approval policy. Injected into every managed
-   * agent's gateway process as `PAW_ACP_APPROVAL_*` env vars unless a instance
-   * defines its own {@link InstanceConfig.approval} override.
-   */
-  readonly approval?: ApprovalPolicyConfig;
-}
-
-/** How the gateway decides whether a tool call needs remote review. */
-export type ApprovalMode = 'ask' | 'auto' | 'custom';
-
-/**
- * Tool-call approval policy (request #4). Lets the operator pre-decide which
- * ACP permissions are auto-approved ("skipped"), auto-denied, or always sent
- * to the Shepaw app for remote review.
- *
- * `mode`:
- *   - `ask`    — always ask (safest; ignores allow rules).
- *   - `auto`   — auto-allow everything except `denyPatterns` / `askKinds`.
- *   - `custom` — apply allow/ask/deny rules; default to ask.
- *
- * `*Kinds` are ACP tool kinds (`read`, `edit`, `delete`, `move`, `search`,
- * `execute`, `think`, `fetch`, `switch_mode`, `other`). `*Patterns` are
- * case-insensitive regexes matched against the tool title + extracted command.
- */
-export interface ApprovalPolicyConfig {
-  readonly mode: ApprovalMode;
-  readonly allowKinds: ReadonlyArray<string>;
-  readonly askKinds: ReadonlyArray<string>;
-  readonly allowPatterns: ReadonlyArray<string>;
-  readonly denyPatterns: ReadonlyArray<string>;
 }
 
 export interface InstanceConfig {
@@ -215,11 +185,11 @@ export interface InstanceConfig {
    */
   readonly tunnel?: TunnelConfig;
   /**
-   * Optional per-instance tool-call approval override. When set, it fully
-   * replaces the gateway-level default ({@link GatewayConfig.approval}) for
-   * this instance's agent. Leave unset to inherit the device-wide default.
+   * Native ACP session / permission mode for this instance's engine
+   * (e.g. Cursor `agent`/`plan`/`ask`, Claude `acceptEdits`/`bypassPermissions`).
+   * Injected as `PAW_ACP_SESSION_MODE` at spawn. Omitted → engine default.
    */
-  readonly approval?: ApprovalPolicyConfig;
+  readonly sessionMode?: string;
   /**
    * Per-instance engine credentials (API keys, auth tokens, base URLs).
    * Values are stored AES-256-GCM encrypted via `crypto.ts`; they are
@@ -256,9 +226,6 @@ export type HubCredentialCache = Partial<Record<BuiltinAgentEngine, Record<strin
  * custom engines (keyed by engine id). All fields optional — an engine with
  * no entry simply inherits device-wide defaults.
  *
- * Resolution precedence for tool-call approval (most specific wins):
- *   instance.approval → engineOverrides[engine].approval → gateway.approval
- *
  * `envVars` are injected at spawn time as engine-default env, merged UNDER
  * the instance's own envVars so a instance can override a single key. Values
  * are AES-256-GCM encrypted like {@link InstanceConfig.envVars}.
@@ -270,8 +237,6 @@ export interface EngineOverrides {
   readonly displayName?: string;
   /** Engine-default credentials, encrypted at rest. */
   readonly envVars?: Record<string, string>;
-  /** Per-engine default tool-call approval policy. */
-  readonly approval?: ApprovalPolicyConfig;
 }
 
 /** Map keyed by engine id (built-in or custom). */
@@ -298,7 +263,7 @@ export interface HubConfig {
   readonly gateway?: GatewayConfig;
   /** Device-level peer service config (host/port). */
   readonly peer?: PeerServiceConfig;
-  /** Per-engine overrides (disabled / displayName / envVars / approval). */
+  /** Per-engine overrides (disabled / displayName / envVars). */
   readonly engineOverrides?: EngineOverridesMap;
   /** Last Tunnel Server URL used — pre-filled when creating a new instance. */
   readonly lastTunnelServerUrl?: string;
@@ -370,7 +335,6 @@ export function setHubGateway(
     tunnel?: TunnelConfig | null;
     routerHost?: string;
     routerPort?: number;
-    approval?: ApprovalPolicyConfig | null;
   },
 ): HubConfig {
   const existing = config.gateway;
@@ -382,40 +346,14 @@ export function setHubGateway(
   } else {
     tunnel = existing?.tunnel;
   }
-  let approval: ApprovalPolicyConfig | undefined;
-  if (patch.approval === null) {
-    approval = undefined;
-  } else if (patch.approval !== undefined) {
-    approval = patch.approval;
-  } else {
-    approval = existing?.approval;
-  }
   const gateway: GatewayConfig = {
     ...(tunnel !== undefined && { tunnel }),
     routerHost: patch.routerHost ?? existing?.routerHost ?? DEFAULT_ROUTER_HOST,
     routerPort: patch.routerPort ?? existing?.routerPort ?? DEFAULT_ROUTER_PORT,
-    ...(approval !== undefined && { approval }),
   };
   const next: HubConfig = { ...config, gateway };
   persist(next.path, next.instances, hubPersistMeta(next));
   return next;
-}
-
-/**
- * Resolve the effective approval policy for a instance, most-specific-wins:
- * the instance's own override → the engine's override → the gateway-level
- * default. Returns undefined when none of the three is configured (the agent
- * then defaults to always-ask).
- */
-export function resolveApprovalPolicy(
-  config: HubConfig,
-  instance: Pick<InstanceConfig, 'approval' | 'engine'>,
-): ApprovalPolicyConfig | undefined {
-  return (
-    instance.approval ??
-    config.engineOverrides?.[instance.engine]?.approval ??
-    config.gateway?.approval
-  );
 }
 
 /**
@@ -496,8 +434,8 @@ export function isEngineDisabled(config: HubConfig, id: string): boolean {
 }
 
 /**
- * Set or patch a per-engine override. `null` for `disabled` / `displayName` /
- * `approval` clears that field. Env vars are merged encrypted (instance-style):
+ * Set or patch a per-engine override. `null` for `disabled` / `displayName`
+ * clears that field. Env vars are merged encrypted (instance-style):
  * `mergeEnvVars` (plain), `clearEnvVars`, `deleteEnvVarKey`. Throws if the
  * engine id is not known.
  */
@@ -507,7 +445,6 @@ export function setEngineOverride(
   patch: {
     disabled?: boolean | null;
     displayName?: string | null;
-    approval?: ApprovalPolicyConfig | null;
     mergeEnvVars?: Record<string, string>;
     clearEnvVars?: boolean;
     deleteEnvVarKey?: string;
@@ -536,12 +473,6 @@ export function setEngineOverride(
     nextOverrides.displayName = trimmed;
   }
 
-  if (patch.approval === null) {
-    delete nextOverrides.approval;
-  } else if (patch.approval !== undefined) {
-    nextOverrides.approval = patch.approval;
-  }
-
   // Env var merge — same scheme as instance envVars.
   let envVars = patch.clearEnvVars ? {} : { ...(prev.envVars ?? {}) };
   if (patch.deleteEnvVarKey !== undefined) {
@@ -562,11 +493,6 @@ export function setEngineOverride(
   const next: HubConfig = { ...config, engineOverrides };
   persist(next.path, next.instances, hubPersistMeta(next));
   return next;
-}
-
-/** Convenience: clear just the approval field of an engine's override. */
-export function clearEngineApproval(config: HubConfig, id: string): HubConfig {
-  return setEngineOverride(config, id, { approval: null });
 }
 
 /** Set one engine-default env var (encrypted). */
@@ -646,8 +572,14 @@ export function addInstance(
   validateInstanceId(instance.id);
   const root = hubRoot();
   const { plainEnvVars, ...rest } = instance;
+  const sessionMode =
+    rest.sessionMode ?? defaultSessionModeId(instance.engine);
+  if (sessionMode !== undefined) {
+    parseSessionMode(instance.engine, sessionMode);
+  }
   const normalized: InstanceConfig = {
     ...rest,
+    ...(sessionMode !== undefined && { sessionMode }),
     cwd: normalizeCwd(instance.cwd),
     envVars: plainEnvVars && Object.keys(plainEnvVars).length > 0
       ? encryptEnvVars(plainEnvVars, root)
@@ -768,6 +700,8 @@ export function updateInstance(
     mergeEnvVars?: Record<string, string>;
     clearEnvVars?: boolean;
     deleteEnvVarKey?: string;
+    /** Persist a live-advertised mode even if it is not in the Hub catalog. */
+    allowUnknownSessionMode?: boolean;
   },
 ): HubConfig {
   const idx = config.instances.findIndex((p) => p.id === id);
@@ -788,7 +722,13 @@ export function updateInstance(
     envVars = { ...envVars, ...encrypted };
   }
 
-  const { mergeEnvVars: _m, clearEnvVars: _c, deleteEnvVarKey: _d, ...rest } = patch;
+  const {
+    mergeEnvVars: _m,
+    clearEnvVars: _c,
+    deleteEnvVarKey: _d,
+    allowUnknownSessionMode: allowUnknown,
+    ...rest
+  } = patch;
   if (rest.engine !== undefined && !isKnownEngine(rest.engine, config.customEngines)) {
     throw new Error(`Unknown engine "${rest.engine}".`);
   }
@@ -810,6 +750,11 @@ export function updateInstance(
           'Install it under Settings → Engine Management in the dashboard.',
       );
     }
+  }
+  if (rest.sessionMode !== undefined) {
+    parseSessionMode(rest.engine ?? existing.engine, rest.sessionMode, {
+      allowUnknown: allowUnknown === true,
+    });
   }
   const next: InstanceConfig = {
     ...existing,
@@ -968,7 +913,8 @@ function loadExisting(path: string): HubConfig {
         : [],
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : '',
       tunnel: parseTunnelConfig(p.tunnel),
-      approval: parseApprovalPolicy(p.approval),
+      ...(typeof p.sessionMode === 'string' && p.sessionMode.trim().length > 0
+        && { sessionMode: p.sessionMode.trim() }),
       // Backwards compat: old instances without envVars default to empty.
       envVars: parseEnvVarsConfig(p.envVars),
       ...(p.enabled === false && { enabled: false as const }),
@@ -1008,35 +954,10 @@ function parseGatewayConfig(v: unknown): GatewayConfig | undefined {
   const routerPort = typeof obj.routerPort === 'number' && Number.isInteger(obj.routerPort) && obj.routerPort > 0
     ? obj.routerPort
     : DEFAULT_ROUTER_PORT;
-  const approval = parseApprovalPolicy(obj.approval);
   return {
     ...(tunnel !== undefined && { tunnel }),
     routerHost,
     routerPort,
-    ...(approval !== undefined && { approval }),
-  };
-}
-
-const APPROVAL_KINDS = new Set([
-  'read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other',
-]);
-
-function parseApprovalPolicy(v: unknown): ApprovalPolicyConfig | undefined {
-  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const o = v as Record<string, unknown>;
-  const mode: ApprovalMode = o.mode === 'auto' || o.mode === 'custom' ? o.mode : 'ask';
-  const kinds = (x: unknown): string[] =>
-    Array.isArray(x)
-      ? x.filter((s): s is string => typeof s === 'string' && APPROVAL_KINDS.has(s))
-      : [];
-  const strs = (x: unknown): string[] =>
-    Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string' && s.length > 0) : [];
-  return {
-    mode,
-    allowKinds: kinds(o.allowKinds),
-    askKinds: kinds(o.askKinds),
-    allowPatterns: strs(o.allowPatterns),
-    denyPatterns: strs(o.denyPatterns),
   };
 }
 
@@ -1061,7 +982,6 @@ function parseEngineOverrides(v: unknown): EngineOverridesMap | undefined {
         : typeof o.envVars === 'object' && !Array.isArray(o.envVars)
           ? { envVars: parseEnvVarsConfig(o.envVars) }
           : {}),
-      ...(parseApprovalPolicy(o.approval) !== undefined && { approval: parseApprovalPolicy(o.approval) }),
     };
     if (Object.keys(entry).length > 0) out[id] = entry;
   }
