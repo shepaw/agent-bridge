@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  catalogModesWire,
   defaultSessionModeId,
   getEngineSessionCatalog,
   isKnownSessionMode,
@@ -64,5 +65,28 @@ describe('parseSessionMode', () => {
     expect(isKnownSessionMode('cursor', 'plan')).toBe(true);
     expect(isKnownSessionMode('cursor', 'auto')).toBe(false);
     expect(isKnownSessionMode('codebuddy', 'agent')).toBe(false);
+  });
+});
+
+describe('catalogModesWire', () => {
+  it('maps Cursor catalog to App picker wire format', () => {
+    const wire = catalogModesWire('cursor', 'plan');
+    expect(wire.current).toBe('plan');
+    expect(wire.modes.map((m) => m.value)).toEqual(['agent', 'plan', 'ask']);
+    expect(wire.modes[0]).toMatchObject({
+      value: 'agent',
+      display_name: 'Agent',
+    });
+  });
+
+  it('falls back to the engine default when current is missing', () => {
+    expect(catalogModesWire('cursor').current).toBe('agent');
+    expect(catalogModesWire('claude-code').current).toBe('acceptEdits');
+    expect(catalogModesWire('codex').current).toBe('on-request');
+  });
+
+  it('leaves engines without a catalog empty', () => {
+    expect(catalogModesWire('codebuddy').modes).toEqual([]);
+    expect(catalogModesWire('codebuddy').current).toBeUndefined();
   });
 });

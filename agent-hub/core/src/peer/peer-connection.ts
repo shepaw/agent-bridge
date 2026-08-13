@@ -12,9 +12,9 @@ import { randomUUID } from 'node:crypto';
 import { decodeFrame, encodeFrame, NoiseSession, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { getInstance, loadOrCreateHubConfig, updateInstance } from '../config.js';
-import { parseSessionMode } from '../engine-modes.js';
+import { catalogModesWire, parseSessionMode } from '../engine-modes.js';
 import { instancePaths } from '../paths.js';
-import { listAgents } from './peer-agent-host.js';
+import { isInstanceRunning, listAgents } from './peer-agent-host.js';
 import {
   currentAgentListPayload,
   handleAgentManage,
@@ -568,19 +568,37 @@ export async function drivePeerConnection(opts: {
     });
   };
 
+  const catalogModesForAgent = (agentId: string): ReturnType<typeof catalogModesWire> => {
+    try {
+      const instance = getInstance(loadOrCreateHubConfig(), agentId);
+      return catalogModesWire(instance.engine, instance.sessionMode);
+    } catch {
+      return { modes: [] };
+    }
+  };
+
   /** App requests upstream session-mode list (agent.modes.list relay). */
   const handleAgentModesReq = async (params: Record<string, unknown>): Promise<void> => {
     const agentId = params.agent_id as string | undefined;
     if (typeof agentId !== 'string') return;
     const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+    const fallback = catalogModesForAgent(agentId);
     let modes: unknown[] = [];
     let current: string | undefined;
-    try {
-      const result = await getAcpClient(agentId).modesList(sessionId);
-      modes = result.modes;
-      current = result.current;
-    } catch (err) {
-      log(`agent_modes req failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (isInstanceRunning(agentId)) {
+      try {
+        const result = await getAcpClient(agentId).modesList(sessionId);
+        modes = result.modes;
+        current = result.current;
+      } catch (err) {
+        log(`agent_modes req failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (!Array.isArray(modes) || modes.length === 0) {
+      modes = fallback.modes;
+      current = fallback.current;
+    } else if (current === undefined) {
+      current = fallback.current;
     }
     send({
       type: 'agent_modes_resp',
@@ -598,15 +616,22 @@ export async function drivePeerConnection(opts: {
     const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
     let ok = false;
     let displayName: string | undefined;
-    try {
-      const result = await getAcpClient(agentId).modesSetCurrent(mode, sessionId);
-      ok = result !== null;
-      displayName = result?.display_name;
-      if (ok && result !== null) {
-        persistPeerSessionMode(agentId, result.mode);
+    if (isInstanceRunning(agentId)) {
+      try {
+        const result = await getAcpClient(agentId).modesSetCurrent(mode, sessionId);
+        ok = result !== null;
+        displayName = result?.display_name;
+        if (ok && result !== null) {
+          persistPeerSessionMode(agentId, result.mode);
+        }
+      } catch (err) {
+        log(`agent_modes_set req failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      log(`agent_modes_set req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!ok) {
+      persistPeerSessionMode(agentId, mode);
+      displayName ??= catalogModesForAgent(agentId).modes.find((m) => m.value === mode)?.display_name;
+      ok = true;
     }
     send({
       type: 'agent_modes_set_resp',

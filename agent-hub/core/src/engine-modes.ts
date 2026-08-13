@@ -6,9 +6,9 @@
  * choice on the instance and ask the proxy to set it via ACP
  * `session/set_mode` / `session/set_config_option`.
  *
- * Catalogs are create/edit pickers. The live App list comes from whatever the
- * agent advertised — unknown engines and engines without a catalog leave the
- * picker empty so we don't pretend they share Cursor's modes.
+ * Catalogs are create/edit pickers and the App fallback when ACP has not
+ * advertised modes yet (no live session). Unknown engines leave the picker
+ * empty so we don't pretend they share Cursor's modes.
  */
 
 export interface EngineSessionMode {
@@ -96,6 +96,30 @@ export function getEngineSessionCatalog(engineId: string): EngineSessionModeCata
 
 export function defaultSessionModeId(engineId: string): string | undefined {
   return getEngineSessionCatalog(engineId).defaultModeId;
+}
+
+/** Wire payload for App `agent_modes_resp` when ACP has not advertised modes yet. */
+export function catalogModesWire(
+  engineId: string,
+  current?: string,
+): {
+  modes: Array<{ value: string; display_name: string; description: string }>;
+  current?: string;
+} {
+  const catalog = getEngineSessionCatalog(engineId);
+  const modes = catalog.modes.map((m) => ({
+    value: m.id,
+    display_name: m.name,
+    description: m.description,
+  }));
+  const resolved =
+    current !== undefined && current.length > 0 && modes.some((m) => m.value === current)
+      ? current
+      : catalog.defaultModeId;
+  return {
+    modes,
+    ...(resolved !== undefined ? { current: resolved } : {}),
+  };
 }
 
 export function isKnownSessionMode(engineId: string, modeId: string): boolean {

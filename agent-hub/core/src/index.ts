@@ -251,6 +251,7 @@ export {
 } from './engines.js';
 export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo, EngineOverrideInstanceion } from './engines.js';
 export {
+  catalogModesWire,
   defaultSessionModeId,
   getEngineSessionCatalog,
   isKnownSessionMode,
