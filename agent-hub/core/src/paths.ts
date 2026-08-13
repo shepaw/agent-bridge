@@ -114,6 +114,11 @@ export function peerPendingApprovalsPath(root: string = hubRoot()): string {
   return join(root, 'peer-pending-approvals.json');
 }
 
+/** request_id → ACP task mapping — survives hub restarts for turn resume. */
+export function peerTurnMapPath(root: string = hubRoot()): string {
+  return join(root, 'peer-turn-map.json');
+}
+
 /** State file for the device-level peer service process. */
 export function peerStatePath(root: string = hubRoot()): string {
   return join(root, 'peer-state.json');

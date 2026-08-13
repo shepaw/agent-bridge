@@ -295,6 +295,44 @@ export interface ModelsSetCurrentResult {
   display_name?: string;
 }
 
+// ── Session mode selection (agent.modes.list / agent.modes.setCurrent) ──
+
+/**
+ * A native ACP session / permission mode (Cursor Auto/Agent, Claude
+ * acceptEdits, Codex on-request, …). Wire stays snake_case like models.
+ */
+export interface ModeInfo {
+  value: string;
+  display_name: string;
+  description: string;
+}
+
+/** `agent.modes.list` request params. */
+export interface ModesListParams {
+  /** When set, return modes/current for this Shepaw session. */
+  session_id?: string;
+}
+
+/** `agent.modes.list` response. */
+export interface ModesListResult {
+  modes: ModeInfo[];
+  /** The currently-selected mode value, if any. */
+  current?: string;
+}
+
+/** `agent.modes.setCurrent` request params. */
+export interface ModesSetCurrentParams {
+  mode: string;
+  /** When set, apply to this Shepaw session's upstream ACP session. */
+  session_id?: string;
+}
+
+/** `agent.modes.setCurrent` response. */
+export interface ModesSetCurrentResult {
+  mode: string;
+  display_name?: string;
+}
+
 // ── JSON-RPC envelopes (generic shapes) ────────────────────────────
 
 export interface JsonRpcRequest {

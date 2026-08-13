@@ -31,6 +31,7 @@ import {
 import { addInstance, loadOrCreateHubConfig, saveHubConfig } from '../src/config.js';
 import { loadOrCreatePeerIdentity } from '../src/peer/peer-identity.js';
 import { getPendingApproval } from '../src/peer/peer-pending-approvals.js';
+import { markPeerTurnTerminal } from '../src/peer/peer-turn-map.js';
 
 // ── Fake PeerAcpClient ──────────────────────────────────────────────
 
@@ -55,6 +56,17 @@ const { FakePeerAcpClient } = vi.hoisted(() => {
   }
   class FakePeerAcpClient {
     static instances: FakePeerAcpClient[] = [];
+    /**
+     * Proxy-side replay buffers (taskId → stream). Separate from client
+     * instances on purpose: the proxy is a detached process that survives a
+     * hub restart, so this state must outlive close()/instance replacement.
+     */
+    static proxyTasks = new Map<string, {
+      accumulated: string;
+      status: 'streaming' | 'done' | 'error';
+      metadata?: Record<string, unknown>;
+      errorMessage?: string;
+    }>();
     closed = false;
     readonly turns = new Map<string, FakeTurn>();
     deferred: Array<{
@@ -78,8 +90,53 @@ const { FakePeerAcpClient } = vi.hoisted(() => {
         pendingApprovals: 0,
         cancelRequested: false,
       });
+      FakePeerAcpClient.proxyTasks.set(req.taskId, { accumulated: '', status: 'streaming' });
       // Turn lifecycle is driven by the test via emit*.
       return new Promise<void>(() => {});
+    }
+
+    /** Mirror of the real reattachTurn: answer from the proxy replay buffer. */
+    async reattachTurn(
+      taskId: string,
+      handlers: FakeHandlers,
+    ): Promise<{
+      status: 'streaming' | 'done' | 'error' | 'lost';
+      delta: string;
+      metadata?: Record<string, unknown>;
+      content?: string;
+      terminalMetadata?: Record<string, unknown>;
+      message?: string;
+    }> {
+      const proxy = FakePeerAcpClient.proxyTasks.get(taskId);
+      if (proxy === undefined) return { status: 'lost', delta: '' };
+      if (proxy.status === 'done') {
+        return {
+          status: 'done',
+          delta: proxy.accumulated,
+          content: proxy.accumulated,
+          ...(proxy.metadata !== undefined ? { terminalMetadata: proxy.metadata } : {}),
+        };
+      }
+      if (proxy.status === 'error') {
+        return {
+          status: 'error',
+          delta: proxy.accumulated,
+          message: proxy.errorMessage ?? 'agent error',
+        };
+      }
+      // Streaming: register the live turn (accumulated pre-seeded) so later
+      // emit* route to the rebuilt handlers.
+      this.turns.set(taskId, {
+        handlers,
+        accumulated: proxy.accumulated,
+        pendingApprovals: 0,
+        cancelRequested: false,
+      });
+      return {
+        status: 'streaming',
+        delta: proxy.accumulated,
+        ...(proxy.metadata !== undefined ? { metadata: proxy.metadata } : {}),
+      };
     }
 
     cancelTurn(taskId: string): void {
@@ -112,6 +169,8 @@ const { FakePeerAcpClient } = vi.hoisted(() => {
       const t = this.turns.get(taskId);
       if (t === undefined) throw new Error(`no turn ${taskId}`);
       t.accumulated += content;
+      const proxy = FakePeerAcpClient.proxyTasks.get(taskId);
+      if (proxy !== undefined) proxy.accumulated += content;
       t.handlers.onChunk(content);
     }
 
@@ -140,6 +199,11 @@ const { FakePeerAcpClient } = vi.hoisted(() => {
       const t = this.turns.get(taskId);
       if (t === undefined) throw new Error(`no turn ${taskId}`);
       t.completedPayload = { content: t.accumulated, metadata };
+      const proxy = FakePeerAcpClient.proxyTasks.get(taskId);
+      if (proxy !== undefined) {
+        proxy.status = 'done';
+        proxy.metadata = metadata;
+      }
       this.maybeFinish(taskId);
     }
 
@@ -285,6 +349,7 @@ beforeEach(() => {
   prevHome = process.env.SHEPAW_HUB_HOME;
   process.env.SHEPAW_HUB_HOME = home;
   FakePeerAcpClient.instances = [];
+  FakePeerAcpClient.proxyTasks = new Map();
   // The peer-scoped acp client registry is module-level (shared across
   // reconnects by design) — reset it between tests.
   resetPeerSessionsForTest();
@@ -388,7 +453,7 @@ describe('peer flap mid-approval', () => {
     link.close();
   });
 
-  it('idle reaper closes clients only once no turn is in flight and no connection is live', async () => {
+  it('idle reaper keeps clients after disconnect so reconnects resume instantly', async () => {
     const logLines: string[] = [];
     const link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
@@ -405,10 +470,11 @@ describe('peer flap mid-approval', () => {
     reapIdlePeerSessions();
     expect(client.closed).toBe(false);
 
-    // Turn drained → reaper closes the idle client.
+    // Turn drained → the client STILL stays open: the peer↔agent link must not
+    // drop just because the app went away — the next reconnect resumes on it.
     client.turns.clear();
     reapIdlePeerSessions();
-    expect(client.closed).toBe(true);
+    expect(client.closed).toBe(false);
   });
 });
 
@@ -512,20 +578,33 @@ describe('turn resume after peer flap', () => {
     link.close();
   });
 
-  it('answers lost for unknown request_id and after hub state wipe', async () => {
+  it('answers lost for unknown request_id; hub state wipe rebuilds from the proxy instead', async () => {
     const logLines: string[] = [];
     let link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'nope', known_content_length: 0 });
     const resp = await link.nextMessage();
     expect(resp).toMatchObject({ type: 'agent_turn_resume_resp', request_id: 'nope', status: 'lost' });
 
-    // A real turn, then hub "restarts" (registry wiped) → also lost.
+    // A real turn, then hub "restarts" (registry wiped): the persisted
+    // mapping + the proxy's replay buffer still serve the resume.
     link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
     await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+    client.emitChunk(taskId, 'partial');
+    await link.nextMessage();
     resetPeerSessionsForTest();
-    link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 0 });
+    FakePeerAcpClient.instances = [];
+
+    link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 3 });
     const resp2 = await link.nextMessage();
-    expect(resp2).toMatchObject({ type: 'agent_turn_resume_resp', request_id: 'r1', status: 'lost' });
+    expect(resp2).toMatchObject({
+      type: 'agent_turn_resume_resp',
+      request_id: 'r1',
+      status: 'streaming',
+      delta: 'tial',
+    });
     link.close();
   });
 
@@ -671,21 +750,25 @@ describe('turn resume after peer flap', () => {
     client.emitChunk(taskId, 'data');
     client.emitDone(taskId);
 
-    // Reaper may close the drained client but must keep the result replayable.
+    // Reaper keeps the drained client (peer↔agent link stays up) and must
+    // keep the result replayable.
     reapIdlePeerSessions();
-    expect(client.closed).toBe(true);
+    expect(client.closed).toBe(false);
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 0 });
     const resp = await link.nextMessage();
     expect(resp).toMatchObject({ status: 'done', delta: 'data', content: 'data' });
 
-    // Age the entry past the TTL → the reaper sweeps it → resume → lost.
+    // Age the entry past the TTL → the reaper sweeps it. The persisted
+    // mapping (hub-restart recovery path) must also be aged past ITS TTL,
+    // otherwise the rebuild path resurrects the turn from the proxy.
     const entry = getPeerSessionsForTest().get('peer1')?.turns.get('r1');
     expect(entry).toBeDefined();
     entry!.terminalAt = Date.now() - 26 * 60 * 1000;
     link.close();
     reapIdlePeerSessions();
     expect(getPeerSessionsForTest().get('peer1')?.turns.has('r1') ?? false).toBe(false);
+    markPeerTurnTerminal('r1', Date.now() - 26 * 60 * 1000);
 
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 0 });
@@ -718,5 +801,107 @@ describe('turn resume after peer flap', () => {
     const onA = await linkA.nextMessage();
     expect(onA).toMatchObject({ type: 'agent_chunk', content: 'to-oldest' });
     linkA.close();
+  });
+});
+
+// ── Hub restart recovery ────────────────────────────────────────────
+
+describe('turn resume after hub restart (rebuild from proxy)', () => {
+  it('rebuilds a streaming turn from the proxy replay buffer via the persisted mapping', async () => {
+    const logLines: string[] = [];
+    let link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    client.emitChunk(taskId, 'Hello ');
+    const live1 = await link.nextMessage();
+    expect(live1).toMatchObject({ type: 'agent_chunk', content: 'Hello ' });
+
+    // ── Hub "restarts": registry + clients die; the persisted turn mapping
+    // and the proxy's replay buffer survive.
+    resetPeerSessionsForTest();
+    FakePeerAcpClient.instances = [];
+    const proxy = FakePeerAcpClient.proxyTasks.get(taskId)!;
+    expect(proxy).toBeDefined();
+    // The turn keeps running on the proxy while the hub is down.
+    proxy.accumulated += 'wor';
+    proxy.accumulated += 'ld';
+
+    // ── Phone reconnects and resumes; the hub knows nothing in memory.
+    link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 6 });
+
+    // The replayed stream is folded into the rebuilt registry entry (NOT
+    // live-routed — that would double-deliver); the resume response carries
+    // exactly the missed suffix.
+    const resp = await link.nextMessage();
+    expect(resp).toMatchObject({
+      type: 'agent_turn_resume_resp',
+      request_id: 'r1',
+      status: 'streaming',
+      delta: 'world',
+    });
+
+    // A duplicate agent_chat with the same request_id is still rejected
+    // (persisted mapping survives the restart).
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi again' });
+    const dup = await link.nextMessage();
+    expect(dup).toMatchObject({ type: 'agent_error', request_id: 'r1', message: 'duplicate request_id' });
+
+    // Live output keeps flowing on the rebuilt turn; completion routes too.
+    const client2 = FakePeerAcpClient.instances[0];
+    client2.emitChunk(taskId, '!');
+    const live3 = await link.nextMessage();
+    expect(live3).toMatchObject({ type: 'agent_chunk', content: '!' });
+    client2.emitDone(taskId);
+    const done = await link.nextMessage();
+    expect(done).toMatchObject({ type: 'agent_done', request_id: 'r1', content: 'Hello world!' });
+    link.close();
+  });
+
+  it('serves a turn that finished while the hub was down', async () => {
+    const logLines: string[] = [];
+    let link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    client.emitChunk(taskId, 'Hello ');
+    await link.nextMessage();
+    link.close();
+    await waitFor(() => logLines.some((l) => l.includes('disconnected')));
+
+    // Hub down; the proxy finishes the turn with nobody listening.
+    resetPeerSessionsForTest();
+    FakePeerAcpClient.instances = [];
+    const proxy = FakePeerAcpClient.proxyTasks.get(taskId)!;
+    proxy.accumulated += 'world';
+    proxy.status = 'done';
+
+    link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 6 });
+    // Terminal rebuild: the buffered result comes back in the resume
+    // response itself (no separate live agent_done — that would double).
+    const resp = await link.nextMessage();
+    expect(resp).toMatchObject({
+      type: 'agent_turn_resume_resp',
+      request_id: 'r1',
+      status: 'done',
+      delta: 'world',
+      content: 'Hello world',
+    });
+    link.close();
+  });
+
+  it('still answers lost when neither registry nor proxy know the turn', async () => {
+    const logLines: string[] = [];
+    const link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_turn_resume_req', request_id: 'never-seen', known_content_length: 0 });
+    const resp = await link.nextMessage();
+    expect(resp).toMatchObject({ status: 'lost' });
+    link.close();
   });
 });

@@ -138,6 +138,15 @@ export interface TaskContextInit {
    * notifications are no-ops (no live caller WebSocket).
    */
   offlineSink?: { texts: string[] };
+  /**
+   * When set, ALL outbound messages go through this instead of wsSend(ws).
+   * The server uses it to route via a re-bindable live connection and to tap
+   * replayable events into a per-task buffer, so a client that reconnects
+   * after a flap (or a hub restart) can resume the turn via `agent.taskResume`
+   * instead of losing it. The transport MUST NOT throw on send failure —
+   * a dead route just means "detached, buffer only".
+   */
+  transport?: (message: Record<string, unknown>) => Promise<void>;
 }
 
 export class TaskContext {
@@ -148,6 +157,7 @@ export class TaskContext {
   private readonly pendingResponses: Map<string, Deferred<Record<string, unknown>>>;
   private readonly takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
   private readonly offlineSink?: { texts: string[] };
+  private readonly transport?: (message: Record<string, unknown>) => Promise<void>;
 
   constructor(init: TaskContextInit) {
     this.ws = init.ws;
@@ -157,6 +167,7 @@ export class TaskContext {
     this.pendingResponses = init.pendingResponses;
     this.takeEarlyResponse = init.takeEarlyResponse;
     this.offlineSink = init.offlineSink;
+    this.transport = init.transport;
   }
 
   /** Collected assistant text in offline/mailbox mode (empty string online). */
@@ -412,6 +423,10 @@ export class TaskContext {
   // ── internal ──────────────────────────────────────────────────
 
   private async sendRaw(message: unknown): Promise<void> {
+    if (this.transport !== undefined) {
+      await this.transport(message as Record<string, unknown>);
+      return;
+    }
     await wsSend(this.ws, message);
   }
 }

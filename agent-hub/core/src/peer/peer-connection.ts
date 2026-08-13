@@ -19,6 +19,14 @@ import {
   handleAgentManage,
 } from './peer-agent-manage.js';
 import { PeerAcpClient } from './peer-acp-client.js';
+import type { AcpChatHandlers } from './peer-acp-client.js';
+import {
+  deletePeerTurn,
+  getPeerTurn,
+  markPeerTurnTerminal,
+  reapPeerTurns,
+  savePeerTurn,
+} from './peer-turn-map.js';
 import {
   MAX_PEER_FILE_BYTES,
   normalizePeerAttachmentRefs,
@@ -121,6 +129,8 @@ export interface PeerSessionState {
     resolve: (selected: ApprovalVerdict) => void;
     timer: NodeJS.Timeout;
   }>;
+  /** request_ids currently being rebuilt from the proxy (double-resume guard). */
+  rebuildingTurns: Set<string>;
 }
 const peerSessions = new Map<string, PeerSessionState>();
 
@@ -133,6 +143,7 @@ function getPeerSession(peerId: string): PeerSessionState {
       turns: new Map(),
       liveRoutes: [],
       detachedApprovals: new Map(),
+      rebuildingTurns: new Set(),
     };
     peerSessions.set(peerId, s);
   }
@@ -155,26 +166,25 @@ export function sendToPeer(peerId: string, obj: Record<string, unknown>): boolea
 }
 
 /**
- * Close acp clients of peers that have no live connection and no in-flight
- * turns, and expire buffered terminal turn results. Clients whose turns
- * drained after a disconnect would otherwise linger (one WS + heartbeat per
- * agent) for the lifetime of the daemon.
+ * Expire buffered terminal turn results past their TTL. Disconnected peers'
+ * acp clients are intentionally NOT closed: a loopback WS + 25s heartbeat per
+ * (peer, agent) costs nothing, and keeping the peer↔agent link up is what
+ * lets a reconnecting app resume instantly (no handshake, warm command/model
+ * caches, upstream session still attached). Clients die only via transport
+ * errors, chat-start failures, or hub shutdown.
  * Exported for tests.
  */
 export function reapIdlePeerSessions(): void {
   const now = Date.now();
+  reapPeerTurns();
   for (const [peerId, s] of peerSessions) {
     for (const [rid, entry] of s.turns) {
       if (entry.terminalAt !== undefined && now - entry.terminalAt > TURN_RESULT_TTL_MS) {
         s.turns.delete(rid);
       }
     }
-    if (s.liveConnections > 0) continue;
-    for (const [agentId, client] of s.acpClients) {
-      if (client.hasInflightTurns) continue;
-      try { client.close(); } catch { /* ignore */ }
-      s.acpClients.delete(agentId);
-    }
+    // Only drop sessions that never got going — anything with a live acp
+    // client stays so the next reconnect reuses it.
     if (s.acpClients.size === 0 && s.turns.size === 0 && s.detachedApprovals.size === 0) {
       peerSessions.delete(peerId);
     }
@@ -196,6 +206,7 @@ export function resetPeerSessionsForTest(): void {
       clearTimeout(parked.timer);
     }
     s.detachedApprovals.clear();
+    s.rebuildingTurns.clear();
     s.liveRoutes.length = 0;
     s.liveConnections = 0;
   }
@@ -268,6 +279,12 @@ export async function drivePeerConnection(opts: {
       toolKind?: string; toolCallId?: string;
     },
   ): Promise<ApprovalVerdict> => {
+    // Duplicate card (e.g. the proxy re-emitted after a rebind): the original
+    // waiter owns the verdict; this caller unwinds without relaying anything.
+    if (pendingApprovals.has(req.confirmationId)) {
+      log(`approval_req duplicate confirmation=${req.confirmationId} — keeping original waiter`);
+      return Promise.resolve({ id: '', migrated: true });
+    }
     const record = pendingApprovalFromRequest(peerId, chatRequestId, agentId, req);
     try {
       savePendingApproval(record);
@@ -312,6 +329,7 @@ export async function drivePeerConnection(opts: {
         type: 'agent_approval_req',
         approval_id: req.confirmationId,
         request_id: chatRequestId,
+        agent_id: agentId,
         task_id: req.taskId,
         prompt: req.prompt,
         actions: req.actions,
@@ -420,6 +438,7 @@ export async function drivePeerConnection(opts: {
         type: 'agent_approval_req',
         approval_id: record.approvalId,
         request_id: record.requestId,
+        agent_id: record.agentId,
         task_id: record.taskId,
         prompt: record.prompt,
         actions: record.actions,
@@ -531,6 +550,116 @@ export async function drivePeerConnection(opts: {
     });
   };
 
+  /** App requests upstream session-mode list (agent.modes.list relay). */
+  const handleAgentModesReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    if (typeof agentId !== 'string') return;
+    const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+    let modes: unknown[] = [];
+    let current: string | undefined;
+    try {
+      const result = await getAcpClient(agentId).modesList(sessionId);
+      modes = result.modes;
+      current = result.current;
+    } catch (err) {
+      log(`agent_modes req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({
+      type: 'agent_modes_resp',
+      agent_id: agentId,
+      modes,
+      ...(current !== undefined ? { current } : {}),
+    });
+  };
+
+  /** App switches upstream session mode (agent.modes.setCurrent relay). */
+  const handleAgentModesSetReq = async (params: Record<string, unknown>): Promise<void> => {
+    const agentId = params.agent_id as string | undefined;
+    const mode = params.mode as string | undefined;
+    if (typeof agentId !== 'string' || typeof mode !== 'string' || mode.length === 0) return;
+    const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+    let ok = false;
+    let displayName: string | undefined;
+    try {
+      const result = await getAcpClient(agentId).modesSetCurrent(mode, sessionId);
+      ok = result !== null;
+      displayName = result?.display_name;
+    } catch (err) {
+      log(`agent_modes_set req failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    send({
+      type: 'agent_modes_set_resp',
+      agent_id: agentId,
+      mode,
+      ok,
+      ...(displayName !== undefined ? { display_name: displayName } : {}),
+    });
+  };
+
+  /**
+   * Register a turn in the peer-level registry BEFORE starting it: output
+   * routes through liveRoutes to the current live connection, so a flap
+   * neither loses the stream (accumulated replays on resume) nor the result
+   * (done/error buffered with TTL). The request_id → task_id mapping is also
+   * persisted — a hub restart loses the registry but not this file, so a
+   * later resume can rebuild the turn from the proxy's replay buffer.
+   */
+  const registerTurn = (requestId: string, agentId: string, taskId: string): TurnEntry => {
+    const entry: TurnEntry = { agentId, taskId, status: 'streaming', accumulated: '' };
+    peerSession.turns.set(requestId, entry);
+    try {
+      savePeerTurn({ requestId, peerId, agentId, taskId, createdAt: Date.now() });
+    } catch (err) {
+      log(`failed to persist turn mapping ${requestId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return entry;
+  };
+
+  /** Live-routing handlers shared by fresh turns and proxy-rebuilt ones. */
+  const makeTurnHandlers = (requestId: string, entry: TurnEntry): AcpChatHandlers => {
+    const finishDone = (content: string, metadata?: Record<string, unknown>): void => {
+      entry.status = 'done';
+      entry.done = { content, metadata };
+      entry.terminalAt = Date.now();
+      try {
+        markPeerTurnTerminal(requestId, entry.terminalAt);
+      } catch { /* non-fatal */ }
+      log(`agent_done req=${requestId}`);
+      routeToPeer(peerSession, { type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) });
+    };
+    const finishError = (msg: string): void => {
+      entry.status = 'error';
+      entry.error = msg;
+      entry.terminalAt = Date.now();
+      try {
+        markPeerTurnTerminal(requestId, entry.terminalAt);
+      } catch { /* non-fatal */ }
+      log(`agent_error req=${requestId}: ${msg}`);
+      routeToPeer(peerSession, { type: 'agent_error', request_id: requestId, message: msg });
+    };
+    return {
+      onChunk: (content) => {
+        entry.accumulated += content;
+        routeToPeer(peerSession, { type: 'agent_chunk', request_id: requestId, content });
+      },
+      onMetadata: (metadata) => {
+        entry.lastMetadata = metadata;
+        routeToPeer(peerSession, { type: 'agent_metadata', request_id: requestId, metadata });
+      },
+      onDone: finishDone,
+      onError: finishError,
+      // Approvals go to the current live connection; with none (peer away),
+      // park them — a dead connection's waiter would eventually relay a
+      // spurious deny (E1).
+      onApproval: (a) => {
+        const live = peerSession.liveRoutes.at(-1);
+        return live !== undefined
+          ? live.approvalHandler(requestId, entry.agentId, a)
+          : detachedApproval(requestId, entry.agentId, a);
+      },
+    };
+  };
+
   const handleAgentChat = async (params: Record<string, unknown>): Promise<void> => {
     const requestId = params.request_id as string | undefined;
     const agentId = params.agent_id as string | undefined;
@@ -539,9 +668,10 @@ export async function drivePeerConnection(opts: {
       send({ type: 'agent_error', request_id: requestId ?? '', message: 'invalid agent_chat params' });
       return;
     }
-    if (peerSession.turns.has(requestId)) {
-      // A retried agent_chat with a live request_id must not start a second
-      // ACP turn — the original keeps running and stays resumable.
+    // A retried agent_chat with a live request_id must not start a second ACP
+    // turn — the original keeps running and stays resumable. The persisted
+    // mapping covers hub restarts (registry lost, task still on the proxy).
+    if (peerSession.turns.has(requestId) || getPeerTurn(requestId) !== undefined) {
       log(`agent_chat duplicate request_id=${requestId} — rejected`);
       send({ type: 'agent_error', request_id: requestId, message: 'duplicate request_id' });
       return;
@@ -558,27 +688,9 @@ export async function drivePeerConnection(opts: {
       send({ type: 'agent_error', request_id: requestId, message: msg });
       return;
     }
-    // Register the turn in the peer-level registry BEFORE starting it: output
-    // routes through liveRoutes to the current live connection, so a flap
-    // neither loses the stream (accumulated replays on resume) nor the result
-    // (done/error buffered with TTL).
     const taskId = randomUUID();
-    const entry: TurnEntry = { agentId, taskId, status: 'streaming', accumulated: '' };
-    peerSession.turns.set(requestId, entry);
-    const finishDone = (content: string, metadata?: Record<string, unknown>): void => {
-      entry.status = 'done';
-      entry.done = { content, metadata };
-      entry.terminalAt = Date.now();
-      log(`agent_done req=${requestId}`);
-      routeToPeer(peerSession, { type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) });
-    };
-    const finishError = (msg: string): void => {
-      entry.status = 'error';
-      entry.error = msg;
-      entry.terminalAt = Date.now();
-      log(`agent_error req=${requestId}: ${msg}`);
-      routeToPeer(peerSession, { type: 'agent_error', request_id: requestId, message: msg });
-    };
+    const entry = registerTurn(requestId, agentId, taskId);
+    const handlers = makeTurnHandlers(requestId, entry);
     try {
       const refs = normalizePeerAttachmentRefs(params.attachments);
       const attachments = resolveAttachmentsForAcp(agentId, refs, storedFiles);
@@ -589,27 +701,7 @@ export async function drivePeerConnection(opts: {
           taskId,
           attachments,
         },
-        {
-          onChunk: (content) => {
-            entry.accumulated += content;
-            routeToPeer(peerSession, { type: 'agent_chunk', request_id: requestId, content });
-          },
-          onMetadata: (metadata) => {
-            entry.lastMetadata = metadata;
-            routeToPeer(peerSession, { type: 'agent_metadata', request_id: requestId, metadata });
-          },
-          onDone: finishDone,
-          onError: finishError,
-          // Approvals go to the current live connection; with none (peer away),
-          // park them — a dead connection's waiter would eventually relay a
-          // spurious deny (E1).
-          onApproval: (a) => {
-            const live = peerSession.liveRoutes.at(-1);
-            return live !== undefined
-              ? live.approvalHandler(requestId, agentId, a)
-              : detachedApproval(requestId, agentId, a);
-          },
-        },
+        handlers,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -617,26 +709,20 @@ export async function drivePeerConnection(opts: {
       // Connection/handshake failure — drop the client so the next chat retries.
       acpClients.delete(agentId);
       try { client.close(); } catch { /* ignore */ }
-      finishError(msg);
+      handlers.onError(msg);
     }
   };
 
   /**
-   * Resume a turn after a reconnect. MUST stay fully synchronous (no await):
-   * the single-threaded interleaving guarantee is what prevents chunk/done
-   * from racing the response. Delta semantics: accumulated is a UTF-16 code
-   * unit stream byte-aligned with the app's received chunks, so
+   * Serve a resume from a registry entry. MUST stay fully synchronous (no
+   * await): the single-threaded interleaving guarantee is what prevents
+   * chunk/done from racing the response. Delta semantics: accumulated is a
+   * UTF-16 code unit stream byte-aligned with the app's received chunks, so
    * `slice(known_content_length)` is exactly what the phone missed. The app
    * additionally drop-prefixes against late live chunks, making duplicate
    * resume requests idempotent.
    */
-  const handleTurnResumeReq = (requestId: string, knownContentLength: number): void => {
-    const entry = peerSession.turns.get(requestId);
-    if (entry === undefined) {
-      log(`turn resume req=${requestId} → lost (unknown/expired)`);
-      send({ type: 'agent_turn_resume_resp', request_id: requestId, status: 'lost', message: '对端任务已结束或丢失（hub 重启或已过期）' });
-      return;
-    }
+  const serveResumeFromEntry = (requestId: string, entry: TurnEntry, knownContentLength: number): void => {
     const base = Math.max(0, Math.min(knownContentLength, entry.accumulated.length));
     if (base !== knownContentLength) {
       log(`turn resume req=${requestId} known=${knownContentLength} out of range — clamped to ${base}`);
@@ -673,6 +759,107 @@ export async function drivePeerConnection(opts: {
       delta,
       message: entry.error ?? 'agent error',
     });
+  };
+
+  /**
+   * Resume a turn after a reconnect. Unknown request_id no longer means
+   * 'lost': the in-memory registry dies with the hub process, but the proxy
+   * (detached, longer-lived) keeps the task's replay buffer — rebuild the
+   * turn from it via the persisted request_id → task_id mapping.
+   */
+  const handleTurnResumeReq = (requestId: string, knownContentLength: number): void => {
+    const entry = peerSession.turns.get(requestId);
+    if (entry !== undefined) {
+      serveResumeFromEntry(requestId, entry, knownContentLength);
+      return;
+    }
+    void rebuildTurnFromProxy(requestId, knownContentLength);
+  };
+
+  const rebuildTurnFromProxy = async (requestId: string, knownContentLength: number): Promise<void> => {
+    const sendLost = (): void => {
+      log(`turn resume req=${requestId} → lost (unknown/expired)`);
+      send({
+        type: 'agent_turn_resume_resp',
+        request_id: requestId,
+        status: 'lost',
+        message: '对端任务已结束或丢失（hub 重启或已过期）',
+      });
+    };
+    // A twin resume for the same request_id is already in flight — its
+    // response will serve this one too (duplicate resumes are idempotent).
+    if (peerSession.rebuildingTurns.has(requestId)) return;
+    const record = getPeerTurn(requestId);
+    if (record === undefined || record.peerId !== peerId) {
+      sendLost();
+      return;
+    }
+    peerSession.rebuildingTurns.add(requestId);
+    try {
+      let client: PeerAcpClient;
+      try {
+        client = getAcpClient(record.agentId);
+      } catch (err) {
+        log(`turn resume req=${requestId} rebuild client error: ${err instanceof Error ? err.message : String(err)}`);
+        sendLost();
+        return;
+      }
+      // Build the entry + handlers first. For a still-running task,
+      // reattachTurn registers the inflight turn with these handlers so live
+      // chunks / approvals / completion route exactly like a fresh turn's.
+      const entry: TurnEntry = {
+        agentId: record.agentId,
+        taskId: record.taskId,
+        status: 'streaming',
+        accumulated: '',
+      };
+      const handlers = makeTurnHandlers(requestId, entry);
+      let result: Awaited<ReturnType<PeerAcpClient['reattachTurn']>>;
+      try {
+        result = await client.reattachTurn(record.taskId, handlers);
+      } catch (err) {
+        log(`turn resume req=${requestId} reattach threw: ${err instanceof Error ? err.message : String(err)}`);
+        sendLost();
+        return;
+      }
+      if (result.status === 'lost') {
+        // The proxy no longer has the task either — stop future attempts.
+        try {
+          deletePeerTurn(requestId);
+        } catch { /* non-fatal */ }
+        sendLost();
+        return;
+      }
+      // Fold the replayed stream into the entry directly — NOT through the
+      // handlers: live-routing it would double-deliver to the app, whose
+      // resume response below already carries exactly the missed suffix.
+      entry.accumulated = result.delta;
+      if (result.status === 'done') {
+        entry.status = 'done';
+        entry.done = {
+          content: result.content ?? result.delta,
+          ...(result.terminalMetadata !== undefined ? { metadata: result.terminalMetadata } : {}),
+        };
+        entry.terminalAt = Date.now();
+        try {
+          markPeerTurnTerminal(requestId, entry.terminalAt);
+        } catch { /* non-fatal */ }
+      } else if (result.status === 'error') {
+        entry.status = 'error';
+        entry.error = result.message ?? 'agent error';
+        entry.terminalAt = Date.now();
+        try {
+          markPeerTurnTerminal(requestId, entry.terminalAt);
+        } catch { /* non-fatal */ }
+      } else if (result.metadata !== undefined) {
+        entry.lastMetadata = result.metadata;
+      }
+      peerSession.turns.set(requestId, entry);
+      serveResumeFromEntry(requestId, entry, knownContentLength);
+      log(`turn resume req=${requestId} → rebuilt from proxy (status=${result.status})`);
+    } finally {
+      peerSession.rebuildingTurns.delete(requestId);
+    }
   };
 
   const handleFileBegin = (params: Record<string, unknown>): void => {
@@ -790,6 +977,12 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_models_set_req':
           void handleAgentModelsSetReq(obj);
+          break;
+        case 'agent_modes_req':
+          void handleAgentModesReq(obj);
+          break;
+        case 'agent_modes_set_req':
+          void handleAgentModesSetReq(obj);
           break;
         case 'agent_chat':
           void handleAgentChat(obj as Record<string, unknown>);

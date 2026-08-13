@@ -90,9 +90,16 @@ export class PeerAcpClient {
   /** Stable session id for this (peer, agent) pair — preserves multi-turn context. */
   private readonly defaultSessionId: string;
   private heartbeat: NodeJS.Timeout | undefined;
+  /**
+   * Turns to reattach once the transport is back. A dropped hub→proxy WS no
+   * longer kills in-flight turns: the proxy keeps running them (replay
+   * buffer), so on reconnect each marked turn is resumed via agent.taskResume
+   * with drop-prefix dedup. Only a 'lost' answer (proxy restarted) fails one.
+   */
+  private pendingResume: Set<string> | undefined;
+  private resumeLoop: Promise<void> | undefined;
 
-  /** Whether any chat turn is still running — the hub's idle reaper checks
-   * this before closing a disconnected peer's clients. */
+  /** Whether any chat turn is still running on this client. */
   get hasInflightTurns(): boolean {
     return this.inflight.size > 0;
   }
@@ -179,6 +186,103 @@ export class PeerAcpClient {
   }
 
   /**
+   * Re-attach to a task that kept running on the proxy while the hub was
+   * away (restart/upgrade). Sends `agent.taskResume` with known_length=0 and
+   * returns the proxy's buffered stream + status WITHOUT firing handlers for
+   * the replayed part — the caller folds the delta into its own registry and
+   * serves it via the resume response (live-routing it would double-deliver
+   * to the app). For a still-running task the inflight turn IS registered
+   * (with `accumulated` pre-seeded), so chunks / confirmations / completion
+   * arriving after the resume response route to the handlers normally.
+   */
+  async reattachTurn(
+    taskId: string,
+    handlers: AcpChatHandlers,
+  ): Promise<{
+    status: 'streaming' | 'done' | 'error' | 'lost';
+    /** Full buffered text stream (known_length=0 ⇒ whole stream). */
+    delta: string;
+    metadata?: Record<string, unknown>;
+    content?: string;
+    terminalMetadata?: Record<string, unknown>;
+    message?: string;
+  }> {
+    if (this.inflight.has(taskId)) return { status: 'streaming', delta: '' };
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    const result = await new Promise<Record<string, unknown> | undefined>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }, 15_000);
+      this.pendingRequests.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      if (!this.send({
+        jsonrpc: '2.0',
+        id,
+        method: 'agent.taskResume',
+        params: { task_id: taskId, known_length: 0 },
+      })) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }
+    });
+    if (result === undefined) {
+      this.log(`reattach task=${taskId} → no response (timeout/send failure)`);
+      return { status: 'lost', delta: '' };
+    }
+    const status = result.status as string | undefined;
+    const delta = (result.delta as string | undefined) ?? '';
+    const metadata = result.stream_metadata as Record<string, unknown> | undefined;
+
+    if (status === 'streaming') {
+      const cancelTimer = setInterval(() => {
+        const t = this.inflight.get(taskId);
+        if (t !== undefined && t.cancelRequested) {
+          try {
+            this.send({ jsonrpc: '2.0', id: this.rpcId++, method: 'agent.cancelTask', params: { task_id: taskId } });
+          } catch { /* ignore */ }
+        }
+      }, 300);
+      const turn: InflightTurn = {
+        handlers,
+        accumulated: delta,
+        resolve: () => {},
+        cancelTimer,
+        cancelRequested: false,
+        pendingApprovals: 0,
+      };
+      this.inflight.set(taskId, turn);
+      this.log(`reattach task=${taskId} → streaming, buffered ${delta.length} units`);
+      return { status: 'streaming', delta, ...(metadata !== undefined ? { metadata } : {}) };
+    }
+    if (status === 'done') {
+      const content = (result.content as string | undefined) ?? delta;
+      const terminalMetadata = result.metadata as Record<string, unknown> | undefined;
+      this.log(`reattach task=${taskId} → done, ${content.length} units`);
+      return {
+        status: 'done',
+        delta,
+        content,
+        ...(terminalMetadata !== undefined ? { terminalMetadata } : {}),
+      };
+    }
+    if (status === 'error') {
+      this.log(`reattach task=${taskId} → error`);
+      return {
+        status: 'error',
+        delta,
+        message: (result.message as string | undefined) ?? 'agent error',
+      };
+    }
+    this.log(`reattach task=${taskId} → lost`);
+    return { status: 'lost', delta: '' };
+  }
+
+  /**
    * Deliver `agent.submitResponse` to the local ACP agent. Reconnects if the
    * WS dropped mid-turn — a silent no-op here leaves Cursor on [pending]
    * forever after the user already tapped Allow. Retries a few times with a
@@ -250,9 +354,11 @@ export class PeerAcpClient {
    * Drop the current transport WITHOUT failing in-flight turns (unlike
    * onTransportGone). Used between submitResponse retries so the next attempt
    * reconnects cleanly; the old socket's close event must not trigger failAll.
+   * In-flight turns are marked for resume — the reconnect kicks the loop.
    */
   private resetTransport(): void {
     this.stopHeartbeat();
+    this.markTurnsForResume();
     const ws = this.ws;
     this.ws = undefined;
     this.session = undefined;
@@ -291,6 +397,7 @@ export class PeerAcpClient {
   close(): void {
     this.closed = true;
     this.stopHeartbeat();
+    this.pendingResume = undefined;
     this.failAll('peer connection closed');
     for (const r of this.pendingRequests.values()) r(undefined);
     this.pendingRequests.clear();
@@ -432,6 +539,66 @@ export class PeerAcpClient {
     });
   }
 
+  /**
+   * Fetch upstream session modes via `agent.modes.list`.
+   * Resolves with `{ modes, current }` (empty on failure/timeout).
+   */
+  async modesList(sessionId?: string): Promise<{ modes: unknown[]; current?: string }> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve({ modes: [] });
+      }, 15_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        const modes = result?.modes;
+        const current = result?.current;
+        resolve({
+          modes: Array.isArray(modes) ? modes : [],
+          current: typeof current === 'string' ? current : undefined,
+        });
+      });
+      const params: Record<string, unknown> = {};
+      if (sessionId !== undefined && sessionId.length > 0) params.session_id = sessionId;
+      this.send({ jsonrpc: '2.0', id, method: 'agent.modes.list', params });
+    });
+  }
+
+  /**
+   * Switch the upstream session mode via `agent.modes.setCurrent`.
+   * Returns the result object on success, or `null` on failure/timeout.
+   */
+  async modesSetCurrent(
+    mode: string,
+    sessionId?: string,
+  ): Promise<{ mode: string; display_name?: string } | null> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(null);
+      }, 15_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        if (result === undefined) {
+          resolve(null);
+          return;
+        }
+        const m = result.mode;
+        resolve({
+          mode: typeof m === 'string' ? m : mode,
+          display_name: typeof result.display_name === 'string' ? result.display_name : undefined,
+        });
+      });
+      const params: Record<string, unknown> = { mode };
+      if (sessionId !== undefined && sessionId.length > 0) params.session_id = sessionId;
+      this.send({ jsonrpc: '2.0', id, method: 'agent.modes.setCurrent', params });
+    });
+  }
+
   // ── internals ────────────────────────────────────────────────────
 
   private async ensureConnected(): Promise<void> {
@@ -486,6 +653,9 @@ export class PeerAcpClient {
     ws.once('error', () => this.onTransportGone());
     this.startHeartbeat();
     this.log(`acp client connected to ${this.instance.id} (${this.instance.port})`);
+    // A reconnect with turns marked for resume (flap / submitResponse reset):
+    // reattach them from the proxy's replay buffer.
+    this.kickResume();
   }
 
   private onMessage(data: WebSocket.RawData): void {
@@ -649,7 +819,161 @@ export class PeerAcpClient {
     this.ws = undefined;
     this.session = undefined;
     this.connecting = undefined;
-    this.failAll('acp connection closed');
+    // Turns survive: the proxy kept running them. Mark every in-flight turn
+    // for resume and start the reconnect loop — a flap should be invisible
+    // to the app (chunks missed meanwhile replay via agent.taskResume).
+    this.markTurnsForResume();
+    if (this.pendingResume !== undefined && this.pendingResume.size > 0) {
+      this.log(
+        `acp transport lost with ${this.pendingResume.size} inflight turn(s) — will reconnect and resume`,
+      );
+      this.kickResume();
+    }
+  }
+
+  /** Mark every in-flight turn for reattach after the next (re)connect. */
+  private markTurnsForResume(): void {
+    if (this.inflight.size === 0) return;
+    this.pendingResume ??= new Set();
+    for (const id of this.inflight.keys()) this.pendingResume.add(id);
+  }
+
+  private kickResume(): void {
+    if (this.closed) return;
+    if (this.pendingResume === undefined || this.pendingResume.size === 0) return;
+    if (this.resumeLoop !== undefined) return;
+    this.resumeLoop = this.resumeLoopBody()
+      .catch(() => { /* body never throws; guard anyway */ })
+      .finally(() => { this.resumeLoop = undefined; });
+  }
+
+  /**
+   * Reconnect with backoff, then reattach every marked turn via
+   * agent.taskResume. Turns that can't be resumed after the retry budget
+   * (or that the proxy answers 'lost' for) are failed individually — the
+   * proxy restarting is the only real loss case.
+   */
+  private async resumeLoopBody(): Promise<void> {
+    const delays = [500, 1000, 2000, 5000, 10000, 20000, 30000, 30000];
+    for (let attempt = 0; !this.closed; attempt++) {
+      const pending = this.pendingResume;
+      if (pending === undefined || pending.size === 0) return;
+      if (attempt >= delays.length) {
+        this.log(`acp resume exhausted — failing ${pending.size} detached turn(s)`);
+        for (const taskId of pending) {
+          this.failTurnNow(taskId, 'acp connection lost');
+        }
+        this.pendingResume = undefined;
+        return;
+      }
+      if (this.ws === undefined || this.session === undefined) {
+        try {
+          await this.ensureConnected();
+        } catch (err) {
+          this.log(
+            `acp resume reconnect failed (attempt ${attempt + 1}): ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+          );
+          await sleep(delays[attempt] ?? 30_000);
+          continue;
+        }
+      }
+      for (const taskId of [...pending]) {
+        if (this.closed) return;
+        const turn = this.inflight.get(taskId);
+        pending.delete(taskId);
+        if (turn === undefined) continue; // finished while we were reconnecting
+        const outcome = await this.resumeOneTurn(taskId, turn);
+        if (outcome === 'retry') {
+          pending.add(taskId);
+          break; // transport died again — reconnect before more resumes
+        }
+      }
+      if (pending.size === 0) {
+        this.pendingResume = undefined;
+        return;
+      }
+      await sleep(delays[attempt] ?? 30_000);
+    }
+  }
+
+  /**
+   * Reattach one in-flight turn after a reconnect. Delta semantics match the
+   * app/hub resume: the proxy replays from `known_length`; chunks that raced
+   * the response on the fresh socket are drop-prefixed (they were already
+   * applied live by onMessage).
+   */
+  private async resumeOneTurn(taskId: string, turn: InflightTurn): Promise<'ok' | 'retry'> {
+    const base = turn.accumulated.length;
+    const id = this.rpcId++;
+    const result = await new Promise<Record<string, unknown> | undefined>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }, 15_000);
+      this.pendingRequests.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      if (!this.send({
+        jsonrpc: '2.0',
+        id,
+        method: 'agent.taskResume',
+        params: { task_id: taskId, known_length: base },
+      })) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }
+    });
+    // The turn may have finished (or been cancelled) while the request was out.
+    if (this.inflight.get(taskId) !== turn) return 'ok';
+    if (result === undefined) return 'retry';
+    const status = result.status as string | undefined;
+    if (status === 'streaming' || status === 'done' || status === 'error') {
+      const delta = (result.delta as string | undefined) ?? '';
+      const skip = Math.max(0, Math.min(turn.accumulated.length - base, delta.length));
+      const apply = delta.slice(skip);
+      if (apply.length > 0) {
+        turn.accumulated += apply;
+        turn.handlers.onChunk(apply);
+      }
+      if (status === 'streaming') {
+        const meta = result.stream_metadata as Record<string, unknown> | undefined;
+        if (meta !== undefined) turn.handlers.onMetadata?.(meta);
+        this.log(`resume task=${taskId} → streaming, applied ${apply.length} units (skipped ${skip} live)`);
+        return 'ok';
+      }
+      if (status === 'done') {
+        turn.completedPayload = {
+          content: (result.content as string | undefined) ?? turn.accumulated,
+          ...(result.metadata !== undefined
+            ? { metadata: result.metadata as Record<string, unknown> }
+            : {}),
+        };
+        this.maybeFinishTurn(taskId, turn);
+        return 'ok';
+      }
+      clearInterval(turn.cancelTimer);
+      turn.handlers.onError((result.message as string | undefined) ?? 'agent error');
+      this.inflight.delete(taskId);
+      turn.resolve();
+      return 'ok';
+    }
+    // 'lost' — the proxy no longer has the task (e.g. it restarted).
+    this.log(`resume task=${taskId} → lost on agent`);
+    this.failTurnNow(taskId, '对端任务已丢失（agent 重启）');
+    return 'ok';
+  }
+
+  /** Fail one in-flight turn immediately (resume exhausted / proxy lost it). */
+  private failTurnNow(taskId: string, message: string): void {
+    const turn = this.inflight.get(taskId);
+    if (turn === undefined) return;
+    clearInterval(turn.cancelTimer);
+    try { turn.handlers.onError(message); } catch { /* ignore */ }
+    this.inflight.delete(taskId);
+    turn.resolve();
   }
 
   private failAll(message: string): void {

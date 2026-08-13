@@ -77,6 +77,10 @@ import type {
   ModelsListResult,
   ModelsSetCurrentParams,
   ModelsSetCurrentResult,
+  ModesListParams,
+  ModesListResult,
+  ModesSetCurrentParams,
+  ModesSetCurrentResult,
   SessionHistoryParams,
   SessionHistoryResult,
   SessionsListParams,
@@ -106,6 +110,38 @@ export class TaskCancelledError extends Error {
   constructor() {
     super('Task cancelled');
   }
+}
+
+/**
+ * Replay state for one chat task — survives the client connection that
+ * started it. This is what makes `agent.taskResume` possible: the accumulated
+ * text stream (UTF-16 code units, byte-aligned with what the client received),
+ * the last metadata frame, outstanding tool-call confirmations, and the
+ * terminal result are all buffered here while the live `route` comes and goes.
+ */
+interface TaskReplayEntry {
+  readonly sessionId: string;
+  /** Concatenated non-final `ui.textContent` contents — the resume delta source. */
+  accumulated: string;
+  /** Last `ui.messageMetadata` params (client splitter/diversion state). */
+  lastMetadata?: Record<string, unknown>;
+  status: 'streaming' | 'done' | 'error';
+  /** `task.completed` / `task.error` params for terminal replay. */
+  terminalParams?: Record<string, unknown>;
+  terminalAt?: number;
+  /**
+   * Outstanding `ui.actionConfirmation`s by confirmation_id. `delivered`
+   * tracks whether a live route acked the push — on rebind only UNDELIVERED
+   * cards are re-emitted, so a client that already showed the card never
+   * gets a duplicate.
+   */
+  readonly pendingConfirmations: Map<string, { params: Record<string, unknown>; delivered: boolean }>;
+  /** Live push route; undefined while detached (client away). */
+  route?: ShepawWebSocket;
+  /** Last tap time — zombie sweep base. */
+  updatedAt: number;
+  /** Set when accumulated hit the cap — resume answers 'lost' (gap = corrupt). */
+  overflowed: boolean;
 }
 
 // ── public types ────────────────────────────────────────────────────
@@ -250,10 +286,9 @@ export class ACPAgentServer {
   private httpServer: HttpServer | undefined;
   private wsServer: WebSocketServer | undefined;
   /**
-   * Live WS connections. The task/waiter teardown on `close` is global (the
-   * maps are shared across connections), so it must only run when the LAST
-   * connection drops — otherwise one flapping client kills another client's
-   * in-flight approvals and tasks.
+   * Live WS connections. Informational only — a connection dropping no longer
+   * tears down tasks or waiters; their per-task replay entries detach and the
+   * work keeps running until a client re-attaches via `agent.taskResume`.
    */
   private openConnections = 0;
   /** Set when the HTTP server starts listening — used for uptime in /status. */
@@ -288,6 +323,23 @@ export class ACPAgentServer {
   private readonly chatQueues = new Map<string, Promise<void>>();
 
   /**
+   * Per-task replay buffer — the disconnect-resume backbone. Every chat task
+   * gets an entry; outbound events are tapped into it (accumulated text, last
+   * metadata, outstanding confirmations, terminal result) and the live push
+   * route can be re-bound to a NEW connection via `agent.taskResume`. A client
+   * disconnect therefore never kills agent work: the turn keeps running
+   * (detached) and a reconnecting client resumes from `known_length`.
+   */
+  private readonly taskReplay = new Map<string, TaskReplayEntry>();
+
+  /** Terminal (done/error) replay entries stay resumable this long. */
+  private static readonly TASK_REPLAY_TTL_MS = 25 * 60 * 1000;
+  /** Per-task accumulated-text cap; beyond it resume answers 'lost'. */
+  private static readonly TASK_REPLAY_MAX_UNITS = 4_000_000;
+
+  private readonly taskReplayReaper: NodeJS.Timeout;
+
+  /**
    * Optional slash-command registry. When set, the default
    * `onSlashCommand` dispatches to its handlers and `onCommandsList`
    * surfaces them in the shepaw `/` palette. Concrete agents install
@@ -317,6 +369,26 @@ export class ACPAgentServer {
     this.onPeerEnrolledHook = opts.onPeerEnrolled;
     // 0 = unlimited (legacy); default 5
     this.maxConcurrency = opts.maxConcurrency ?? 5;
+    this.taskReplayReaper = setInterval(() => this.reapTaskReplay(), 60_000);
+    this.taskReplayReaper.unref?.();
+  }
+
+  /** Sweep terminal/zombie replay entries past their TTL. */
+  private reapTaskReplay(): void {
+    const now = Date.now();
+    for (const [taskId, entry] of this.taskReplay) {
+      if (entry.terminalAt !== undefined) {
+        if (now - entry.terminalAt > ACPAgentServer.TASK_REPLAY_TTL_MS) {
+          this.taskReplay.delete(taskId);
+        }
+        continue;
+      }
+      // Zombie guard: not terminal and no running task — the process would
+      // have to crash mid-turn for this to matter, but never leak the map.
+      if (!this.activeTasks.has(taskId) && now - entry.updatedAt > ACPAgentServer.TASK_REPLAY_TTL_MS) {
+        this.taskReplay.delete(taskId);
+      }
+    }
   }
 
   // ── override points ────────────────────────────────────────────
@@ -489,6 +561,23 @@ export class ACPAgentServer {
    */
   async onModelsSetCurrent(_p: ModelsSetCurrentParams): Promise<ModelsSetCurrentResult> {
     throw new Error('agent.models.setCurrent not supported by this agent');
+  }
+
+  /**
+   * Native ACP session / permission modes (auto, plan, acceptEdits, …).
+   * Default is an empty list — agents that don't expose modes leave this alone.
+   */
+  async onModesList(_params: ModesListParams): Promise<ModesListResult> {
+    return { modes: [] };
+  }
+
+  /**
+   * Switch the current session mode. Subsequent turns should use the new mode.
+   * Default throws — agents without a runtime mode switch should not advertise
+   * a non-empty `onModesList` either.
+   */
+  async onModesSetCurrent(_p: ModesSetCurrentParams): Promise<ModesSetCurrentResult> {
+    throw new Error('agent.modes.setCurrent not supported by this agent');
   }
 
   // ── saving replies ─────────────────────────────────────────────
@@ -959,17 +1048,15 @@ export class ACPAgentServer {
         /* ignore */
       }
       this.openConnections = Math.max(0, this.openConnections - 1);
-      if (this.openConnections === 0) {
-        // Last connection gone — fail all tasks and pending UI waiters so
-        // nothing leaks. While other connections remain, their tasks and
-        // approval waiters (server-global maps) must stay untouched.
-        for (const ctrl of this.activeTasks.values()) ctrl.abort();
-        this.activeTasks.clear();
-        this.chatQueues.clear();
-        for (const d of this.pendingHubRequests.values()) d.reject(new Error('Connection closed'));
-        this.pendingHubRequests.clear();
-        for (const d of this.pendingResponses.values()) d.reject(new Error('Connection closed'));
-        this.pendingResponses.clear();
+      // Detach this connection from every task route. Tasks keep RUNNING:
+      // their output accumulates in the replay buffer and a reconnecting
+      // client re-attaches via agent.taskResume. Approval waiters
+      // (pendingResponses) and hub requests likewise stay — their own
+      // timeouts are the backstop, and a verdict delivered after reconnect
+      // resolves them. (The old behavior aborted everything on the LAST
+      // close, which is what stranded agents on [pending] after a flap.)
+      for (const entry of this.taskReplay.values()) {
+        if (entry.route === (ws as ShepawWebSocket)) entry.route = undefined;
       }
       // eslint-disable-next-line no-console
       console.log('[ACP] WebSocket connection closed');
@@ -1146,6 +1233,9 @@ export class ACPAgentServer {
         case 'agent.cancelTask':
           await this.handleCancelTask(ws, msgId, params);
           return;
+        case 'agent.taskResume':
+          await this.handleTaskResume(ws, msgId, params);
+          return;
         case 'agent.submitResponse':
           await this.handleSubmitResponse(ws, msgId, params);
           return;
@@ -1169,6 +1259,12 @@ export class ACPAgentServer {
           return;
         case 'agent.models.setCurrent':
           await this.handleModelsSetCurrent(ws, msgId, params);
+          return;
+        case 'agent.modes.list':
+          await this.handleModesList(ws, msgId, params);
+          return;
+        case 'agent.modes.setCurrent':
+          await this.handleModesSetCurrent(ws, msgId, params);
           return;
         case 'agent.requestFileData':
           await this.onRequestFileData(ws, msgId, params);
@@ -1326,6 +1422,37 @@ export class ACPAgentServer {
     const abortController = new AbortController();
     this.activeTasks.set(taskId, abortController);
 
+    // Replay entry + transport: every outbound frame for this task is tapped
+    // into the buffer first, then pushed to the current live route (if any).
+    // The route dies with its connection; the buffer keeps the turn resumable.
+    const replayEntry: TaskReplayEntry = {
+      sessionId,
+      accumulated: '',
+      status: 'streaming',
+      pendingConfirmations: new Map(),
+      route: ws as ShepawWebSocket,
+      updatedAt: Date.now(),
+      overflowed: false,
+    };
+    this.taskReplay.set(taskId, replayEntry);
+    const transport = async (message: Record<string, unknown>): Promise<void> => {
+      const tapped = this.tapTaskEvent(replayEntry, message);
+      const route = replayEntry.route;
+      if (route === undefined || route.v2Closing === true || route.readyState !== route.OPEN) {
+        return;
+      }
+      try {
+        await wsSend(route, message);
+        if (tapped.confirmationId !== undefined) {
+          const pc = replayEntry.pendingConfirmations.get(tapped.confirmationId);
+          if (pc !== undefined) pc.delivered = true;
+        }
+      } catch {
+        // Route died mid-send — detach; the buffer keeps the turn resumable.
+        if (replayEntry.route === route) replayEntry.route = undefined;
+      }
+    };
+
     const ctx = new TaskContext({
       ws,
       taskId,
@@ -1333,6 +1460,7 @@ export class ACPAgentServer {
       pendingHubRequests: this.pendingHubRequests,
       pendingResponses: this.pendingResponses,
       takeEarlyResponse: (id) => this.takeEarlyResponse(id),
+      transport,
     });
 
     // Enqueue this task behind any already-running task for the same session.
@@ -1603,6 +1731,146 @@ export class ACPAgentServer {
     }
   }
 
+  // ── task replay / resume ───────────────────────────────────────
+
+  /**
+   * Tap an outbound frame into the task's replay buffer. Runs BEFORE the
+   * live push so a dead route never loses an event. Only the frames a
+   * reconnecting client needs are captured: text deltas, the latest metadata,
+   * outstanding confirmations, and the terminal result. Returns the tapped
+   * confirmation id so the transport can mark it delivered once the push
+   * lands.
+   */
+  private tapTaskEvent(
+    entry: TaskReplayEntry,
+    message: Record<string, unknown>,
+  ): { confirmationId?: string } {
+    entry.updatedAt = Date.now();
+    const method = message.method as string | undefined;
+    const params = (message.params as Record<string, unknown> | undefined) ?? {};
+    switch (method) {
+      case 'ui.textContent': {
+        if (params.is_final === true) return {};
+        const content = params.content as string | undefined;
+        if (content === undefined || content.length === 0) return {};
+        if (entry.accumulated.length + content.length > ACPAgentServer.TASK_REPLAY_MAX_UNITS) {
+          entry.overflowed = true;
+          return {};
+        }
+        entry.accumulated += content;
+        return {};
+      }
+      case 'ui.messageMetadata': {
+        const { task_id: _taskId, ...meta } = params;
+        entry.lastMetadata = meta;
+        return {};
+      }
+      case 'ui.actionConfirmation': {
+        const cid = params.confirmation_id as string | undefined;
+        if (cid !== undefined) {
+          entry.pendingConfirmations.set(cid, { params, delivered: false });
+          return { confirmationId: cid };
+        }
+        return {};
+      }
+      case 'task.completed':
+      case 'task.error':
+        entry.status = method === 'task.completed' ? 'done' : 'error';
+        entry.terminalParams = params;
+        entry.terminalAt = Date.now();
+        return {};
+      default:
+        return {};
+    }
+  }
+
+  /**
+   * `agent.taskResume` — re-attach a client to a task that kept running (or
+   * finished) while its connection was away. Delta semantics mirror the hub's
+   * peer-level turn resume: `known_length` is the client's received prefix of
+   * the task's text stream; the response carries exactly the missing suffix
+   * plus the current status. Live output after the resume flows on THIS
+   * connection, and outstanding confirmations are re-emitted so approval
+   * cards can be re-relayed.
+   */
+  private async handleTaskResume(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    const taskId = typeof params.task_id === 'string' ? params.task_id : '';
+    const known = typeof params.known_length === 'number' ? params.known_length : 0;
+    const entry = taskId.length > 0 ? this.taskReplay.get(taskId) : undefined;
+    if (entry === undefined || entry.overflowed) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          result: { task_id: taskId, status: 'lost', message: 'task unknown or expired' },
+        }),
+      );
+      return;
+    }
+
+    // Rebind BEFORE answering: chunks emitted between the response and the
+    // rebind would otherwise be lost to the old (dead) route.
+    entry.route = ws as ShepawWebSocket;
+
+    const base = Math.max(0, Math.min(known, entry.accumulated.length));
+    const delta = entry.accumulated.slice(base);
+    if (entry.status === 'streaming') {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          result: {
+            task_id: taskId,
+            status: 'streaming',
+            delta,
+            ...(entry.lastMetadata !== undefined ? { stream_metadata: entry.lastMetadata } : {}),
+          },
+        }),
+      );
+    } else if (entry.status === 'done') {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          result: {
+            task_id: taskId,
+            status: 'done',
+            delta,
+            content: entry.accumulated,
+            ...(entry.terminalParams !== undefined ? { metadata: entry.terminalParams } : {}),
+          },
+        }),
+      );
+    } else {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          result: {
+            task_id: taskId,
+            status: 'error',
+            delta,
+            message: (entry.terminalParams?.message as string | undefined) ?? 'agent error',
+          },
+        }),
+      );
+    }
+
+    // Re-emit tool-call confirmations that never reached a client so the
+    // (re-attached) client can relay the approval cards. Cards acked by a
+    // previous route are NOT re-sent — the client is already showing them.
+    for (const pending of entry.pendingConfirmations.values()) {
+      if (pending.delivered) continue;
+      try {
+        await wsSend(ws, jsonrpcNotification('ui.actionConfirmation', pending.params));
+        pending.delivered = true;
+      } catch {
+        if (entry.route === (ws as ShepawWebSocket)) entry.route = undefined;
+        return;
+      }
+    }
+  }
+
   // ── cancel ─────────────────────────────────────────────────────
 
   private async handleCancelTask(
@@ -1653,6 +1921,10 @@ export class ACPAgentServer {
     for (const idKey of ['confirmation_id', 'select_id', 'upload_id', 'form_id'] as const) {
       const componentId = responseData[idKey];
       if (typeof componentId === 'string' && componentId.length > 0) {
+        // Resolved — stop re-emitting this card on future taskResume rebinds.
+        for (const entry of this.taskReplay.values()) {
+          entry.pendingConfirmations.delete(componentId);
+        }
         const deferred = this.pendingResponses.get(componentId);
         if (deferred !== undefined && !deferred.settled) {
           deferred.resolve(responseData);
@@ -1838,6 +2110,63 @@ export class ACPAgentServer {
           error: {
             code: -32000,
             message: err instanceof Error ? err.message : 'models.setCurrent failed',
+          },
+        }),
+      );
+    }
+  }
+
+  private async handleModesList(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const p = (params ?? {}) as ModesListParams;
+      const result = await this.onModesList(p);
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'modes.list failed',
+          },
+        }),
+      );
+    }
+  }
+
+  private async handleModesSetCurrent(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const raw = (params ?? {}) as Record<string, unknown>;
+    const mode = typeof raw.mode === 'string' ? raw.mode : '';
+    if (mode === '') {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: { code: -32602, message: 'mode parameter required' },
+        }),
+      );
+      return;
+    }
+    try {
+      const result = await this.onModesSetCurrent({
+        mode,
+        session_id: typeof raw.session_id === 'string' ? raw.session_id : undefined,
+      });
+      await wsSend(ws, jsonrpcResponse(msgId, { result }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: {
+            code: -32000,
+            message: err instanceof Error ? err.message : 'modes.setCurrent failed',
           },
         }),
       );
