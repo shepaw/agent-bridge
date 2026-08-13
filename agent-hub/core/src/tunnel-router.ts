@@ -123,7 +123,7 @@ export class GatewayTunnelRouter {
       this.log(`[Router] Channel tunnel started → ${this.tunnelConfig.serverUrl}`);
 
       // 设备级隧道不带单一 agent 身份；各实例经 REST 注册到 channel 注册中心
-      // （兼作心跳，失败不影响路由）。
+      // （兼作心跳）。未配置 tunnel 时走 LAN-only，注册/信箱/授权同步全部跳过。
       this.registry = new AgentRegistry({
         serverUrl: this.tunnelConfig.serverUrl,
         channelId: this.tunnelConfig.channelId,
