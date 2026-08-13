@@ -18,6 +18,7 @@ export {
   engineEnvVarKeys,
   findInstance,
   getInstance,
+  isInstanceEnabled,
   isEngineDisabled,
   isKnownEngineForOverrides,
   loadOrCreateHubConfig,

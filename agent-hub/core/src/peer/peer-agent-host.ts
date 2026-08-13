@@ -6,7 +6,7 @@
  * `agent_list_resp` builder.
  */
 
-import { loadOrCreateHubConfig } from '../config.js';
+import { isInstanceEnabled, loadOrCreateHubConfig } from '../config.js';
 import {
   GENERIC_DEFAULT_AVATAR,
   defaultAvatarForEngine,
@@ -20,6 +20,9 @@ export interface AgentListEntry {
   readonly name: string;
   readonly engine: string;
   readonly running: boolean;
+  readonly enabled: boolean;
+  /** Paired apps may start/stop/enable this instance from device details. */
+  readonly manageable: true;
   /** Advertised to the Shepaw app (peer_agent_client_service.dart). */
   readonly capabilities: readonly string[];
   readonly bio?: string;
@@ -34,6 +37,8 @@ function isInstanceRunning(instanceId: string): boolean {
   return state !== undefined && state.pid > 0 && isAlive(state.pid);
 }
 
+export { isInstanceRunning };
+
 /** List managed instances as `agent_list_resp` entries. */
 export function listAgents(): AgentListEntry[] {
   const cfg = loadOrCreateHubConfig();
@@ -44,6 +49,8 @@ export function listAgents(): AgentListEntry[] {
       name: i.label || i.id,
       engine: i.engine,
       running: isInstanceRunning(i.id),
+      enabled: isInstanceEnabled(i),
+      manageable: true,
       capabilities: ['chat'],
       bio: i.engine,
       // Engine logos ship with agent-hub; peers persist avatar_data locally.

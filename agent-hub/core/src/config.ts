@@ -227,6 +227,11 @@ export interface InstanceConfig {
    * gateway child process. Never returned in plaintext over the API.
    */
   readonly envVars: Record<string, string>;
+  /**
+   * When false the instance is disabled: it will not start, and paired apps
+   * can re-enable it from device details. Omitted / true = enabled.
+   */
+  readonly enabled?: boolean;
 }
 
 /**
@@ -732,6 +737,11 @@ export function findInstance(
   return config.instances.find((p) => p.id === id);
 }
 
+/** True unless the operator (or a paired app) has explicitly disabled it. */
+export function isInstanceEnabled(instance: InstanceConfig): boolean {
+  return instance.enabled !== false;
+}
+
 export function getInstance(config: HubConfig, id: string): InstanceConfig {
   const p = findInstance(config, id);
   if (p === undefined) {
@@ -961,6 +971,7 @@ function loadExisting(path: string): HubConfig {
       approval: parseApprovalPolicy(p.approval),
       // Backwards compat: old instances without envVars default to empty.
       envVars: parseEnvVarsConfig(p.envVars),
+      ...(p.enabled === false && { enabled: false as const }),
     };
     validateInstanceId(entry.id);
     instances.push(entry);

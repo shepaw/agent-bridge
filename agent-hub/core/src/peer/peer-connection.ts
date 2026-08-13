@@ -14,6 +14,10 @@ import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { getInstance, loadOrCreateHubConfig } from '../config.js';
 import { instancePaths } from '../paths.js';
 import { listAgents } from './peer-agent-host.js';
+import {
+  currentAgentListPayload,
+  handleAgentManage,
+} from './peer-agent-manage.js';
 import { PeerAcpClient } from './peer-acp-client.js';
 import {
   MAX_PEER_FILE_BYTES,
@@ -763,6 +767,14 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_list_req':
           send({ type: 'agent_list_resp', agents: listAgents() });
+          break;
+        case 'agent_manage_req':
+          void handleAgentManage(obj).then((resp) => {
+            send(resp);
+            if (resp.ok === true && obj.op !== 'list') {
+              send(currentAgentListPayload());
+            }
+          });
           break;
         case 'agent_commands_req':
           void handleAgentCommandsReq(obj);

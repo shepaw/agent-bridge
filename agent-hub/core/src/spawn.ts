@@ -116,6 +116,12 @@ export async function startInstance(instance: InstanceConfig): Promise<{
 }> {
   const paths = instancePaths(instance.id);
 
+  if (instance.enabled === false) {
+    throw new Error(
+      `Instance "${instance.id}" is disabled. Enable it before starting.`,
+    );
+  }
+
   // Idempotency check. If the last-known pid is still alive, treat this as
   // a no-op success. Prevents accidental double-start.
   const prior = readState(paths.statePath);
