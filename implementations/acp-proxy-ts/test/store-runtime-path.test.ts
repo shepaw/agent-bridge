@@ -46,6 +46,15 @@ describe('store-runtime-path', () => {
     ).toBe('security/bridge.md');
   });
 
+  it('keeps nested sessions filenames without a task prefix', () => {
+    expect(
+      buildArtifactRelPath({
+        space: 'sessions',
+        filename: 'claude-code/sess_1.jsonl',
+      }),
+    ).toBe('claude-code/sess_1.jsonl');
+  });
+
   it('formats markdown share link', () => {
     expect(
       formatStoreMarkdownLink(

@@ -195,10 +195,15 @@ export class StoreToolsClient {
       const content = String(args.content ?? '');
       if (!filename) return { ok: false, code: 'bad_op', error: 'filename required' };
       const space = String(args.space ?? 'runtime').trim() || 'runtime';
-      const task =
+      const explicitTask =
         args.task != null && String(args.task).trim()
           ? String(args.task)
-          : 'general';
+          : undefined;
+      // Default `general` only for product artifact layouts. Other spaces
+      // (sessions, files, …) keep nested filenames when task is omitted.
+      const task =
+        explicitTask ??
+        (space === 'runtime' || space === 'artifacts' ? 'general' : undefined);
       const ownerRaw =
         (typeof args.owner === 'string' && args.owner.trim()) ||
         (typeof args.owner_id === 'string' && args.owner_id.trim()) ||
