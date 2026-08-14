@@ -3,6 +3,7 @@ import { api } from '../api/client.js';
 import { availabilityColor, busyColor, busyLabel, formatRuntimeSummary } from '../utils/runtimeStatus.js';
 import { EngineIcon } from './EngineIcon.js';
 import { useState } from 'react';
+import { useI18n } from '../i18n/index.js';
 
 interface InstanceCardProps {
   instance: Instance;
@@ -11,6 +12,7 @@ interface InstanceCardProps {
 }
 
 export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardProps) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -44,13 +46,13 @@ export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardPr
             {busyLabel(p.status)}
           </code>
         )}
-        <code style={badge} title="Engine">{p.engine}</code>
+        <code style={badge} title={t('card.engine')}>{p.engine}</code>
       </div>
 
       <div style={meta}>
         <span>{formatRuntimeSummary(p.status)}</span>
         <span>ID: <code>{p.id}</code></span>
-        <span>Bind: <code>{p.host}:{p.port}</code></span>
+        <span>{t('card.bind')}: <code>{p.host}:{p.port}</code></span>
       </div>
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
@@ -59,10 +61,10 @@ export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardPr
           disabled={busy}
           onClick={() => void toggle()}
         >
-          {busy ? '...' : p.status.running ? 'Stop' : 'Start'}
+          {busy ? t('common.ellipsis') : p.status.running ? t('common.stop') : t('common.start')}
         </button>
         <button style={btn('#2980b9')} onClick={() => onSelect(p.id)}>
-          Details
+          {t('common.details')}
         </button>
       </div>
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { EnrollToken } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface EnrollModalProps {
   instanceId: string;
@@ -10,6 +11,7 @@ interface EnrollModalProps {
 }
 
 export function EnrollModal({ instanceId, onClose, baseUrl: initialBaseUrl }: EnrollModalProps) {
+  const { t } = useI18n();
   const [token, setToken] = useState<EnrollToken | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -20,12 +22,12 @@ export function EnrollModal({ instanceId, onClose, baseUrl: initialBaseUrl }: En
     setLoading(true);
     setErr(null);
     try {
-      const t = await api.enroll.mint(instanceId, {
+      const enrollToken = await api.enroll.mint(instanceId, {
         ttlMinutes: 10,
         label: label || undefined,
         baseUrl: tunnelUrl || undefined,
       });
-      setToken(t);
+      setToken(enrollToken);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -37,32 +39,31 @@ export function EnrollModal({ instanceId, onClose, baseUrl: initialBaseUrl }: En
     <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Pair device — {instanceId}</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('enroll.title', { id: instanceId })}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
         {!token && (
           <div style={{ padding: 20 }}>
             <p style={{ color: '#a6adc8', margin: '0 0 16px' }}>
-              Generate a single-use pairing code for the Shepaw mobile app.
-              The code expires after 10 minutes.
+              {t('enroll.hint')}
             </p>
 
             <div style={formGroup}>
-              <label style={label2}>Device Label (optional)</label>
+              <label style={label2}>{t('enroll.deviceLabel')}</label>
               <input
                 style={inp2}
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                placeholder="My iPhone"
+                placeholder={t('enroll.devicePlaceholder')}
               />
             </div>
 
             <div style={formGroup}>
               <label style={label2}>
-                Tunnel URL (optional)
+                {t('enroll.tunnelLabel')}
                 <span style={{ color: '#a6adc8', fontSize: 12, marginLeft: 8 }}>
-                  Use if connecting via tunnel/proxy
+                  {t('enroll.tunnelHint')}
                 </span>
               </label>
               <input
@@ -75,7 +76,7 @@ export function EnrollModal({ instanceId, onClose, baseUrl: initialBaseUrl }: En
 
             {err && <p style={{ color: '#f38ba8' }}>{err}</p>}
             <button style={mintBtn} disabled={loading} onClick={() => void mint()}>
-              {loading ? 'Generating...' : 'Generate Pairing Code'}
+              {loading ? t('detail.generating') : t('enroll.generate')}
             </button>
           </div>
         )}
@@ -96,27 +97,26 @@ export function EnrollModal({ instanceId, onClose, baseUrl: initialBaseUrl }: En
 
             <div style={tokenInfo}>
               <p style={infoRow}>
-                <span style={infoLabel}>Code</span>
+                <span style={infoLabel}>{t('enroll.code')}</span>
                 <code style={codeBox}>{token.display ?? token.code}</code>
               </p>
               <p style={infoRow}>
-                <span style={infoLabel}>Expires</span>
+                <span style={infoLabel}>{t('enroll.expires')}</span>
                 <span>{new Date(token.expiresAt).toLocaleString()}</span>
               </p>
               {token.pairUrl && (
                 <p style={infoRow}>
-                  <span style={infoLabel}>URL</span>
+                  <span style={infoLabel}>{t('enroll.url')}</span>
                   <code style={{ ...codeBox, fontSize: 11, wordBreak: 'break-all' }}>{token.pairUrl}</code>
                 </p>
               )}
               <p style={{ color: '#a6adc8', fontSize: 12, marginTop: 12 }}>
-                Scan the QR code in the Shepaw app, or enter the code + URL manually.
-                The code is invalidated after the first successful handshake.
+                {t('enroll.scanHint')}
               </p>
             </div>
 
             <button style={{ ...mintBtn, marginTop: 16 }} onClick={() => void (setToken(null))}>
-              Generate Another
+              {t('enroll.generateAnother')}
             </button>
           </div>
         )}

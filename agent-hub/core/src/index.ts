@@ -62,6 +62,7 @@ export { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
 export {
   authorizePeerServiceOnAllInstances,
   authorizePeerServiceOnInstance,
+  tryAuthorizePeerServiceOnInstance,
   PEER_SERVICE_PEER_LABEL,
 } from './peer/peer-auth.js';
 export type { MintPairingResult } from './peer/peer-process.js';

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { EngineInfo, Instance, Peer, EnrollToken } from '../api/types.js';
@@ -18,6 +18,7 @@ import {
   formatRuntimeSummary,
 } from '../utils/runtimeStatus.js';
 import type { InstanceDetailTab } from '../utils/instanceRoute.js';
+import { useI18n } from '../i18n/index.js';
 
 interface InstanceDetailProps {
   instanceId: string;
@@ -31,14 +32,16 @@ interface InstanceDetailProps {
   onOpenStore?: (uri: string) => void;
 }
 
-const NAV_ITEMS: { id: InstanceDetailTab; label: string }[] = [
-  { id: 'overview', label: '概览' },
-  { id: 'sessions', label: '会话' },
-  { id: 'logs', label: '日志' },
-  { id: 'devices', label: '设备' },
-  { id: 'attachments', label: '附件' },
-  { id: 'config', label: '配置' },
-];
+const NAV_TAB_IDS: InstanceDetailTab[] = ['overview', 'sessions', 'logs', 'devices', 'attachments', 'config'];
+
+const NAV_LABEL_KEYS = {
+  overview: 'detail.overview',
+  sessions: 'detail.sessions',
+  logs: 'detail.logs',
+  devices: 'detail.devices',
+  attachments: 'detail.attachments',
+  config: 'detail.config',
+} as const satisfies Record<InstanceDetailTab, 'detail.overview' | 'detail.sessions' | 'detail.logs' | 'detail.devices' | 'detail.attachments' | 'detail.config'>;
 
 export function InstanceDetail({
   instanceId,
@@ -50,6 +53,11 @@ export function InstanceDetail({
   onReload,
   onOpenStore,
 }: InstanceDetailProps) {
+  const { t } = useI18n();
+  const navItems = useMemo(
+    () => NAV_TAB_IDS.map((id) => ({ id, label: t(NAV_LABEL_KEYS[id]) })),
+    [t],
+  );
   const [instance, setInstance] = useState<Instance | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   // key -> masked display value, populated from GET /envvars
@@ -261,12 +269,12 @@ export function InstanceDetail({
       .map((r) => ({ key: r.key.trim(), value: r.value }))
       .filter((r) => r.key.length > 0);
     if (rows.length === 0) {
-      setEnvErr('请至少填写一个变量名。');
+      setEnvErr(t('detail.envNeedKey'));
       return;
     }
     const keys = rows.map((r) => r.key);
     if (new Set(keys).size !== keys.length) {
-      setEnvErr('草稿中存在重复的变量名。');
+      setEnvErr(t('detail.envDupKey'));
       return;
     }
     setEnvAddBusy(true);
@@ -323,12 +331,12 @@ export function InstanceDetail({
       const hasTunnelFields = editTunnelServer && editTunnelChannelId;
       const isNewTunnel = hasTunnelFields && !instance?.tunnel; // no prior tunnel
       if (hasTunnelFields && isNewTunnel && !effectiveSecret) {
-        setEditErr('Secret is required when adding a new tunnel.');
+        setEditErr(t('detail.secretRequired'));
         setEditBusy(false);
         return;
       }
       if ((editTunnelServer || editTunnelChannelId) && !(editTunnelServer && editTunnelChannelId)) {
-        setEditErr('Both Server URL and Channel ID are required together.');
+        setEditErr(t('detail.tunnelPartial'));
         setEditBusy(false);
         return;
       }
@@ -377,7 +385,7 @@ export function InstanceDetail({
   };
 
   const removeInstance = async () => {
-    if (!confirm(`Remove instance "${instanceId}"?`)) return;
+    if (!confirm(t('detail.removeConfirm', { id: instanceId }))) return;
     try {
       await api.instances.remove(instanceId);
       onReload();
@@ -387,15 +395,15 @@ export function InstanceDetail({
     }
   };
 
-  if (loading) return <p style={{ color: '#a6adc8' }}>Loading...</p>;
-  if (!instance) return <p style={{ color: '#f38ba8' }}>{err ?? 'Not found'}</p>;
+  if (loading) return <p style={{ color: '#a6adc8' }}>{t('common.loading')}</p>;
+  if (!instance) return <p style={{ color: '#f38ba8' }}>{err ?? t('common.notFound')}</p>;
 
   return (
     <div>
       {/* Header */}
       <div style={header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <button style={backBtn} onClick={onBack}>← 返回</button>
+          <button style={backBtn} onClick={onBack}>← {t('common.back')}</button>
           <span style={dot(instance.status)} />
           <h2 style={{ margin: 0, color: '#cdd6f4' }}>{instance.label}</h2>
           {instance.status.busyLevel !== null && instance.status.availability === 'online' && (
@@ -411,7 +419,7 @@ export function InstanceDetail({
           disabled={busy}
           onClick={() => void toggle()}
         >
-          {busy ? '...' : instance.status.running ? '停止' : '启动'}
+          {busy ? t('common.ellipsis') : instance.status.running ? t('common.stop') : t('common.start')}
         </button>
       </div>
 
@@ -419,7 +427,7 @@ export function InstanceDetail({
 
       <div style={pageLayout}>
         <nav style={sidebar}>
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -434,57 +442,56 @@ export function InstanceDetail({
         <main style={contentPanel}>
           {activeTab === 'overview' && (
             <section>
-              <h3 style={panelTitle}>运行概览</h3>
-              <p style={panelHint}>实例状态、绑定地址与运行时指标。</p>
+              <h3 style={panelTitle}>{t('detail.overviewTitle')}</h3>
+              <p style={panelHint}>{t('detail.overviewHint')}</p>
               <div style={infoGrid}>
-                <InfoItem label="Bind" value={`${instance.host}:${instance.port}`} />
-                <InfoItem label="CWD" value={instance.cwd} />
+                <InfoItem label={t('detail.bind')} value={`${instance.host}:${instance.port}`} />
+                <InfoItem label={t('detail.cwd')} value={instance.cwd} />
                 <InfoItem
-                  label="Agent 模式"
+                  label={t('detail.agentMode')}
                   value={
                     engineInfos.find((e) => e.id === instance.engine)?.sessionModes?.find((m) => m.id === instance.sessionMode)?.name
                     ?? instance.sessionMode
-                    ?? '默认'
+                    ?? t('common.default')
                   }
                 />
-                {instance.baseUrl && <InfoItem label="Base URL" value={instance.baseUrl} />}
-                <InfoItem label="Runtime" value={formatRuntimeSummary(instance.status)} />
+                {instance.baseUrl && <InfoItem label={t('add.baseUrl')} value={instance.baseUrl} />}
+                <InfoItem label={t('detail.runtime')} value={formatRuntimeSummary(instance.status)} />
                 {instance.status.activeTasks !== null && (
-                  <InfoItem label="Active tasks" value={String(instance.status.activeTasks)} />
+                  <InfoItem label={t('detail.activeTasks')} value={String(instance.status.activeTasks)} />
                 )}
                 {instance.status.connectedClients !== null && (
-                  <InfoItem label="Connected clients" value={String(instance.status.connectedClients)} />
+                  <InfoItem label={t('detail.connectedClients')} value={String(instance.status.connectedClients)} />
                 )}
                 {instance.status.acpSessionCount !== null && (
-                  <InfoItem label="ACP sessions" value={String(instance.status.acpSessionCount)} />
+                  <InfoItem label={t('detail.acpSessions')} value={String(instance.status.acpSessionCount)} />
                 )}
                 {instance.status.uptimeMs !== null && instance.status.uptimeMs > 0 && (
-                  <InfoItem label="Uptime" value={formatUptime(instance.status.uptimeMs)} />
+                  <InfoItem label={t('detail.uptime')} value={formatUptime(instance.status.uptimeMs)} />
                 )}
                 {instance.status.probeError && (
-                  <InfoItem label="Probe error" value={instance.status.probeError} />
+                  <InfoItem label={t('detail.probeError')} value={instance.status.probeError} />
                 )}
-                <InfoItem label="Last probe" value={new Date(instance.status.probedAt).toLocaleTimeString()} />
+                <InfoItem label={t('detail.lastProbe')} value={new Date(instance.status.probedAt).toLocaleTimeString()} />
                 {instance.status.startedAt && (
-                  <InfoItem label="Started" value={new Date(instance.status.startedAt).toLocaleString()} />
+                  <InfoItem label={t('detail.started')} value={new Date(instance.status.startedAt).toLocaleString()} />
                 )}
                 {instance.status.stoppedAt && (
-                  <InfoItem label="Stopped" value={new Date(instance.status.stoppedAt).toLocaleString()} />
+                  <InfoItem label={t('detail.stopped')} value={new Date(instance.status.stoppedAt).toLocaleString()} />
                 )}
-                <InfoItem label="Created" value={new Date(instance.createdAt).toLocaleString()} />
+                <InfoItem label={t('detail.created')} value={new Date(instance.createdAt).toLocaleString()} />
               </div>
 
               {instance.store && (
                 <div style={{ marginTop: 20 }}>
-                  <h3 style={panelTitle}>储物空间</h3>
+                  <h3 style={panelTitle}>{t('detail.storeTitle')}</h3>
                   <p style={panelHint}>
-                    每个 Agent 拥有私有储物袋空间，Working Directory 同时映射为 workspace。
-                    可在全局「储物袋」中以网盘方式管理。
+                    {t('detail.storeHint')}
                   </p>
                   <div style={storeBox}>
                     <div style={storeRow}>
                       <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={storeLabel}>Agent 私有空间</div>
+                        <div style={storeLabel}>{t('detail.agentSpace')}</div>
                         <code style={storeUri} title={instance.store.agentUri}>
                           {instance.store.agentUri}
                         </code>
@@ -495,7 +502,7 @@ export function InstanceDetail({
                           style={storeBtn}
                           onClick={() => void navigator.clipboard.writeText(instance.store!.agentUri)}
                         >
-                          复制
+                          {t('common.copy')}
                         </button>
                         {onOpenStore && (
                           <button
@@ -503,14 +510,14 @@ export function InstanceDetail({
                             style={storePrimaryBtn}
                             onClick={() => onOpenStore(instance.store!.agentUri)}
                           >
-                            进入储物空间
+                            {t('detail.enterStore')}
                           </button>
                         )}
                       </div>
                     </div>
                     <div style={storeRow}>
                       <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={storeLabel}>Workspace（Working Directory）</div>
+                        <div style={storeLabel}>{t('detail.workspace')}</div>
                         <code style={storeUri} title={instance.store.workspaceUri}>
                           {instance.store.workspaceUri}
                         </code>
@@ -521,7 +528,7 @@ export function InstanceDetail({
                           style={storeBtn}
                           onClick={() => void navigator.clipboard.writeText(instance.store!.workspaceUri)}
                         >
-                          复制
+                          {t('common.copy')}
                         </button>
                         {onOpenStore && (
                           <button
@@ -529,7 +536,7 @@ export function InstanceDetail({
                             style={storeBtn}
                             onClick={() => onOpenStore(instance.store!.workspaceUri)}
                           >
-                            打开
+                            {t('common.open')}
                           </button>
                         )}
                       </div>
@@ -544,11 +551,11 @@ export function InstanceDetail({
             <section>
               <div style={panelHeaderRow}>
                 <div>
-                  <h3 style={{ ...panelTitle, margin: 0 }}>会话</h3>
-                  <p style={{ ...panelHint, margin: '4px 0 0' }}>查看与管理 ACP 会话及对话记录。</p>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>{t('detail.sessionsTitle')}</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>{t('detail.sessionsHint')}</p>
                 </div>
                 <button style={actionBtn('#94e2d5')} onClick={() => setShowResume(true)}>
-                  恢复会话
+                  {t('detail.resumeSession')}
                 </button>
               </div>
               <SessionsPanel
@@ -563,8 +570,8 @@ export function InstanceDetail({
 
           {activeTab === 'logs' && (
             <section>
-              <h3 style={panelTitle}>日志</h3>
-              <p style={panelHint}>实例进程实时输出。</p>
+              <h3 style={panelTitle}>{t('detail.logsTitle')}</h3>
+              <p style={panelHint}>{t('detail.logsHint')}</p>
               <LogViewer instanceId={instanceId} />
             </section>
           )}
@@ -573,15 +580,15 @@ export function InstanceDetail({
             <section>
               <div style={panelHeaderRow}>
                 <div>
-                  <h3 style={{ ...panelTitle, margin: 0 }}>设备与配对</h3>
-                  <p style={{ ...panelHint, margin: '4px 0 0' }}>扫码连接、配对设备与管理已授权终端。</p>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>{t('detail.devicesTitle')}</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>{t('detail.devicesHint')}</p>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={actionBtn('#89dceb')} onClick={openQr}>
-                    扫码连接
+                    {t('detail.scanConnect')}
                   </button>
                   <button style={actionBtn('#8e44ad')} onClick={() => setShowEnroll(true)}>
-                    配对设备
+                    {t('detail.pairDevice')}
                   </button>
                 </div>
               </div>
@@ -589,15 +596,18 @@ export function InstanceDetail({
               {showQr && (
                 <div style={qrSection}>
                   <div style={qrSectionHeader}>
-                    <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 14 }}>连接二维码</span>
+                    <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 14 }}>{t('detail.qrTitle')}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       {qrToken && qrSecondsLeft > 0 && (
                         <span style={{ color: qrSecondsLeft <= 60 ? '#f38ba8' : '#a6adc8', fontSize: 12 }}>
-                          {Math.floor(qrSecondsLeft / 60)}:{String(qrSecondsLeft % 60).padStart(2, '0')} 后过期
+                          {t('detail.qrExpires', {
+                            mm: String(Math.floor(qrSecondsLeft / 60)),
+                            ss: String(qrSecondsLeft % 60).padStart(2, '0'),
+                          })}
                         </span>
                       )}
                       <button style={qrRefreshBtn} disabled={qrLoading} onClick={() => void mintQr()}>
-                        {qrLoading ? '生成中...' : '↻ 刷新'}
+                        {qrLoading ? t('detail.generating') : `↻ ${t('common.refresh')}`}
                       </button>
                       <button
                         style={qrCloseBtn}
@@ -609,7 +619,7 @@ export function InstanceDetail({
                   </div>
                   <div style={qrBody}>
                     {qrErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{qrErr}</p>}
-                    {qrLoading && <p style={{ color: '#a6adc8', margin: 0 }}>正在生成二维码...</p>}
+                    {qrLoading && <p style={{ color: '#a6adc8', margin: 0 }}>{t('detail.generatingQr')}</p>}
                     {!qrLoading && qrToken?.qrPayload && (
                       <div style={qrContentWrap}>
                         <div style={qrCodeWrap}>
@@ -623,24 +633,23 @@ export function InstanceDetail({
                         </div>
                         <div style={qrInfoBlock}>
                           <p style={qrInfoRow}>
-                            <span style={qrInfoLabel}>配对码</span>
+                            <span style={qrInfoLabel}>{t('detail.pairCode')}</span>
                             <code style={qrCodeBox}>{qrToken.display ?? qrToken.code}</code>
                           </p>
                           {qrToken.pairUrl && (
                             <p style={qrInfoRow}>
-                              <span style={qrInfoLabel}>配对地址</span>
+                              <span style={qrInfoLabel}>{t('detail.pairUrl')}</span>
                               <code style={{ ...qrCodeBox, fontSize: 11, wordBreak: 'break-all' }}>{qrToken.pairUrl}</code>
                             </p>
                           )}
                           <p style={{ color: '#6c7086', fontSize: 12, marginTop: 12, lineHeight: 1.5 }}>
-                            使用 Shepaw 移动端扫描二维码，或手动输入配对码和地址。
-                            二维码为一次性使用，首次握手后自动失效。
+                            {t('detail.qrHint')}
                           </p>
                         </div>
                       </div>
                     )}
                     {!qrLoading && !qrToken && !qrErr && (
-                      <p style={{ color: '#a6adc8', margin: 0, fontSize: 13 }}>点击「刷新」生成新的二维码。</p>
+                      <p style={{ color: '#a6adc8', margin: 0, fontSize: 13 }}>{t('detail.qrRefreshHint')}</p>
                     )}
                   </div>
                 </div>
@@ -648,49 +657,49 @@ export function InstanceDetail({
 
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                 <h4 style={{ ...sectionTitle, margin: 0, border: 'none', padding: 0 }}>
-                  已授权设备 ({peers.length})
+                  {t('detail.authorized', { count: peers.length })}
                 </h4>
                 <button
                   style={addPeerBtn}
                   onClick={() => { setShowAddPeer((v) => !v); setAddPeerErr(null); }}
                 >
-                  {showAddPeer ? '✕ 取消' : '+ 添加设备'}
+                  {showAddPeer ? t('detail.cancelAdd') : t('detail.addDevice')}
                 </button>
               </div>
 
               {showAddPeer && (
                 <form onSubmit={(e) => void addPeer(e)} style={addPeerForm}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <label style={{ color: '#a6adc8', fontSize: 12 }}>Public Key <span style={{ color: '#f38ba8' }}>*</span></label>
+                    <label style={{ color: '#a6adc8', fontSize: 12 }}>{t('detail.pubkeyLabel')} <span style={{ color: '#f38ba8' }}>*</span></label>
                     <input
                       style={addPeerInput}
                       value={addPeerPubkey}
                       onChange={(e) => setAddPeerPubkey(e.target.value)}
-                      placeholder="Base64 X25519 public key"
+                      placeholder={t('detail.pubkeyPlaceholder')}
                       required
                       autoFocus
                     />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <label style={{ color: '#a6adc8', fontSize: 12 }}>Label</label>
+                    <label style={{ color: '#a6adc8', fontSize: 12 }}>{t('detail.label')}</label>
                     <input
                       style={addPeerInput}
                       value={addPeerLabel}
                       onChange={(e) => setAddPeerLabel(e.target.value)}
-                      placeholder="My device (optional)"
+                      placeholder={t('detail.deviceLabelPlaceholder')}
                     />
                   </div>
                   {addPeerErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{addPeerErr}</p>}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button type="submit" style={addPeerSubmitBtn} disabled={addPeerBusy}>
-                      {addPeerBusy ? 'Adding...' : 'Add'}
+                      {addPeerBusy ? t('common.adding') : t('common.add')}
                     </button>
                     <button
                       type="button"
                       style={addPeerCancelBtn}
                       onClick={() => { setShowAddPeer(false); setAddPeerErr(null); }}
                     >
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                   </div>
                 </form>
@@ -698,14 +707,14 @@ export function InstanceDetail({
 
               {peers.length === 0 ? (
                 <p style={{ color: '#a6adc8', fontSize: 14 }}>
-                  暂无已授权设备。使用「配对设备」或「添加设备」进行配对。
+                  {t('detail.noPeers')}
                 </p>
               ) : (
                 <div style={peerTable}>
                   <div style={peerRow}>
-                    <span style={th}>FINGERPRINT</span>
-                    <span style={th}>LABEL</span>
-                    <span style={th}>ADDED</span>
+                    <span style={th}>{t('detail.colFingerprint')}</span>
+                    <span style={th}>{t('detail.colLabel')}</span>
+                    <span style={th}>{t('detail.colAdded')}</span>
                     <span style={th} />
                   </div>
                   {peers.map((peer) => (
@@ -717,7 +726,7 @@ export function InstanceDetail({
                         style={removeBtn}
                         onClick={() => void removePeer(peer.fingerprint)}
                       >
-                        Revoke
+                        {t('peer.revoke')}
                       </button>
                     </div>
                   ))}
@@ -730,9 +739,9 @@ export function InstanceDetail({
             <section>
               <div style={panelHeaderRow}>
                 <div>
-                  <h3 style={{ ...panelTitle, margin: 0 }}>附件</h3>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>{t('detail.attachmentsTitle')}</h3>
                   <p style={{ ...panelHint, margin: '4px 0 0' }}>
-                    管理本实例 peer-attachments 目录中手机端推送的文件。
+                    {t('detail.attachmentsHint')}
                   </p>
                 </div>
               </div>
@@ -744,12 +753,12 @@ export function InstanceDetail({
             <section>
               <div style={panelHeaderRow}>
                 <div>
-                  <h3 style={{ ...panelTitle, margin: 0 }}>配置</h3>
-                  <p style={{ ...panelHint, margin: '4px 0 0' }}>编辑实例参数、Agent 模式与高级选项。</p>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>{t('detail.configTitle')}</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>{t('detail.configHint')}</p>
                 </div>
                 {!showEdit && (
                   <button style={actionBtn('#f9e2af')} onClick={() => openEdit(instance)}>
-                    编辑
+                    {t('common.edit')}
                   </button>
                 )}
               </div>
@@ -758,11 +767,11 @@ export function InstanceDetail({
                 <form onSubmit={(e) => void submitEdit(e)} style={editForm}>
                   <div style={editGrid}>
                     <div style={editField}>
-                      <label style={editLbl}>Label</label>
+                      <label style={editLbl}>{t('detail.label')}</label>
                       <input style={editInp} value={editLabel} onChange={(e) => setEditLabel(e.target.value)} placeholder={instanceId} />
                     </div>
                     <div style={editField}>
-                      <label style={editLbl}>Agent 模式</label>
+                      <label style={editLbl}>{t('detail.agentMode')}</label>
                       <SessionModeSelect
                         modes={engineInfos.find((e) => e.id === instance.engine)?.sessionModes ?? []}
                         value={editSessionMode}
@@ -770,13 +779,13 @@ export function InstanceDetail({
                       />
                     </div>
                     <div style={editField}>
-                      <label style={editLbl}>Working Directory <span style={{ color: '#f38ba8' }}>*</span></label>
+                      <label style={editLbl}>{t('detail.cwd')} <span style={{ color: '#f38ba8' }}>*</span></label>
                       <div style={cwdRow}>
                         <input
                           style={{ ...editInp, flex: 1, minWidth: 0 }}
                           value={editCwd}
                           onChange={(e) => setEditCwd(e.target.value)}
-                          placeholder="/path/to/instance"
+                          placeholder={t('add.cwdPlaceholder')}
                           required
                         />
                         <button
@@ -784,20 +793,20 @@ export function InstanceDetail({
                           style={browseBtn}
                           onClick={() => setShowDirPicker(true)}
                         >
-                          浏览…
+                          {t('common.browse')}
                         </button>
                       </div>
                     </div>
                     <div style={editField}>
-                      <label style={editLbl}>Bind Host</label>
+                      <label style={editLbl}>{t('add.bindHost')}</label>
                       <select style={editInp} value={editHost} onChange={(e) => setEditHost(e.target.value)}>
-                        <option value="127.0.0.1">127.0.0.1 (loopback only)</option>
-                        <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
+                        <option value="127.0.0.1">{t('add.bindLoopback')}</option>
+                        <option value="0.0.0.0">{t('add.bindAll')}</option>
                       </select>
                     </div>
                     <div style={editField}>
-                      <label style={editLbl}>Base URL</label>
-                      <input style={editInp} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://... (optional)" />
+                      <label style={editLbl}>{t('add.baseUrl')}</label>
+                      <input style={editInp} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder={`https://... (${t('common.optional')})`} />
                     </div>
                     <div style={{ ...editField, gridColumn: '1 / -1' }}>
                       <label style={editLbl}>Extra Args <span style={{ color: '#6c7086', fontSize: 11 }}>(space-separated)</span></label>
@@ -811,13 +820,13 @@ export function InstanceDetail({
                       style={tunnelAdvancedToggle}
                       onClick={() => setShowTunnelAdvanced((v) => !v)}
                     >
-                      {showTunnelAdvanced ? '▼' : '▶'} 高级:单独的外网 channel (per-instance tunnel)
+                      {showTunnelAdvanced ? '▼' : '▶'} {t('detail.tunnelAdvanced')}
                       {instance.tunnel && (
-                        <span style={{ color: '#f9e2af', fontSize: 11, marginLeft: 8 }}>· 已配置</span>
+                        <span style={{ color: '#f9e2af', fontSize: 11, marginLeft: 8 }}>· {t('common.configured')}</span>
                       )}
                     </button>
                     <p style={{ color: '#6c7086', fontSize: 12, margin: '6px 0 0' }}>
-                      可选。通常在「设置 → 全局」配置共享 channel 即可，无需在此填写。仅当该 agent 需要独立 channel 时才配置。
+                      {t('detail.tunnelNote')}
                     </p>
 
                     {showTunnelAdvanced && (
@@ -827,7 +836,7 @@ export function InstanceDetail({
                           {instance.tunnel && (
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f38ba8', fontSize: 12, cursor: 'pointer' }}>
                               <input type="checkbox" checked={editClearTunnel} onChange={(e) => setEditClearTunnel(e.target.checked)} />
-                              Remove tunnel
+                              {t('detail.removeTunnel')}
                             </label>
                           )}
                         </div>
@@ -853,7 +862,7 @@ export function InstanceDetail({
                                 onFocus={() => {
                                   if (editTunnelSecret === TUNNEL_SECRET_UNCHANGED) setEditTunnelSecret('');
                                 }}
-                                placeholder="Enter new secret to change"
+                                placeholder={t('detail.newSecret')}
                               />
                             </div>
                           </div>
@@ -864,16 +873,16 @@ export function InstanceDetail({
 
                   {editErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{editErr}</p>}
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button type="submit" style={editSubmitBtn} disabled={editBusy}>{editBusy ? 'Saving...' : 'Save Changes'}</button>
-                    <button type="button" style={editCancelBtn} onClick={() => setShowEdit(false)}>Cancel</button>
+                    <button type="submit" style={editSubmitBtn} disabled={editBusy}>{editBusy ? t('common.saving') : t('detail.saveChanges')}</button>
+                    <button type="button" style={editCancelBtn} onClick={() => setShowEdit(false)}>{t('common.cancel')}</button>
                   </div>
                 </form>
               )}
 
               <>
-                  <h4 style={sectionTitle}>环境变量</h4>
+                  <h4 style={sectionTitle}>{t('detail.envTitle')}</h4>
                   <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-                    实例级覆盖；未设置的键会继承引擎默认环境变量。可添加任意自定义键值。
+                    {t('detail.envHint')}
                   </p>
                   {envErr && <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>{envErr}</p>}
                   <div style={credTable}>
@@ -902,14 +911,14 @@ export function InstanceDetail({
                                       }));
                                     }
                                   }}
-                                  placeholder="Enter new value"
+                                  placeholder={t('detail.newValue')}
                                   autoFocus
                                 />
                                 <button style={credSaveBtn} disabled={isBusy} onClick={() => void saveEnvVar(key)}>
-                                  {isBusy ? '...' : 'Save'}
+                                  {isBusy ? t('common.ellipsis') : t('common.save')}
                                 </button>
                                 <button style={credCancelBtn} onClick={() => setEnvEditing((e) => { const n = { ...e }; delete n[key]; return n; })}>
-                                  Cancel
+                                  {t('common.cancel')}
                                 </button>
                               </>
                             ) : (
@@ -927,10 +936,10 @@ export function InstanceDetail({
                                   disabled={isBusy}
                                   onClick={() => setEnvEditing((e) => ({ ...e, [key]: ENV_UNCHANGED }))}
                                 >
-                                  Update
+                                  {t('common.update')}
                                 </button>
                                 <button style={credDeleteBtn} disabled={isBusy} onClick={() => void deleteEnvVar(key)}>
-                                  {isBusy ? '...' : 'Clear'}
+                                  {isBusy ? t('common.ellipsis') : t('detail.clear')}
                                 </button>
                               </>
                             )}
@@ -939,7 +948,7 @@ export function InstanceDetail({
                       );
                     })}
                     {(instance.envVarKeys ?? []).length === 0 && (
-                      <p style={{ color: '#6c7086', fontSize: 12, margin: 0 }}>尚未设置实例级环境变量。</p>
+                      <p style={{ color: '#6c7086', fontSize: 12, margin: 0 }}>{t('detail.noEnv')}</p>
                     )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
@@ -949,14 +958,14 @@ export function InstanceDetail({
                       <div key={idx} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <input
                           style={credInput}
-                          placeholder="变量名"
+                          placeholder={t('detail.envKey')}
                           value={row.key}
                           onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
                         />
                         <input
                           style={{ ...credInput, flex: 2, minWidth: 160 }}
                           type={sensitive ? 'password' : 'text'}
-                          placeholder={sensitive ? '敏感值' : '值'}
+                          placeholder={sensitive ? t('detail.sensitiveValue') : t('detail.envValue')}
                           value={row.value}
                           onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
                         />
@@ -966,7 +975,7 @@ export function InstanceDetail({
                             disabled={envAddBusy}
                             onClick={() => setEnvDrafts((prev) => prev.filter((_, i) => i !== idx))}
                           >
-                            移除
+                            {t('common.remove')}
                           </button>
                         )}
                       </div>
@@ -978,10 +987,10 @@ export function InstanceDetail({
                         disabled={envAddBusy}
                         onClick={() => setEnvDrafts((prev) => [...prev, { key: '', value: '' }])}
                       >
-                        再加一行
+                        {t('detail.addRow')}
                       </button>
                       <button style={credSaveBtn} disabled={envAddBusy} onClick={() => void saveEnvDrafts()}>
-                        {envAddBusy ? '保存中…' : '保存环境变量'}
+                        {envAddBusy ? t('common.saving') : t('detail.saveEnv')}
                       </button>
                     </div>
                   </div>
@@ -990,11 +999,11 @@ export function InstanceDetail({
               {instance.tunnel && (
                 <>
                   <h4 style={sectionTitle}>
-                    单独的外网 channel (per-instance tunnel){' '}
-                    <span style={{ color: '#6c7086', fontSize: 11, fontWeight: 400 }}>· 高级</span>
+                    {t('detail.tunnelAdvanced')}{' '}
+                    <span style={{ color: '#6c7086', fontSize: 11, fontWeight: 400 }}>· {t('common.optional')}</span>
                   </h4>
                   <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-                    该 agent 使用独立 channel 外网可达，与全局共享 channel 互不冲突。如无需独立 channel，可在编辑里移除。
+                    {t('detail.tunnelViewHint')}
                   </p>
                   <div style={tunnelCard}>
                     <div style={tunnelRow}>
@@ -1021,7 +1030,7 @@ export function InstanceDetail({
 
               <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #313244' }}>
                 <button style={actionBtn('#e74c3c')} onClick={() => void removeInstance()}>
-                  删除实例
+                  {t('detail.deleteInstance')}
                 </button>
               </div>
             </section>
@@ -1069,6 +1078,7 @@ function InstanceSessionModeSection({
   engineInfo: EngineInfo | undefined;
   onChanged: () => void;
 }) {
+  const { t } = useI18n();
   const modes = engineInfo?.sessionModes ?? [];
   const catalogValue = (raw: string | undefined): string => {
     if (raw && modes.some((m) => m.id === raw)) return raw;
@@ -1091,8 +1101,8 @@ function InstanceSessionModeSection({
       await api.instances.update(instance.id, { sessionMode: value });
       setNotice(
         instance.status.running
-          ? '已保存，并尝试应用到当前会话。'
-          : '已保存默认模式。',
+          ? t('detail.modeSavedLive')
+          : t('detail.modeSavedDefault'),
       );
       onChanged();
     } catch (e) {
@@ -1104,9 +1114,9 @@ function InstanceSessionModeSection({
 
   return (
     <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #313244' }}>
-      <h4 style={{ margin: '0 0 6px', color: '#cdd6f4', fontSize: 14 }}>Agent 模式</h4>
+      <h4 style={{ margin: '0 0 6px', color: '#cdd6f4', fontSize: 14 }}>{t('detail.modeTitle')}</h4>
       <p style={{ margin: '0 0 10px', color: '#6c7086', fontSize: 12 }}>
-        使用该引擎自带的会话模式。工具确认仍会转到 App。远端 App 也可像切换模型一样切换当前会话模式。
+        {t('detail.modeHint')}
       </p>
       <SessionModeSelect modes={modes} value={value} onChange={setValue} disabled={busy} />
       {modes.length > 0 && (
@@ -1119,7 +1129,7 @@ function InstanceSessionModeSection({
             disabled={busy || value === (instance.sessionMode ?? '')}
             onClick={() => void save()}
           >
-            {busy ? '保存中…' : '保存模式'}
+            {busy ? t('common.saving') : t('detail.saveMode')}
           </button>
         </div>
       )}

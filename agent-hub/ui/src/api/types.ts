@@ -318,6 +318,13 @@ export interface CreateInstanceInput {
   tunnel?: TunnelConfig;
   envVars?: Record<string, string>;
   sessionMode?: string;
+  /** Default true: spawn the gateway after registering. Pass false to register only. */
+  start?: boolean;
+}
+
+/** POST /api/instances — instance plus optional start failure (instance still exists). */
+export interface CreateInstanceResult extends Instance {
+  startError?: string;
 }
 
 export interface UpdateInstanceInput {

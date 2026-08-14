@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { addInstance, loadOrCreateHubConfig, saveHubConfig } from '../src/config.js';
 import { loadOrCreatePeerIdentity } from '../src/peer/peer-identity.js';
-import { authorizePeerServiceOnAllInstances } from '../src/peer/peer-auth.js';
+import { authorizePeerServiceOnAllInstances, authorizePeerServiceOnInstance } from '../src/peer/peer-auth.js';
 
 let home: string;
 let prevHome: string | undefined;
@@ -58,5 +58,27 @@ describe('authorizePeerServiceOnAllInstances', () => {
       const peers = JSON.parse(readFileSync(peersPath, 'utf-8')) as { peers: Array<{ publicKey: string }> };
       expect(peers.peers.some((p) => p.publicKey === pubB64)).toBe(true);
     }
+  });
+
+  it('authorizePeerServiceOnInstance writes the pubkey for a newly added instance', () => {
+    let cfg = loadOrCreateHubConfig();
+    cfg = addInstance(cfg, {
+      id: 'solo',
+      engine: 'claude-code',
+      cwd: home,
+      host: '127.0.0.1',
+      port: 18803,
+      baseUrl: '',
+      extraArgs: [],
+    });
+    saveHubConfig(cfg.path, cfg);
+
+    const peerIdentity = loadOrCreatePeerIdentity();
+    const pubB64 = Buffer.from(peerIdentity.staticPublicKey).toString('base64');
+    authorizePeerServiceOnInstance('solo');
+
+    const peersPath = join(home, 'instances', 'solo', 'authorized_peers.json');
+    const peers = JSON.parse(readFileSync(peersPath, 'utf-8')) as { peers: Array<{ publicKey: string }> };
+    expect(peers.peers.some((p) => p.publicKey === pubB64)).toBe(true);
   });
 });

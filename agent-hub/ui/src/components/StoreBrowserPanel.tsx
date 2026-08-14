@@ -6,6 +6,8 @@ import type {
   StoreRecentEntry,
   StoreRootsResult,
 } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
+import type { MessageKey } from '../i18n/en.js';
 
 export interface StoreBrowserPanelProps {
   initialUri?: string | null;
@@ -35,16 +37,34 @@ function formatSize(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatTime(ms: number): string {
+function formatTime(ms: number, t: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
   if (!ms) return '—';
   const d = new Date(ms);
   const now = Date.now();
   const diff = now - ms;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`;
-  if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)} 天前`;
+  if (diff < 60_000) return t('store.justNow');
+  if (diff < 3600_000) return t('store.minutesAgo', { n: Math.floor(diff / 60_000) });
+  if (diff < 86400_000) return t('store.hoursAgo', { n: Math.floor(diff / 3600_000) });
+  if (diff < 7 * 86400_000) return t('store.daysAgo', { n: Math.floor(diff / 86400_000) });
   return d.toLocaleString();
+}
+
+const SPACE_KEYS: Record<string, MessageKey> = {
+  workspaces: 'store.space.workspaces',
+  runtime: 'store.space.runtime',
+  files: 'store.space.files',
+  public: 'store.space.public',
+  memory: 'store.space.memory',
+  artifacts: 'store.space.artifacts',
+  agents: 'store.space.agents',
+  sessions: 'store.space.sessions',
+  attachments: 'store.space.attachments',
+  backups: 'store.space.backups',
+};
+
+function spaceLabel(space: string, t: (key: MessageKey) => string): string {
+  const key = SPACE_KEYS[space];
+  return key ? t(key) : space;
 }
 
 function extOf(name: string): string {
@@ -101,22 +121,6 @@ function parseCurrent(uri: string): { space: string; device: string; path: strin
   };
 }
 
-function spaceLabel(space: string): string {
-  const map: Record<string, string> = {
-    workspaces: '工作区',
-    runtime: '运行时',
-    files: '文件',
-    public: '公开',
-    memory: '记忆',
-    artifacts: '产物',
-    agents: 'Agent 私有',
-    sessions: '会话',
-    attachments: '附件',
-    backups: '备份',
-  };
-  return map[space] ?? space;
-}
-
 function bytesToBase64(bytes: Uint8Array): string {
   const chunk = 0x8000;
   let binary = '';
@@ -134,6 +138,7 @@ function isDirEntry(entry: StoreEntry): boolean {
 }
 
 export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanelProps) {
+  const { t } = useI18n();
   const [roots, setRoots] = useState<StoreRootsResult | null>(null);
   const [side, setSide] = useState<SideSelection>({ kind: 'local' });
   const [uri, setUri] = useState<string | null>(null);
@@ -335,8 +340,8 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     if (!parsed) return [];
     const parts = parsed.path ? parsed.path.split('/').filter(Boolean) : [];
     const crumbs: { label: string; uri: string | null }[] = [
-      { label: '首页', uri: null },
-      { label: spaceLabel(parsed.space), uri: entryUri(parsed.space, parsed.device, '') },
+      { label: t('common.home'), uri: null },
+      { label: spaceLabel(parsed.space, t), uri: entryUri(parsed.space, parsed.device, '') },
     ];
     let acc = '';
     for (const seg of parts) {
@@ -344,7 +349,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
       crumbs.push({ label: seg, uri: entryUri(parsed.space, parsed.device, acc) });
     }
     return crumbs;
-  }, [uri]);
+  }, [uri, t]);
 
   const selectLocal = () => {
     setSide({ kind: 'local' });
@@ -394,7 +399,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
       } else if (kind === 'text') {
         setPreviewText(new TextDecoder().decode(bytes));
       } else {
-        setPreviewText(`无法内联预览 · ${formatSize(data.size)} · 可下载查看`);
+        setPreviewText(t('store.previewFail', { size: formatSize(data.size) }));
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -461,7 +466,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     const parsed = parseCurrent(uri);
     if (!parsed) return;
     const target = entryUri(parsed.space, parsed.device, selected.path);
-    if (!confirm(`确定删除？\n${target}`)) return;
+    if (!confirm(t('store.deleteConfirm', { target }))) return;
     setBusy(true);
     setErr(null);
     try {
@@ -505,7 +510,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     if (!parsed) return;
     const maxBytes = 5 * 1024 * 1024;
     if (file.size > maxBytes) {
-      setErr(`文件太大（${formatSize(file.size)}），单文件上限 5MB`);
+      setErr(t('store.tooBig', { size: formatSize(file.size) }));
       return;
     }
     const base = parsed.path ? `${parsed.path}/` : '';
@@ -561,9 +566,9 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
   };
 
   const sideTitle = side.kind === 'local'
-    ? '本机'
+    ? t('store.local')
     : side.kind === 'peer'
-      ? (activePeer?.deviceName ?? '配对设备')
+      ? (activePeer?.deviceName ?? t('store.pairedDevice'))
       : (activeAgent?.label ?? 'Agent');
 
   const showHome = !uri;
@@ -577,17 +582,17 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         <button type="button" style={sideItem(side.kind === 'local')} onClick={selectLocal}>
           <span style={sideIcon}>⌂</span>
           <span>
-            <div style={sideLabel}>本机</div>
-            <div style={sideSub}>{roots?.local.deviceId.slice(0, 8) ?? '…'} · 可写</div>
+            <div style={sideLabel}>{t('store.local')}</div>
+            <div style={sideSub}>{t('store.localSub', { id: roots?.local.deviceId.slice(0, 8) ?? t('common.ellipsis') })}</div>
           </span>
         </button>
 
-        <div style={sideSection}>配对设备</div>
+        <div style={sideSection}>{t('store.pairedDevice')}</div>
         {!roots?.peerService.running && (
-          <p style={sideHint}>Peer 未启动时仅能看本机镜像；远端实时读取需先开「扫码配对」。</p>
+          <p style={sideHint}>{t('store.peerHint')}</p>
         )}
         {roots?.peers.length === 0 && (
-          <p style={sideHint}>暂无配对设备。去「扫码配对」连接手机。</p>
+          <p style={sideHint}>{t('store.noPeers')}</p>
         )}
         {roots?.peers.map((p) => (
           <button
@@ -599,14 +604,14 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
             <span style={sideIcon}>▣</span>
             <span>
               <div style={sideLabel}>{p.deviceName}</div>
-              <div style={sideSub}>{p.fingerprint.slice(0, 8)} · 只读共享</div>
+              <div style={sideSub}>{t('store.peerSub', { id: p.fingerprint.slice(0, 8) })}</div>
             </span>
           </button>
         ))}
 
-        <div style={sideSection}>Agent 储物空间</div>
+        <div style={sideSection}>{t('store.agentSpaces')}</div>
         {roots?.agents.length === 0 && (
-          <p style={sideHint}>暂无实例。创建实例后会自动映射私有 agents 空间。</p>
+          <p style={sideHint}>{t('store.noAgents')}</p>
         )}
         {roots?.agents.map((a) => (
           <button
@@ -626,7 +631,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
 
       <main style={mainPane}>
         {err && /unauthorized|SHEPAW_HUB_TOKEN/i.test(err) && (
-          <p style={warn}>需要 Dashboard Token（当前：{getHubAuthToken() ? '已配置但仍无效' : '未配置'}）。</p>
+          <p style={warn}>{t('store.tokenWarn', { state: getHubAuthToken() ? t('store.tokenInvalid') : t('store.tokenMissing') })}</p>
         )}
         {err && !/unauthorized|SHEPAW_HUB_TOKEN/i.test(err) && (
           <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 12px' }}>{err}</p>
@@ -637,12 +642,12 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
             <h3 style={mainTitle}>{sideTitle}</h3>
             <p style={mainHint}>
               {showHome
-                ? '先选分区文件夹进入；下方为最近文件。'
-                : '文件夹浏览 · 单击文件预览 · 双击打开目录 · 支持上传/下载'}
+                ? t('store.homeHint')
+                : t('store.browseHint')}
             </p>
           </div>
           {!writable && (
-            <span style={roBadge}>只读</span>
+            <span style={roBadge}>{t('common.readonly')}</span>
           )}
         </div>
 
@@ -650,12 +655,12 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         {showHome && (
           <div style={homeScroll}>
             <section style={{ marginBottom: 20, flexShrink: 0 }}>
-              <h4 style={sectionTitle}>分区文件夹</h4>
+              <h4 style={sectionTitle}>{t('store.partitions')}</h4>
               {side.kind === 'agent' && activeAgent ? (
                 <div style={spaceGrid}>
                   <button type="button" style={spaceCard} onClick={() => navigate(activeAgent.agentUri)}>
                     <div style={spaceIconBig}>📁</div>
-                    <div style={spaceName}>Agent 私有</div>
+                    <div style={spaceName}>{t('store.space.agents')}</div>
                     <code style={spaceCode}>agents/{activeAgent.instanceId}</code>
                   </button>
                   <button type="button" style={spaceCard} onClick={() => navigate(activeAgent.workspaceUri)}>
@@ -669,7 +674,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                   {spaces.map((space) => (
                     <button key={space} type="button" style={spaceCard} onClick={() => openSpace(space)}>
                       <div style={spaceIconBig}>📁</div>
-                      <div style={spaceName}>{spaceLabel(space)}</div>
+                      <div style={spaceName}>{spaceLabel(space, t)}</div>
                       <code style={spaceCode}>{space}</code>
                     </button>
                   ))}
@@ -678,10 +683,10 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
             </section>
 
             <section style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <h4 style={sectionTitle}>最近文件</h4>
-              {loading && <p style={muted}>加载中…</p>}
+              <h4 style={sectionTitle}>{t('store.recent')}</h4>
+              {loading && <p style={muted}>{t('common.loading')}</p>}
               {!loading && recent.length === 0 && (
-                <p style={muted}>暂无最近文件。上传或由 Agent 写入后会出现在这里。</p>
+                <p style={muted}>{t('store.noRecent')}</p>
               )}
               {!loading && recent.length > 0 && (
                 <div style={recentList}>
@@ -697,12 +702,12 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                       <span style={recentMain}>
                         <span style={recentName}>{entryName(item.path)}</span>
                         <span style={recentMeta}>
-                          {spaceLabel(item.space)} · {item.path}
+                          {spaceLabel(item.space, t)} · {item.path}
                         </span>
                       </span>
                       <span style={recentRight}>
                         <span>{formatSize(item.size)}</span>
-                        <span>{formatTime(item.mtime)}</span>
+                        <span>{formatTime(item.mtime, t)}</span>
                       </span>
                     </button>
                   ))}
@@ -730,13 +735,13 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                 </span>
               ))}
               <button type="button" style={navBtn} disabled={!parent && breadcrumb.length <= 1} onClick={() => navigate(parent ?? null)}>
-                ↑ 上一级
+                {t('picker.up')}
               </button>
               <button type="button" style={navBtn} disabled={loading || busy} onClick={() => void loadList(uri)}>
-                刷新
+                {t('common.refresh')}
               </button>
               <button type="button" style={navBtn} onClick={() => void copyUri(uri)}>
-                {copied ? '已复制' : '复制 URI'}
+                {copied ? t('common.copied') : t('store.copyUri')}
               </button>
             </div>
 
@@ -744,10 +749,10 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
               {writable && (
                 <>
                   <button type="button" style={primaryBtn} disabled={busy} onClick={() => fileInputRef.current?.click()}>
-                    上传文件
+                    {t('common.upload')}
                   </button>
                   <button type="button" style={secondaryBtn} disabled={busy} onClick={() => setShowNew((v) => !v)}>
-                    新建文本
+                    {t('store.newText')}
                   </button>
                   <input
                     ref={fileInputRef}
@@ -764,11 +769,11 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
               {selected && !isDirEntry(selected) && (
                 <>
                   <button type="button" style={secondaryBtn} disabled={busy} onClick={() => void downloadSelected()}>
-                    下载
+                    {t('common.download')}
                   </button>
                   {writable && (
                     <button type="button" style={dangerBtn} disabled={busy} onClick={() => void deleteSelected()}>
-                      删除
+                      {t('common.delete')}
                     </button>
                   )}
                 </>
@@ -779,21 +784,21 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
               <div style={newBox}>
                 <input
                   style={inp}
-                  placeholder="文件名，如 notes.txt"
+                  placeholder={t('store.filename')}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                 />
                 <textarea
                   style={{ ...inp, minHeight: 90, fontFamily: 'ui-monospace, Menlo, monospace' }}
-                  placeholder="文件内容"
+                  placeholder={t('store.content')}
                   value={newContent}
                   onChange={(e) => setNewContent(e.target.value)}
                 />
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" style={primaryBtn} disabled={busy || !newName.trim()} onClick={() => void createFile()}>
-                    保存
+                    {t('common.save')}
                   </button>
-                  <button type="button" style={secondaryBtn} onClick={() => setShowNew(false)}>取消</button>
+                  <button type="button" style={secondaryBtn} onClick={() => setShowNew(false)}>{t('common.cancel')}</button>
                 </div>
               </div>
             )}
@@ -801,12 +806,12 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
             <div style={showPreviewPane ? browserSplit : browserFull}>
               <div style={listBox}>
                 <div style={listHeader}>
-                  <span style={{ ...colName, paddingLeft: 28 }}>名称</span>
-                  <span style={colSize}>大小</span>
-                  <span style={colTime}>修改时间</span>
+                  <span style={{ ...colName, paddingLeft: 28 }}>{t('store.colName')}</span>
+                  <span style={colSize}>{t('store.colSize')}</span>
+                  <span style={colTime}>{t('store.colMtime')}</span>
                 </div>
-                {loading && <p style={muted}>加载中…</p>}
-                {!loading && entries.length === 0 && <p style={muted}>此文件夹为空</p>}
+                {loading && <p style={muted}>{t('common.loading')}</p>}
+                {!loading && entries.length === 0 && <p style={muted}>{t('store.emptyFolder')}</p>}
                 {!loading && entries.map((entry) => {
                   const dir = isDirEntry(entry);
                   const active = selected?.path === entry.path;
@@ -823,7 +828,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                       <span style={fileIconStyle}>{fileIcon(name, dir)}</span>
                       <span style={colName}>{name}</span>
                       <span style={colSize}>{dir ? '—' : formatSize(entry.size)}</span>
-                      <span style={colTime}>{formatTime(entry.mtime)}</span>
+                      <span style={colTime}>{formatTime(entry.mtime, t)}</span>
                     </div>
                   );
                 })}
@@ -832,12 +837,12 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
               {showPreviewPane && (
                 <div style={previewBox}>
                   <div style={previewHeaderRow}>
-                    <span style={previewHeader}>预览{selected ? ` · ${entryName(selected.path)}` : ''}</span>
-                    <button type="button" style={previewClose} onClick={clearPreview} aria-label="关闭预览">
+                    <span style={previewHeader}>{t('store.preview')}{selected ? ` · ${entryName(selected.path)}` : ''}</span>
+                    <button type="button" style={previewClose} onClick={clearPreview} aria-label={t('common.close')}>
                       ✕
                     </button>
                   </div>
-                  {busy && <p style={muted}>读取中…</p>}
+                  {busy && <p style={muted}>{t('store.reading')}</p>}
                   {!busy && previewKind === 'image' && previewUrl && (
                     <img src={previewUrl} alt="preview" style={previewImg} />
                   )}
@@ -853,7 +858,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                           style={{ ...secondaryBtn, marginTop: 8 }}
                           onClick={() => void downloadSelected()}
                         >
-                          下载文件
+                          {t('store.downloadFile')}
                         </button>
                       )}
                     </div>

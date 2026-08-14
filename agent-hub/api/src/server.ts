@@ -7,10 +7,14 @@
  *
  * Auth: set SHEPAW_HUB_TOKEN (or pass authToken). Loopback binds may omit a
  * token for local-dev convenience; non-loopback binds require a token.
+ *
+ * TLS: pass tlsCert + tlsKey (or SHEPAW_HUB_TLS_CERT / SHEPAW_HUB_TLS_KEY) to
+ * serve HTTPS/WSS directly instead of plain HTTP.
  */
 
-import { createServer } from 'node:http';
-import { existsSync } from 'node:fs';
+import { createServer as createHttpServer, type Server } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -42,12 +46,48 @@ export interface ServerOptions {
   host?: string;
   /** Dashboard API token. Defaults to SHEPAW_HUB_TOKEN env. */
   authToken?: string;
+  /** PEM certificate path. Defaults to SHEPAW_HUB_TLS_CERT env. */
+  tlsCert?: string;
+  /** PEM private key path. Defaults to SHEPAW_HUB_TLS_KEY env. */
+  tlsKey?: string;
+}
+
+function resolveTlsPaths(opts: ServerOptions): { cert: string; key: string } | undefined {
+  const cert = (opts.tlsCert ?? process.env.SHEPAW_HUB_TLS_CERT ?? '').trim();
+  const key = (opts.tlsKey ?? process.env.SHEPAW_HUB_TLS_KEY ?? '').trim();
+  if (cert.length === 0 && key.length === 0) return undefined;
+  if (cert.length === 0 || key.length === 0) {
+    throw new Error(
+      'TLS requires both certificate and key. Set --tls-cert and --tls-key ' +
+        '(or SHEPAW_HUB_TLS_CERT and SHEPAW_HUB_TLS_KEY).',
+    );
+  }
+  if (!existsSync(cert)) {
+    throw new Error(`TLS certificate not found: ${cert}`);
+  }
+  if (!existsSync(key)) {
+    throw new Error(`TLS private key not found: ${key}`);
+  }
+  return { cert, key };
+}
+
+/** CORS: loopback always; any HTTPS origin when Bearer auth is enabled. */
+function isAllowedCorsOrigin(origin: string, authToken: string | undefined): boolean {
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin)) {
+    return true;
+  }
+  if (authToken !== undefined && /^https:\/\//i.test(origin)) {
+    return true;
+  }
+  return false;
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const port = opts.port ?? 4000;
   const host = opts.host ?? '127.0.0.1';
   const authToken = resolveHubAuthToken(opts.authToken);
+  const tlsPaths = resolveTlsPaths(opts);
+  const tlsEnabled = tlsPaths !== undefined;
 
   if (!isLoopbackHost(host) && !authToken) {
     throw new Error(
@@ -67,7 +107,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           callback(null, true);
           return;
         }
-        if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin)) {
+        if (isAllowedCorsOrigin(origin, authToken)) {
           callback(null, true);
           return;
         }
@@ -117,8 +157,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     });
   }
 
-  // ── HTTP + WS server ─────────────────────────────────────────────
-  const httpServer = createServer(app);
+  // ── HTTP(S) + WS server ──────────────────────────────────────────
+  const httpServer: Server = tlsEnabled
+    ? createHttpsServer(
+        {
+          cert: readFileSync(tlsPaths.cert),
+          key: readFileSync(tlsPaths.key),
+        },
+        app,
+      )
+    : createHttpServer(app);
 
   // Attach WebSocket server. We use a path prefix so the same HTTP server
   // handles both REST and WS without a second port.
@@ -146,6 +194,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     httpServer.once('error', reject);
   });
 
+  const scheme = tlsEnabled ? 'https' : 'http';
   if (!isLoopbackHost(host)) {
     console.warn(
       `[shepaw-hub] WARNING: dashboard bound to ${host}. Auth token is required and enabled.`,
@@ -154,6 +203,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     console.warn(
       '[shepaw-hub] Dashboard auth disabled (loopback only). Set SHEPAW_HUB_TOKEN to enable.',
     );
+  }
+  if (tlsEnabled) {
+    console.log(`[shepaw-hub] Dashboard TLS enabled (${scheme}://${host}:${port}).`);
   }
 }
 

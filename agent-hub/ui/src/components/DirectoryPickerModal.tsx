@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import type { FsBrowseEntry, FsBrowseResult } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface DirectoryPickerModalProps {
   /** Optional starting path (e.g. current cwd). Empty → Hub home. */
@@ -14,6 +15,7 @@ export function DirectoryPickerModal({
   onSelect,
   onClose,
 }: DirectoryPickerModalProps) {
+  const { t } = useI18n();
   const [result, setResult] = useState<FsBrowseResult | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ export function DirectoryPickerModal({
           const data = await api.fs.browse(undefined);
           setResult(data);
           setSelected(data.path);
-          setNotice(`无法打开「${path.trim()}」，已回到 Home。`);
+          setNotice(t('picker.fallback', { path: path.trim() }));
           return;
         } catch (homeEx) {
           setResult(null);
@@ -50,7 +52,7 @@ export function DirectoryPickerModal({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const start = initialPath?.trim();
@@ -83,9 +85,9 @@ export function DirectoryPickerModal({
       >
         <div style={header}>
           <h3 id="dir-picker-title" style={{ margin: 0, color: '#cdd6f4', fontSize: 16 }}>
-            选择 Working Directory
+            {t('picker.title')}
           </h3>
-          <button style={closeBtn} onClick={onClose} aria-label="关闭">
+          <button style={closeBtn} onClick={onClose} aria-label={t('common.close')}>
             ✕
           </button>
         </div>
@@ -96,12 +98,12 @@ export function DirectoryPickerModal({
             style={navBtn}
             disabled={loading || !result?.parent}
             onClick={goUp}
-            title="上一级"
+            title={t('picker.up')}
           >
-            ↑ 上一级
+            {t('picker.up')}
           </button>
           <div style={pathDisplay} title={result?.path ?? ''}>
-            {result?.path ?? (loading ? '加载中…' : '—')}
+            {result?.path ?? (loading ? t('common.loading') : '—')}
           </div>
         </div>
 
@@ -111,7 +113,7 @@ export function DirectoryPickerModal({
 
         <div style={listBox}>
           {loading && (
-            <p style={{ color: '#6c7086', fontSize: 13, margin: 12 }}>加载中…</p>
+            <p style={{ color: '#6c7086', fontSize: 13, margin: 12 }}>{t('common.loading')}</p>
           )}
           {!loading && err && (
             <div style={{ padding: 12 }}>
@@ -121,12 +123,12 @@ export function DirectoryPickerModal({
                 style={navBtn}
                 onClick={() => void load(undefined)}
               >
-                回到 Home
+                {t('picker.home')}
               </button>
             </div>
           )}
           {!loading && !err && result && result.entries.length === 0 && (
-            <p style={{ color: '#6c7086', fontSize: 13, margin: 12 }}>此目录下没有子文件夹</p>
+            <p style={{ color: '#6c7086', fontSize: 13, margin: 12 }}>{t('picker.empty')}</p>
           )}
           {!loading && !err && result && result.entries.map((entry) => {
             const isSelected = selected === entry.path;
@@ -149,17 +151,17 @@ export function DirectoryPickerModal({
           })}
         </div>
 
-        <p style={hint}>单击选中，双击进入子目录。确认后将使用当前选中路径。</p>
+        <p style={hint}>{t('picker.hint')}</p>
 
         {result && (
           <p style={selectedPath}>
-            将选择：<code style={code}>{selected ?? result.path}</code>
+            {t('picker.willSelect')}<code style={code}>{selected ?? result.path}</code>
           </p>
         )}
 
         <div style={footer}>
           <button type="button" style={cancelBtn} onClick={onClose}>
-            取消
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -167,7 +169,7 @@ export function DirectoryPickerModal({
             disabled={!canConfirm}
             onClick={confirm}
           >
-            选择此文件夹
+            {t('picker.confirm')}
           </button>
         </div>
       </div>

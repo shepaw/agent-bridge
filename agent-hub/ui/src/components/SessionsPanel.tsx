@@ -2,6 +2,7 @@ import { useConversations } from '../hooks/useConversations.js';
 import type { InstanceStatus } from '../api/types.js';
 import { SessionList } from './SessionList.js';
 import { SessionTranscript } from './SessionTranscript.js';
+import { useI18n } from '../i18n/index.js';
 
 interface SessionsPanelProps {
   instanceId: string;
@@ -18,6 +19,7 @@ export function SessionsPanel({
   onSelectSession,
   onManageMappings,
 }: SessionsPanelProps) {
+  const { t } = useI18n();
   const {
     sessions,
     listLoading,
@@ -37,21 +39,23 @@ export function SessionsPanel({
 
   const offlineMessage =
     status.availability === 'starting'
-      ? 'Gateway is starting… Sessions will appear once the agent is online.'
-      : 'Start the instance to view sessions.';
+      ? t('sessions.starting')
+      : t('sessions.startFirst');
+
+  const sessionCountLabel = sessions.length === 1
+    ? t('sessions.count', { count: sessions.length })
+    : t('sessions.countPlural', { count: sessions.length });
 
   return (
     <div style={wrapper}>
       <div style={toolbar}>
         <span style={{ color: '#a6adc8', fontSize: 12 }}>
-          {gatewayReady
-            ? `${sessions.length} session${sessions.length === 1 ? '' : 's'}`
-            : status.availability}
+          {gatewayReady ? sessionCountLabel : status.availability}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
           {onManageMappings !== undefined && (
             <button type="button" style={linkBtn} onClick={onManageMappings}>
-              Manage mappings
+              {t('sessions.manage')}
             </button>
           )}
           <button
@@ -63,7 +67,7 @@ export function SessionsPanel({
             disabled={!gatewayReady || listLoading}
             onClick={() => void loadSessions('manual')}
           >
-            Refresh
+            {t('common.refresh')}
           </button>
         </div>
       </div>

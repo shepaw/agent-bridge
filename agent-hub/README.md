@@ -37,8 +37,8 @@ root, then `cd agent-hub/cli && npm link`.
 # Initialize config directory (~/.config/shepaw-hub/)
 shepaw-hub init
 
-# One-shot onboarding (pick engine → start → print pairing QR)
-shepaw-hub quickstart
+# One-shot: dashboard + Peer (then add instances in the browser)
+shepaw-hub web
 
 # Or register a project manually
 shepaw-hub instance add --engine codebuddy --cwd /path/to/workspace --host 0.0.0.0
@@ -55,6 +55,9 @@ shepaw-hub pair <id>
 # Diagnose setup issues
 shepaw-hub doctor
 
+# Update to the latest npm release
+shepaw-hub update
+
 # Verify a running instance (HTTP; add --rpc / --chat for deeper probes)
 shepaw-hub test <id> --rpc
 
@@ -65,7 +68,7 @@ shepaw-hub logs <id> -f
 ### Web Dashboard
 
 ```bash
-# Start the dashboard (opens browser automatically)
+# Start the dashboard (opens browser, auto-starts Peer for app pairing)
 shepaw-hub web
 
 # Custom port / host
@@ -73,13 +76,19 @@ shepaw-hub web --port 8080 --host 0.0.0.0
 
 # Start without auto-opening browser
 shepaw-hub web --no-open
+
+# Dashboard only (do not start Peer / tunnel router)
+shepaw-hub web --no-peer --no-gateway
 ```
 
 The dashboard runs on `http://127.0.0.1:4000` by default.
 
-**First-run wizard:** when the dashboard has no instances, it auto-opens a
-guided flow (engine → working directory → start → pairing QR). You can also
-click **开始引导** on the empty state, or dismiss it and use **Add Instance**.
+Language: the dashboard follows the browser language (Chinese or English) and
+remembers the choice in the top-right **中文 | English** switcher.
+
+**First run:** `shepaw-hub web` starts Peer in the background. Open the UI and
+**添加实例** (engine + working directory). The instance starts automatically;
+pair the phone under **扫码配对**.
 
 ---
 
@@ -154,10 +163,12 @@ click **开始引导** on the empty state, or dismiss it and use **Add Instance*
 
 | Command | Description |
 |---------|-------------|
-| `shepaw-hub web` | Start the dashboard at `http://127.0.0.1:4000` |
+| `shepaw-hub web` | Start the dashboard at `http://127.0.0.1:4000` and auto-start Peer |
 | `shepaw-hub web --port <n>` | Custom port |
 | `shepaw-hub web --host <host>` | Custom bind host |
 | `shepaw-hub web --no-open` | Skip auto-opening browser |
+| `shepaw-hub web --no-peer` | Do not auto-start the device peer service |
+| `shepaw-hub web --no-gateway` | Do not auto-start the tunnel router |
 
 ---
 

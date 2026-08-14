@@ -4,10 +4,12 @@
  * Check list, fast by default (`--full` adds engine version + remote auth
  * probes, which spawn processes / do HTTP and can take seconds):
  *   1. Node.js version vs the supported range (repo package.json `engines`)
- *   2. Hub config directory + hub.json
- *   3. `shepaw-acp-proxy-gateway` resolvable — spawn.ts `require.resolve`s it
- *   4. Engine CLIs on PATH, honoring disabled flags
- *   5. Per instance: cwd exists, running state, port conflicts, crash flag
+ *   2. Hub CLI vs latest npm shepaw-agent-hub
+ *   3. Hub config directory + hub.json
+ *   4. `shepaw-acp-proxy-gateway` resolvable — spawn.ts `require.resolve`s it
+ *   5. Engine CLIs on PATH, honoring disabled flags
+ *   6. Per instance: cwd exists, running state, port conflicts, crash flag
+ *   7. Peer service (and tunnel router if a shared channel is configured)
  *
  * Returns the number of hard failures so the CLI can set a non-zero exit
  * code — setup scripts and bug reports can gate on `shepaw-hub doctor`.
@@ -22,13 +24,16 @@ import {
   hubConfigPath,
   instancePaths,
   isEngineDisabled,
+  isGatewayRunning,
   listEngineInfos,
   loadOrCreateHubConfig,
+  peerServiceStatus,
   probeInstanceRuntime,
   resolveEngineAvailability,
   resolveEngineEnvVars,
   type HubConfig,
 } from '@shepaw/agent-hub-core';
+import { checkHubUpdate } from './self-update.js';
 
 /** Keep in sync with the root package.json `engines.node` range. */
 const NODE_RANGE = '>=18.17.0';
@@ -96,6 +101,24 @@ function checkNode(r: Reporter): void {
       break;
     default:
       r.warn(`unrecognized Node version string: ${process.version}`);
+  }
+}
+
+async function checkCliVersion(r: Reporter): Promise<void> {
+  console.log('\nCLI version');
+  try {
+    const info = await checkHubUpdate({ timeoutMs: 5000 });
+    if (info.outdated) {
+      r.warn(
+        `shepaw-hub ${info.installed} (latest ${info.latest}) — run: shepaw-hub update`,
+      );
+    } else {
+      r.ok(`shepaw-hub ${info.installed}`);
+    }
+  } catch (err) {
+    r.warn(
+      `could not reach npm to check for updates (${err instanceof Error ? err.message : String(err)})`,
+    );
   }
 }
 
@@ -193,20 +216,40 @@ async function checkInstances(r: Reporter, cfg: HubConfig | undefined): Promise<
   }
 }
 
+function checkPeerAndGateway(r: Reporter, cfg: HubConfig | undefined): void {
+  console.log('\nPeer service');
+  const st = peerServiceStatus();
+  if (st.running) {
+    r.ok(`running on ${st.host}:${st.port}/peer/ws (pid ${st.pid})`);
+  } else {
+    r.warn('not running — `shepaw-hub web` starts it automatically, or run: shepaw-hub peer-start');
+  }
+  if (cfg?.gateway?.tunnel === undefined) return;
+  if (isGatewayRunning()) {
+    r.ok('tunnel router running (shared channel configured)');
+  } else {
+    r.warn(
+      'shared channel configured but tunnel router is not running — `shepaw-hub web` starts it, or: shepaw-hub gateway-start',
+    );
+  }
+}
+
 export async function runDoctor(opts: DoctorOptions = {}): Promise<number> {
   const full = opts.full === true;
   const r = makeReporter();
 
   console.log('shepaw-hub doctor' + (full ? ' (--full)' : ''));
   checkNode(r);
+  await checkCliVersion(r);
   const cfg = checkHubConfig(r);
   checkGatewayPackage(r);
   checkEngines(r, cfg, full);
   await checkInstances(r, cfg);
+  checkPeerAndGateway(r, cfg);
 
   console.log(
     `\n${r.failures} problem(s), ${r.warnings} warning(s).` +
-      (r.failures === 0 ? ' Ready to pair: shepaw-hub pair' : ''),
+      (r.failures === 0 ? ' Ready: shepaw-hub web' : ''),
   );
   return r.failures;
 }

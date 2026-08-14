@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { useLogs } from '../hooks/useInstances.js';
+import { useI18n } from '../i18n/index.js';
 
 interface LogViewerProps {
   instanceId: string;
 }
 
 export function LogViewer({ instanceId }: LogViewerProps) {
+  const { t } = useI18n();
   const { lines, connected, clear } = useLogs(instanceId, { tail: 200 });
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -18,12 +20,12 @@ export function LogViewer({ instanceId }: LogViewerProps) {
     <div style={wrapper}>
       <div style={toolbar}>
         <span style={{ color: connected ? '#a6e3a1' : '#6c7086', fontSize: 12 }}>
-          {connected ? '● live' : '○ disconnected'}
+          {connected ? t('logs.live') : t('logs.disconnected')}
         </span>
-        <button style={clearBtn} onClick={clear}>Clear</button>
+        <button style={clearBtn} onClick={clear}>{t('common.clear')}</button>
       </div>
       <pre style={pre}>
-        {lines.join('\n') || '(no output yet)'}
+        {lines.join('\n') || t('logs.empty')}
         <div ref={bottomRef} />
       </pre>
     </div>

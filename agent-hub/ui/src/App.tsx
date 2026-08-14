@@ -3,7 +3,6 @@ import { useInstances } from './hooks/useInstances.js';
 import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
 import { AddInstanceModal } from './components/AddInstanceModal.js';
-import { OnboardingWizard } from './components/OnboardingWizard.js';
 import { ConfirmModal } from './components/ConfirmModal.js';
 import { SettingsPage } from './components/SettingsPage.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
@@ -18,16 +17,21 @@ import {
 import { api, getHubAuthToken } from './api/client.js';
 import { HubAuthTokenPanel } from './components/HubAuthTokenPanel.js';
 import { StoreBrowserPanel } from './components/StoreBrowserPanel.js';
+import { LanguageSwitcher } from './components/LanguageSwitcher.js';
+import { useI18n } from './i18n/index.js';
 
 /** Top-level shell nav: instances list first (default), then settings sections. */
 type AppNav = 'instances' | 'store' | SettingsTab;
 
-const NAV_ITEMS: { id: AppNav; label: string }[] = [
-  { id: 'instances', label: '实例列表' },
-  { id: 'peer', label: '扫码配对' },
-  { id: 'store', label: '储物袋' },
-  { id: 'global', label: '全局设置' },
-];
+const NAV_IDS: AppNav[] = ['instances', 'peer', 'store', 'global'];
+
+function navLabelKey(id: AppNav): 'nav.instances' | 'nav.peer' | 'nav.store' | 'nav.global' | 'nav.engines' {
+  if (id === 'instances') return 'nav.instances';
+  if (id === 'store') return 'nav.store';
+  if (id === 'peer') return 'nav.peer';
+  if (id === 'engines') return 'nav.engines';
+  return 'nav.global';
+}
 
 function getInitialInstanceRoute() {
   return parseInstanceHash(location.hash);
@@ -41,19 +45,24 @@ function getInitialNav(): AppNav {
   return 'instances';
 }
 
-function navTitle(nav: AppNav, hasSelected: boolean): { title: string; subtitle: string } {
+function navTitle(
+  nav: AppNav,
+  hasSelected: boolean,
+  t: ReturnType<typeof useI18n>['t'],
+): { title: string; subtitle: string } {
   if (nav === 'instances') {
     return hasSelected
-      ? { title: '实例详情', subtitle: '运行状态 · 会话 · 配置' }
-      : { title: '实例列表', subtitle: '管理本机 Agent 实例' };
+      ? { title: t('title.detail'), subtitle: t('title.detailSub') }
+      : { title: t('title.instances'), subtitle: t('title.instancesSub') };
   }
-  if (nav === 'store') return { title: '储物袋', subtitle: '本机 · 配对设备 · Agent 空间' };
-  if (nav === 'peer') return { title: '扫码配对', subtitle: '启动 Peer · 扫码连接 App' };
-  if (nav === 'engines') return { title: '引擎管理', subtitle: '从创建实例进入 · 配置内置与自定义引擎' };
-  return { title: '全局设置', subtitle: '鉴权 Token · 默认审核策略' };
+  if (nav === 'store') return { title: t('title.store'), subtitle: t('title.storeSub') };
+  if (nav === 'peer') return { title: t('title.peer'), subtitle: t('title.peerSub') };
+  if (nav === 'engines') return { title: t('title.engines'), subtitle: t('title.enginesSub') };
+  return { title: t('title.global'), subtitle: t('title.globalSub') };
 }
 
 export function App() {
+  const { t } = useI18n();
   const { instances, loading, error, reload } = useInstances();
   const initialRoute = getInitialInstanceRoute();
   const initialSettings = parseSettingsHash(location.hash);
@@ -72,8 +81,7 @@ export function App() {
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [storeUri, setStoreUri] = useState<string | null>(initialStore.uri);
   const [showAdd, setShowAdd] = useState(false);
-  const [showWizard, setShowWizard] = useState(false);
-  const [wizardAutoPrompted, setWizardAutoPrompted] = useState(false);
+  const [addAutoPrompted, setAddAutoPrompted] = useState(false);
   const [showRestartAllConfirm, setShowRestartAllConfirm] = useState(false);
   const [restartAllBusy, setRestartAllBusy] = useState(false);
   const [restartAllErr, setRestartAllErr] = useState<string | null>(null);
@@ -119,7 +127,6 @@ export function App() {
 
   const openEngineSettings = (engineId: string) => {
     setShowAdd(false);
-    setShowWizard(false);
     goSettings('engines', engineId);
   };
 
@@ -135,28 +142,27 @@ export function App() {
     goSettings(id);
   };
 
-  // Auto-open the first-run wizard once when the dashboard has zero instances
+  // Auto-open Add Instance once when the dashboard has zero instances
   // (skip when auth is broken — user must fix the token first).
   useEffect(() => {
-    if (wizardAutoPrompted || loading || showWizard || showAdd || nav !== 'instances' || selected) {
+    if (addAutoPrompted || loading || showAdd || nav !== 'instances' || selected) {
       return;
     }
     if (isUnauthorizedError(error)) return;
     if (instances.length !== 0) return;
     try {
-      if (localStorage.getItem('shepaw_onboarding_dismissed') === '1') {
-        setWizardAutoPrompted(true);
+      if (localStorage.getItem('shepaw_add_dismissed') === '1') {
+        setAddAutoPrompted(true);
         return;
       }
     } catch {
       /* private mode */
     }
-    setShowWizard(true);
-    setWizardAutoPrompted(true);
+    setShowAdd(true);
+    setAddAutoPrompted(true);
   }, [
-    wizardAutoPrompted,
+    addAutoPrompted,
     loading,
-    showWizard,
     showAdd,
     nav,
     selected,
@@ -164,10 +170,10 @@ export function App() {
     instances.length,
   ]);
 
-  const dismissWizard = () => {
-    setShowWizard(false);
+  const dismissAdd = () => {
+    setShowAdd(false);
     try {
-      localStorage.setItem('shepaw_onboarding_dismissed', '1');
+      localStorage.setItem('shepaw_add_dismissed', '1');
     } catch {
       /* ignore */
     }
@@ -247,7 +253,7 @@ export function App() {
           .filter((r) => r.error !== undefined)
           .map((r) => `${r.id}: ${r.error}`)
           .join('; ');
-        setRestartAllErr(`部分实例重启失败: ${details}`);
+        setRestartAllErr(t('instances.restartPartialFail', { details }));
       }
       await reload();
     } catch (e) {
@@ -256,9 +262,10 @@ export function App() {
       setRestartAllBusy(false);
       setShowRestartAllConfirm(false);
     }
-  }, [running, reload]);
+  }, [running, reload, t]);
 
-  const heading = navTitle(nav, Boolean(selected));
+  const heading = navTitle(nav, Boolean(selected), t);
+  const summaryKey = instances.length === 1 ? 'instances.summary' : 'instances.summaryPlural';
 
   return (
     <Layout>
@@ -268,25 +275,26 @@ export function App() {
           <p style={subtitle}>
             {nav === 'instances' && !selected
               ? (loading
-                ? 'Loading...'
+                ? t('common.loading')
                 : error
-                  ? `Error: ${error}`
-                  : `${instances.length} instance${instances.length === 1 ? '' : 's'} · ${running} running`)
+                  ? t('common.error', { message: error })
+                  : t(summaryKey, { count: instances.length, running }))
               : heading.subtitle}
           </p>
         </div>
+        <LanguageSwitcher />
       </div>
 
       <div style={pageLayout}>
-        <nav style={sidebar} aria-label="主导航">
-          {NAV_ITEMS.map((item) => (
+        <nav style={sidebar} aria-label={t('nav.aria')}>
+          {NAV_IDS.map((id) => (
             <button
-              key={item.id}
+              key={id}
               type="button"
-              style={navBtn(nav === item.id)}
-              onClick={() => onNavClick(item.id)}
+              style={navBtn(nav === id)}
+              onClick={() => onNavClick(id)}
             >
-              {item.label}
+              {t(navLabelKey(id))}
             </button>
           ))}
         </nav>
@@ -321,7 +329,6 @@ export function App() {
               onFiltersChange={setFilters}
               onSelect={setSelected}
               onReload={reload}
-              onShowWizard={() => setShowWizard(true)}
               onShowAdd={() => setShowAdd(true)}
               onRestartAll={() => setShowRestartAllConfirm(true)}
             />
@@ -343,37 +350,28 @@ export function App() {
 
       {showAdd && (
         <AddInstanceModal
-          onClose={() => setShowAdd(false)}
-          onCreated={reload}
-          onOpenEngineSettings={openEngineSettings}
-        />
-      )}
-
-      {showWizard && (
-        <OnboardingWizard
-          onClose={dismissWizard}
-          onOpenEngineSettings={openEngineSettings}
-          onFinished={(instanceId) => {
+          onClose={dismissAdd}
+          onCreated={(result) => {
+            const wasEmpty = instances.length === 0;
             try {
-              localStorage.removeItem('shepaw_onboarding_dismissed');
+              localStorage.removeItem('shepaw_add_dismissed');
             } catch {
               /* ignore */
             }
-            setShowWizard(false);
-            setNav('instances');
             void reload().then(() => {
-              setSelected(instanceId);
-              setSelectedTab('devices');
+              if (wasEmpty && result?.started !== false) goSettings('peer');
             });
           }}
+          onOpenEngineSettings={openEngineSettings}
         />
       )}
 
       {showRestartAllConfirm && (
         <ConfirmModal
-          title="重启全部实例"
-          message={`确定要重启全部 ${running} 个运行中的实例吗？重启期间相关 Agent 将短暂不可用。`}
-          confirmLabel="重启全部"
+          title={t('instances.restartAllTitle')}
+          message={t('instances.restartAllMessage', { count: running })}
+          confirmLabel={t('instances.restartAll')}
+          cancelLabel={t('common.cancel')}
           tone="warning"
           busy={restartAllBusy}
           onConfirm={() => void restartAll()}
@@ -399,7 +397,6 @@ function InstancesPanel({
   onFiltersChange,
   onSelect,
   onReload,
-  onShowWizard,
   onShowAdd,
   onRestartAll,
 }: {
@@ -415,10 +412,10 @@ function InstancesPanel({
   onFiltersChange: (v: InstanceListFilterState) => void;
   onSelect: (id: string) => void;
   onReload: () => void;
-  onShowWizard: () => void;
   onShowAdd: () => void;
   onRestartAll: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <>
       {restartAllErr && (
@@ -428,9 +425,10 @@ function InstancesPanel({
       {isUnauthorizedError(error) && (
         <div style={authBanner}>
           <p style={{ margin: '0 0 12px', color: '#f9e2af', fontSize: 14 }}>
-            Dashboard API 需要鉴权
-            {!getHubAuthToken() ? '（本机尚未配置 Token）' : '（当前 Token 无效）'}。
-            请填写与启动命令中 <code style={inlineCode}>SHEPAW_HUB_TOKEN</code> 相同的值。
+            {t('instances.authNeeded')}
+            {t(!getHubAuthToken() ? 'instances.authNoToken' : 'instances.authBadToken')}
+            {' '}
+            {t('instances.authHint')}
           </p>
           <HubAuthTokenPanel onSaved={() => void onReload()} />
         </div>
@@ -453,33 +451,25 @@ function InstancesPanel({
 
       {!loading && instances.length === 0 && (
         <div style={empty}>
-          <p style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600 }}>还没有 Agent 实例</p>
+          <p style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600 }}>{t('instances.emptyTitle')}</p>
           <p style={{ color: '#a6adc8', fontSize: 14, margin: '0 0 16px' }}>
-            用引导向导在几分钟内把本机引擎接到 Shepaw App，或手动添加实例。
+            {t('instances.emptyHint')}
           </p>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button type="button" style={addBtn} onClick={onShowWizard}>
-              开始引导
-            </button>
-            <button type="button" style={secondaryBtn} onClick={onShowAdd}>
-              手动添加
-            </button>
-          </div>
-          <p style={{ color: '#6c7086', fontSize: 12, marginTop: 16 }}>
-            CLI：<code style={inlineCode}>shepaw-hub quickstart</code>
-          </p>
+          <button type="button" style={addBtn} onClick={onShowAdd}>
+            {t('instances.add')}
+          </button>
         </div>
       )}
 
       {!loading && instances.length > 0 && filteredInstances.length === 0 && (
         <div style={empty}>
-          <p>没有符合筛选条件的实例。</p>
+          <p>{t('instances.noneMatch')}</p>
           <button
             style={secondaryBtn}
             type="button"
             onClick={() => onFiltersChange({ search: '', busy: 'all', engine: 'all' })}
           >
-            清除筛选
+            {t('instances.clearFilters')}
           </button>
         </div>
       )}
@@ -623,11 +613,4 @@ const grid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
   gap: 16,
-};
-
-const inlineCode: React.CSSProperties = {
-  background: '#313244',
-  padding: '1px 6px',
-  borderRadius: 3,
-  fontSize: 13,
 };

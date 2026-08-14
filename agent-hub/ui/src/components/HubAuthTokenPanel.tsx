@@ -5,12 +5,14 @@ import {
   setHubAuthToken,
   verifyHubAuthToken,
 } from '../api/client.js';
+import { useI18n } from '../i18n/index.js';
 
 /**
  * Persist the dashboard Bearer token in localStorage so API / WebSocket
  * requests can send Authorization when SHEPAW_HUB_TOKEN is enabled.
  */
 export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const [hasToken, setHasToken] = useState(false);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
@@ -34,7 +36,7 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
   const save = async () => {
     const next = draft.trim();
     if (next.length === 0) {
-      setErr('请输入与启动 Hub 时相同的 SHEPAW_HUB_TOKEN');
+      setErr(t('auth.enterToken'));
       return;
     }
     setBusy(true);
@@ -51,7 +53,7 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
       }
       setDraft('');
       setHasToken(true);
-      setNotice('Token 已保存，后续 API 请求将自动携带。');
+      setNotice(t('auth.saved'));
       onSaved?.();
     } catch (e) {
       setHubAuthToken(null);
@@ -67,7 +69,7 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
     setHubAuthToken(null);
     setDraft('');
     setHasToken(false);
-    setNotice('已清除本机 Token。');
+    setNotice(t('auth.cleared'));
     setErr(null);
     onSaved?.();
     void refresh();
@@ -76,30 +78,30 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
   return (
     <>
       <p style={statusLine}>
-        服务端鉴权：
+        {t('auth.server')}
         {authRequired === null
-          ? '检测中…'
+          ? t('auth.checking')
           : authRequired
-            ? <span style={{ color: '#f9e2af' }}>已启用</span>
-            : <span style={{ color: '#a6e3a1' }}>未启用（本机 loopback 可无 Token）</span>}
+            ? <span style={{ color: '#f9e2af' }}>{t('auth.serverOn')}</span>
+            : <span style={{ color: '#a6e3a1' }}>{t('auth.serverOff')}</span>}
         {' · '}
-        浏览器：
+        {t('auth.browser')}
         {hasToken
-          ? <span style={{ color: '#a6e3a1' }}>已配置 Token</span>
-          : <span style={{ color: authRequired ? '#f38ba8' : '#6c7086' }}>未配置</span>}
+          ? <span style={{ color: '#a6e3a1' }}>{t('auth.browserSet')}</span>
+          : <span style={{ color: authRequired ? '#f38ba8' : '#6c7086' }}>{t('auth.browserUnset')}</span>}
       </p>
       {authRequired && !hasToken && (
         <p style={warn}>
-          当前服务端要求 Bearer Token。请填写启动 Hub 时设置的 <code style={code}>SHEPAW_HUB_TOKEN</code>。
+          {t('auth.bearerRequired')}
         </p>
       )}
       <label style={label}>
-        Dashboard Token
+        {t('auth.tokenLabel')}
         <input
           style={input}
           type="password"
           autoComplete="off"
-          placeholder={hasToken ? '••••••••（已保存，输入新值可覆盖）' : '与 SHEPAW_HUB_TOKEN 相同'}
+          placeholder={hasToken ? t('auth.placeholderSaved') : t('auth.placeholderEmpty')}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -109,11 +111,11 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
       </label>
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
         <button style={primaryBtn} disabled={busy} onClick={() => void save()}>
-          {busy ? '校验中…' : '保存并校验'}
+          {busy ? t('auth.verifying') : t('auth.saveVerify')}
         </button>
         {hasToken && (
           <button style={secondaryBtn} disabled={busy} onClick={clear}>
-            清除
+            {t('auth.clear')}
           </button>
         )}
       </div>
@@ -125,9 +127,6 @@ export function HubAuthTokenPanel({ onSaved }: { onSaved?: () => void }) {
 
 const statusLine: React.CSSProperties = { margin: '0 0 10px', color: '#a6adc8', fontSize: 13 };
 const warn: React.CSSProperties = { margin: '0 0 12px', color: '#f9e2af', fontSize: 13 };
-const code: React.CSSProperties = {
-  background: '#181825', border: '1px solid #313244', borderRadius: 4, padding: '0 4px',
-};
 const label: React.CSSProperties = { display: 'block', color: '#a6adc8', fontSize: 13, margin: '0 0 6px' };
 const input: React.CSSProperties = {
   display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 6,

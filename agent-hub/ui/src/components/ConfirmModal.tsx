@@ -1,3 +1,5 @@
+import { useI18n } from '../i18n/index.js';
+
 interface ConfirmModalProps {
   title: string;
   message: string;
@@ -13,13 +15,16 @@ interface ConfirmModalProps {
 export function ConfirmModal({
   title,
   message,
-  confirmLabel = '确认',
-  cancelLabel = '取消',
+  confirmLabel,
+  cancelLabel,
   tone = 'warning',
   busy = false,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const { t } = useI18n();
+  const confirmText = confirmLabel ?? t('common.confirm');
+  const cancelText = cancelLabel ?? t('common.cancel');
   return (
     <div style={overlay} onClick={busy ? undefined : onCancel}>
       <div
@@ -33,7 +38,7 @@ export function ConfirmModal({
           <h3 id="confirm-modal-title" style={{ margin: 0, color: '#cdd6f4', fontSize: 16 }}>
             {title}
           </h3>
-          <button style={closeBtn} disabled={busy} onClick={onCancel} aria-label="关闭">
+          <button style={closeBtn} disabled={busy} onClick={onCancel} aria-label={t('common.close')}>
             ✕
           </button>
         </div>
@@ -46,14 +51,14 @@ export function ConfirmModal({
 
         <div style={footer}>
           <button style={cancelBtn} disabled={busy} onClick={onCancel}>
-            {cancelLabel}
+            {cancelText}
           </button>
           <button
             style={confirmBtn[tone]}
             disabled={busy}
             onClick={onConfirm}
           >
-            {busy ? '处理中...' : confirmLabel}
+            {busy ? t('common.processing') : confirmText}
           </button>
         </div>
       </div>

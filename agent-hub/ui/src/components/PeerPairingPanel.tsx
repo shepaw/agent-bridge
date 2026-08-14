@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { GatewayInfo, PairedPeer, PeerPairingResult, PeerServiceStatus } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 import { ChannelSettingsPanel } from './GatewaySettingsModal.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 
 /**
- * Scan-to-pair panel: Peer service (must be running for the app to connect),
- * auto-mint `shepaw://peer` QR, then optional Channel + paired devices.
+ * Scan-to-pair panel: Peer is started by `shepaw-hub web` (and again here
+ * if needed). Auto-mint `shepaw://peer` QR, then optional Channel + devices.
  */
 export function PeerPairingPanel() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<PeerServiceStatus | null>(null);
   const [devices, setDevices] = useState<PairedPeer[]>([]);
   const [pairing, setPairing] = useState<PeerPairingResult | null>(null);
@@ -28,7 +30,7 @@ export function PeerPairingPanel() {
     setStatus(peerRes.status);
     setDevices(peerRes.devices);
     setGateway(gw);
-    return peerRes.status;
+    return { peerStatus: peerRes.status, gateway: gw };
   };
 
   // On open: ensure Peer is running, then mint QR so the app can scan immediately.
@@ -38,12 +40,22 @@ export function PeerPairingPanel() {
       setBooting(true);
       setErr(null);
       try {
-        let peerStatus = await load();
+        let { peerStatus, gateway: gw } = await load();
         if (cancelled) return;
         if (!peerStatus.running) {
           await api.peer.start();
           if (cancelled) return;
-          peerStatus = await load();
+          ({ peerStatus, gateway: gw } = await load());
+        }
+        if (cancelled) return;
+        if (gw.channel && !gw.status.running) {
+          try {
+            await api.gateway.start();
+            if (cancelled) return;
+            ({ peerStatus, gateway: gw } = await load());
+          } catch {
+            /* channel misconfigured — pairing tab still works on LAN */
+          }
         }
         if (cancelled) return;
         if (peerStatus.running && !autoQrDone.current) {
@@ -116,16 +128,16 @@ export function PeerPairingPanel() {
       {err && /unauthorized|SHEPAW_HUB_TOKEN/i.test(err) && (
         <div style={authBox}>
           <p style={{ margin: '0 0 12px', color: '#f9e2af', fontSize: 13 }}>
-            API 鉴权失败。请先配置 Dashboard Token（与启动时的 SHEPAW_HUB_TOKEN 相同）：
+            {t('peer.authFail')}
           </p>
           <HubAuthTokenPanel
             onSaved={() => {
               setErr(null);
               autoQrDone.current = false;
-              void load().then(async (peerStatus) => {
+              void load().then(async ({ peerStatus }) => {
                 if (!peerStatus.running) {
                   await api.peer.start();
-                  peerStatus = await load();
+                  ({ peerStatus } = await load());
                 }
                 if (peerStatus.running) {
                   autoQrDone.current = true;
@@ -138,68 +150,71 @@ export function PeerPairingPanel() {
       )}
 
       <div style={sectionFirst}>
-        <h4 style={sectionTitle}>Peer 服务</h4>
+        <h4 style={sectionTitle}>{t('peer.section')}</h4>
         <p style={priorityHint}>
-          App 扫码连接前必须先启动 Peer 服务。进入本页会自动启动并打开二维码。
+          {t('peer.hint')}
         </p>
         {gateway?.channel && !gateway.status.running && (
           <p style={warn}>
-            已配置 Channel 但隧道路由器未运行。远程配对需先启动路由器。
+            {t('peer.channelWarn')}
           </p>
         )}
         <div style={statusRow}>
           <div>
             <span style={dot(running)} />
             <strong style={{ color: '#cdd6f4' }}>
-              Peer 服务：{booting && !status ? '启动中…' : running ? `运行中 (pid ${status?.pid})` : '已停止'}
+              {booting && !status
+                ? t('peer.statusBooting')
+                : running
+                  ? t('peer.statusRunning', { pid: status?.pid ?? '' })
+                  : t('peer.statusStopped')}
             </strong>
-            {status && <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>端口 {status.port}</span>}
+            {status && <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>{t('peer.port', { port: status.port })}</span>}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {running
-              ? <button style={dangerBtn} disabled={busy || booting} onClick={() => void stop()}>停止</button>
-              : <button style={primaryBtn} disabled={busy || booting} onClick={() => void start()}>启动</button>}
+              ? <button style={dangerBtn} disabled={busy || booting} onClick={() => void stop()}>{t('common.stop')}</button>
+              : <button style={primaryBtn} disabled={busy || booting} onClick={() => void start()}>{t('common.start')}</button>}
           </div>
         </div>
         <p style={hint}>
-          用 Shepaw app 的「Device Pairing / Scan to Connect」扫描下方二维码。
-          {gateway?.channel
-            ? ' 二维码包含局域网与 Channel 远程入口。'
-            : ' 当前仅局域网可用；配置 Channel 后可远程连接。'}
+          {t('peer.scanHint')}
+          {gateway?.channel ? t('peer.qrBoth') : t('peer.qrLanOnly')}
         </p>
 
         {booting && !pairing ? (
-          <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 8px' }}>正在准备配对二维码…</p>
+          <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 8px' }}>{t('peer.preparingQr')}</p>
         ) : !pairing ? (
           <button style={primaryBtn} disabled={busy || !running} onClick={() => void mint()}>
-            {busy ? '生成中…' : '生成配对二维码'}
+            {busy ? t('peer.minting') : t('peer.mint')}
           </button>
         ) : (
           <div style={qrBlock}>
             <QRCodeSVG value={pairing.qrPayload} size={200} bgColor="#1e1e2e" fgColor="#cdd6f4" />
             <p style={{ color: '#a6e3a1', fontSize: 24, letterSpacing: 6, margin: '12px 0 4px' }}>{pairing.code}</p>
-            <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>{secondsLeft > 0 ? `${secondsLeft}s 后过期` : '已过期'}</p>
+            <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>
+              {secondsLeft > 0 ? t('peer.expiresIn', { seconds: secondsLeft }) : t('peer.expired')}
+            </p>
             <p style={{ color: '#6c7086', fontSize: 12, marginTop: 8 }}>
-              局域网：{pairing.localEndpoint}
+              {t('peer.lan', { endpoint: pairing.localEndpoint })}
               {pairing.channelEndpoint && (
                 <>
                   <br />
-                  Channel：{pairing.channelEndpoint}
+                  {t('peer.channel', { endpoint: pairing.channelEndpoint })}
                 </>
               )}
             </p>
             <div style={linkBox}>
-              <div style={linkLabel}>配对链接(无摄像头可粘贴此链接到 app「Device Pairing → 输入」)</div>
+              <div style={linkLabel}>{t('peer.linkLabel')}</div>
               <div style={linkRow}>
                 <code style={linkCode} title={pairing.qrPayload}>{pairing.qrPayload}</code>
                 <button
                   style={copyBtn}
                   onClick={() => { try { void navigator.clipboard.writeText(pairing.qrPayload); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ } }}
-                >{copied ? '已复制' : '复制'}</button>
+                >{copied ? t('common.copied') : t('common.copy')}</button>
               </div>
               <div style={linkHint}>
-                Android 模拟器:把链接里的 <code>{'192.168.x.x'}</code> 改成 <code>10.0.2.2</code>;
-                iOS 模拟器可用 <code>localhost</code>。
+                {t('peer.emulatorHint')}
               </div>
             </div>
             <button
@@ -208,7 +223,7 @@ export function PeerPairingPanel() {
               disabled={busy || !running}
               onClick={() => void mint()}
             >
-              刷新二维码
+              {t('peer.refreshQr')}
             </button>
           </div>
         )}
@@ -227,27 +242,25 @@ export function PeerPairingPanel() {
         >
           <span style={collapseTitleRow}>
             <span style={chevron}>{channelExpanded ? '▾' : '▸'}</span>
-            <span style={sectionTitleInline}>共享 Channel（远程访问）</span>
+            <span style={sectionTitleInline}>{t('peer.channelTitle')}</span>
             {gateway?.channel && !channelExpanded && (
-              <span style={configuredBadge}>已配置</span>
+              <span style={configuredBadge}>{t('common.configured')}</span>
             )}
           </span>
-          <span style={collapseAction}>{channelExpanded ? '收起' : '展开配置'}</span>
+          <span style={collapseAction}>{channelExpanded ? t('common.collapse') : t('common.expand')}</span>
         </button>
         {!channelExpanded && (
           <p style={channelCollapsedHint}>
-            Hub 运行在内网（局域网 / VPN）时，默认仅同一网络内的设备可扫码连接。
-            若希望外网（如手机移动网络）也能访问，可借助<strong style={{ color: '#a6adc8', fontWeight: 600 }}>共享 Channel 代理</strong>，
-            将加密流量安全转发到本机，无需对公网开放 Agent 端口。
+            {t('peer.channelCollapsed')}
           </p>
         )}
         {channelExpanded && <ChannelSettingsPanel />}
       </div>
 
       <div style={section}>
-        <h4 style={sectionTitle}>已配对设备（{devices.length}）</h4>
+        <h4 style={sectionTitle}>{t('peer.devicesTitle', { count: devices.length })}</h4>
         {devices.length === 0
-          ? <p style={hint}>尚未配对设备。</p>
+          ? <p style={hint}>{t('peer.noDevices')}</p>
           : devices.map((d) => (
             <div key={d.fingerprint} style={deviceRow}>
               <div>
@@ -263,9 +276,9 @@ export function PeerPairingPanel() {
                     location.hash = `#store/${encodeURIComponent(uri)}`;
                   }}
                 >
-                  打开储物袋
+                  {t('peer.openStore')}
                 </button>
-                <button style={dangerBtn} disabled={busy} onClick={() => void revoke(d.fingerprint)}>撤销</button>
+                <button style={dangerBtn} disabled={busy} onClick={() => void revoke(d.fingerprint)}>{t('peer.revoke')}</button>
               </div>
             </div>
           ))}

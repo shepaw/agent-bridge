@@ -1,4 +1,5 @@
 import type { BusyFilter } from '../utils/instanceFilters.js';
+import { useI18n } from '../i18n/index.js';
 
 export interface InstanceListFilterState {
   search: string;
@@ -31,6 +32,7 @@ export function InstanceListFilters({
   onRestartAll,
   onAddInstance,
 }: InstanceListFiltersProps) {
+  const { t } = useI18n();
   const hasActiveFilter =
     value.search.trim().length > 0 || value.busy !== 'all' || value.engine !== 'all';
 
@@ -39,7 +41,7 @@ export function InstanceListFilters({
       <input
         style={input}
         type="search"
-        placeholder="按标题搜索…"
+        placeholder={t('filters.search')}
         value={value.search}
         onChange={(e) => onChange({ ...value, search: e.target.value })}
       />
@@ -48,24 +50,24 @@ export function InstanceListFilters({
         value={value.busy}
         onChange={(e) => onChange({ ...value, busy: e.target.value as BusyFilter })}
       >
-        <option value="all">全部负载状态</option>
-        <option value="idle">空闲</option>
-        <option value="busy">繁忙</option>
-        <option value="overloaded">高负载</option>
-        <option value="unknown">未探测</option>
+        <option value="all">{t('filters.busyAll')}</option>
+        <option value="idle">{t('filters.busyIdle')}</option>
+        <option value="busy">{t('filters.busyBusy')}</option>
+        <option value="overloaded">{t('filters.busyOverloaded')}</option>
+        <option value="unknown">{t('filters.busyUnknown')}</option>
       </select>
       <select
         style={select}
         value={value.engine}
         onChange={(e) => onChange({ ...value, engine: e.target.value })}
       >
-        <option value="all">全部引擎</option>
+        <option value="all">{t('filters.engineAll')}</option>
         {engines.map((engine) => (
           <option key={engine} value={engine}>{engine}</option>
         ))}
       </select>
       <span style={count}>
-        {hasActiveFilter ? `显示 ${shown} / ${total}` : `${total} 个实例`}
+        {hasActiveFilter ? t('filters.shown', { shown, total }) : t('filters.total', { total })}
       </span>
       {hasActiveFilter && (
         <button
@@ -73,7 +75,7 @@ export function InstanceListFilters({
           type="button"
           onClick={() => onChange({ search: '', busy: 'all', engine: 'all' })}
         >
-          清除筛选
+          {t('instances.clearFilters')}
         </button>
       )}
       <div style={actions}>
@@ -84,12 +86,12 @@ export function InstanceListFilters({
             disabled={restartAllBusy || restartAllDisabled}
             onClick={onRestartAll}
           >
-            {restartAllBusy ? '重启中...' : '重启全部'}
+            {restartAllBusy ? t('instances.restarting') : t('instances.restartAll')}
           </button>
         )}
         {onAddInstance && (
           <button style={addBtn} type="button" onClick={onAddInstance}>
-            + 添加实例
+            {t('instances.addPlus')}
           </button>
         )}
       </div>

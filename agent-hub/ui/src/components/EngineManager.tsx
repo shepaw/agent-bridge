@@ -8,6 +8,7 @@ import type {
   MaskedEnvVar,
 } from '../api/types.js';
 import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
+import { useI18n } from '../i18n/index.js';
 
 type EnvDraft = { key: string; value: string };
 
@@ -27,6 +28,7 @@ export function EngineManager({
   focusEngineId?: string | null;
   onFocusEngineHandled?: () => void;
 }) {
+  const { t } = useI18n();
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -53,7 +55,7 @@ export function EngineManager({
     setAdding(true); setErr(null);
     try {
       if (!newId.trim() || !newName.trim() || !newCmd.trim()) {
-        throw new Error('ID、显示名、ACP 命令均为必填。');
+        throw new Error(t('engine.required'));
       }
       await api.engines.create({ id: newId.trim(), displayName: newName.trim(), acpCommand: newCmd.trim() });
       setNewId(''); setNewName(''); setNewCmd('');
@@ -68,20 +70,20 @@ export function EngineManager({
   return (
     <div>
       <div style={addBlock}>
-        <h4 style={sectionTitle}>添加自定义引擎</h4>
+        <h4 style={sectionTitle}>{t('engine.addTitle')}</h4>
         <div style={addRow}>
-          <input style={input} placeholder="引擎 ID（如 my-cli）" value={newId} onChange={(e) => setNewId(e.target.value)} />
-          <input style={input} placeholder="显示名" value={newName} onChange={(e) => setNewName(e.target.value)} />
-          <input style={{ ...input, flex: 2 }} placeholder="ACP 命令（如 /usr/local/bin/my-cli --acp）" value={newCmd} onChange={(e) => setNewCmd(e.target.value)} />
+          <input style={input} placeholder={t('engine.idPlaceholder')} value={newId} onChange={(e) => setNewId(e.target.value)} />
+          <input style={input} placeholder={t('engine.namePlaceholder')} value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <input style={{ ...input, flex: 2 }} placeholder={t('engine.cmdPlaceholder')} value={newCmd} onChange={(e) => setNewCmd(e.target.value)} />
           <button style={primaryBtn} disabled={adding} onClick={() => void addEngine()}>
-            {adding ? '添加中…' : '添加'}
+            {adding ? t('common.adding') : t('common.add')}
           </button>
         </div>
       </div>
 
-      <h4 style={{ ...sectionTitle, marginTop: 20 }}>引擎列表（{engines.length}）</h4>
+      <h4 style={{ ...sectionTitle, marginTop: 20 }}>{t('engine.listTitle', { count: engines.length })}</h4>
       <p style={hint}>
-        每个引擎可单独设置默认环境变量。环境变量支持任意自定义键值。新建实例时可选择该引擎的原生会话模式。
+        {t('engine.listHint')}
       </p>
 
       <div style={listCol}>
@@ -115,6 +117,7 @@ function EngineRow({
   highlight?: boolean;
   onOpened?: () => void;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(initialOpen);
   const rowRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
@@ -168,7 +171,7 @@ function EngineRow({
     setBusy(true); setErr(null); setNotice(null);
     try {
       await api.engines.setOverride(engine.id, { disabled: !engine.disabled });
-      setNotice(engine.disabled ? '已启用。' : '已禁用——新建实例将不可选此引擎。');
+      setNotice(engine.disabled ? t('engine.enabledNotice') : t('engine.disabledNotice'));
       onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -181,7 +184,7 @@ function EngineRow({
     setBusy(true); setErr(null); setNotice(null);
     try {
       await api.engines.update(engine.id, { displayName, acpCommand });
-      setNotice('已保存引擎设置。');
+      setNotice(t('engine.saved'));
       onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -195,12 +198,12 @@ function EngineRow({
       .map((r) => ({ key: r.key.trim(), value: r.value }))
       .filter((r) => r.key.length > 0);
     if (rows.length === 0) {
-      setErr('请至少填写一个变量名。');
+      setErr(t('detail.envNeedKey'));
       return;
     }
     const keys = rows.map((r) => r.key);
     if (new Set(keys).size !== keys.length) {
-      setErr('草稿中存在重复的变量名。');
+      setErr(t('detail.envDupKey'));
       return;
     }
     setBusy(true); setErr(null); setNotice(null);
@@ -209,7 +212,7 @@ function EngineRow({
         await api.engines.envvars.set(engine.id, row.key, row.value);
       }
       setEnvDrafts([emptyEnvDraft()]);
-      setNotice(`已保存 ${rows.length} 个环境变量。`);
+      setNotice(t('engine.envSaved', { count: rows.length }));
       await loadEnv();
       onChanged();
     } catch (e) {
@@ -230,7 +233,7 @@ function EngineRow({
         delete next[key];
         return next;
       });
-      setNotice(`已更新 ${key}。`);
+      setNotice(t('engine.envUpdated', { key }));
       await loadEnv();
       onChanged();
     } catch (e) {
@@ -268,7 +271,7 @@ function EngineRow({
   const missingHints = envHints.filter((h) => !existingKeys.has(h.key));
 
   const removeEngine = async () => {
-    if (!confirm(`删除自定义引擎 "${engine.displayName}"？使用该引擎的实例需先改换引擎。`)) return;
+    if (!confirm(t('engine.deleteConfirm', { name: engine.displayName }))) return;
     setBusy(true); setErr(null);
     try {
       await api.engines.remove(engine.id);
@@ -287,27 +290,27 @@ function EngineRow({
           <strong style={{ color: engine.disabled ? '#6c7086' : '#cdd6f4' }}>{engine.displayName}</strong>
           <code style={tag}>{engine.id}</code>
           <span style={{ ...tag, background: engine.builtin ? '#3a4a2a' : '#313244', color: engine.builtin ? '#a6e3a1' : '#cdd6f4' }}>
-            {engine.builtin ? '内置' : '自定义'}
+            {engine.builtin ? t('common.builtin') : t('common.custom')}
           </span>
           {engine.available === true && (
-            <span style={{ ...tag, background: '#3a4a2a', color: '#a6e3a1' }}>可用</span>
+            <span style={{ ...tag, background: '#3a4a2a', color: '#a6e3a1' }}>{t('common.available')}</span>
           )}
           {engine.available === false && (
             <span style={{ ...tag, background: '#452632', color: '#f38ba8' }} title={engine.unavailableReason ?? undefined}>
-              不可用
+              {t('common.unavailable')}
             </span>
           )}
-          {engine.disabled && <span style={{ ...tag, background: '#452632', color: '#f38ba8' }}>已禁用</span>}
+          {engine.disabled && <span style={{ ...tag, background: '#452632', color: '#f38ba8' }}>{t('common.disabled')}</span>}
           {engine.envVarKeys && engine.envVarKeys.length > 0 && (
-            <span style={tag}>{engine.envVarKeys.length} 个凭据</span>
+            <span style={tag}>{t('engine.credentials', { count: engine.envVarKeys.length })}</span>
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button style={smallBtn} disabled={busy} onClick={() => void toggleDisabled()}>
-            {engine.disabled ? '启用' : '禁用'}
+            {engine.disabled ? t('common.enable') : t('common.disable')}
           </button>
           <button style={smallBtn} onClick={openConfig}>
-            {open ? '收起' : '配置'}
+            {open ? t('common.collapse') : t('engine.configure')}
           </button>
         </div>
       </div>
@@ -324,22 +327,22 @@ function EngineRow({
 
           {!engine.builtin && (
             <div style={subSection}>
-              <h5 style={subTitle}>引擎命令（自定义）</h5>
-              <label style={labelStyle}>显示名</label>
+              <h5 style={subTitle}>{t('engine.commandTitle')}</h5>
+              <label style={labelStyle}>{t('engine.displayName')}</label>
               <input style={input} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-              <label style={labelStyle}>ACP 命令</label>
+              <label style={labelStyle}>{t('engine.acpCommand')}</label>
               <input style={input} value={acpCommand} onChange={(e) => setAcpCommand(e.target.value)} />
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button style={primaryBtn} disabled={busy} onClick={() => void saveEdit()}>保存</button>
-                <button style={dangerBtn} disabled={busy} onClick={() => void removeEngine()}>删除引擎</button>
+                <button style={primaryBtn} disabled={busy} onClick={() => void saveEdit()}>{t('common.save')}</button>
+                <button style={dangerBtn} disabled={busy} onClick={() => void removeEngine()}>{t('engine.deleteEngine')}</button>
               </div>
             </div>
           )}
 
           <div style={subSection}>
-            <h5 style={subTitle}>默认环境变量（使用该引擎的实例自动继承，实例可覆盖）</h5>
+            <h5 style={subTitle}>{t('engine.defaultEnv')}</h5>
             <p style={hint}>
-              可添加任意数量的自定义环境变量（如 ANTHROPIC_BASE_URL、API Key、代理地址等）。下方建议键可一键填入草稿。
+              {t('engine.defaultEnvHint')}
             </p>
             <div style={envList}>
               {envVars.map((v) => {
@@ -354,7 +357,7 @@ function EngineRow({
                         type={sensitive ? 'password' : 'text'}
                         value={envEditing[v.key] ?? ''}
                         onChange={(e) => setEnvEditing((prev) => ({ ...prev, [v.key]: e.target.value }))}
-                        placeholder={sensitive ? '新值' : '新值'}
+                        placeholder={t('engine.newValue')}
                         autoFocus
                       />
                     ) : (
@@ -371,7 +374,7 @@ function EngineRow({
                     <div style={{ display: 'flex', gap: 6 }}>
                       {editing ? (
                         <>
-                          <button style={primaryBtn} disabled={busy} onClick={() => void updateExistingEnv(v.key)}>保存</button>
+                          <button style={primaryBtn} disabled={busy} onClick={() => void updateExistingEnv(v.key)}>{t('common.save')}</button>
                           <button
                             style={secondaryBtn}
                             disabled={busy}
@@ -381,7 +384,7 @@ function EngineRow({
                               return next;
                             })}
                           >
-                            取消
+                            {t('common.cancel')}
                           </button>
                         </>
                       ) : (
@@ -395,21 +398,21 @@ function EngineRow({
                               [v.key]: sensitive ? '' : v.value,
                             }))}
                           >
-                            更新
+                            {t('common.update')}
                           </button>
-                          <button style={dangerBtn} disabled={busy} onClick={() => void removeEnv(v.key)}>删除</button>
+                          <button style={dangerBtn} disabled={busy} onClick={() => void removeEnv(v.key)}>{t('common.delete')}</button>
                         </>
                       )}
                     </div>
                   </div>
                 );
               })}
-              {envVars.length === 0 && <p style={hint}>尚未设置默认环境变量。</p>}
+              {envVars.length === 0 && <p style={hint}>{t('engine.noDefaultEnv')}</p>}
             </div>
 
             {missingHints.length > 0 && (
               <div style={{ marginBottom: 8 }}>
-                <span style={{ color: '#6c7086', fontSize: 12 }}>建议添加：</span>
+                <span style={{ color: '#6c7086', fontSize: 12 }}>{t('engine.suggested')}</span>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                   {missingHints.map((h) => (
                     <button
@@ -420,7 +423,7 @@ function EngineRow({
                       disabled={busy}
                       onClick={() => applySuggestedKey(h.key)}
                     >
-                      {h.key}{h.optional ? '（可选）' : ''}
+                      {h.key}{h.optional ? t('engine.optionalMark') : ''}
                     </button>
                   ))}
                 </div>
@@ -434,14 +437,14 @@ function EngineRow({
                   <div key={idx} style={addRow}>
                     <input
                       style={input}
-                      placeholder="变量名"
+                      placeholder={t('detail.envKey')}
                       value={row.key}
                       onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
                     />
                     <input
                       style={{ ...input, flex: 2 }}
                       type={sensitive ? 'password' : 'text'}
-                      placeholder={sensitive ? '敏感值（将加密存储）' : '值'}
+                      placeholder={sensitive ? t('engine.sensitiveStored') : t('detail.envValue')}
                       value={row.value}
                       onChange={(e) => setEnvDrafts((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
                     />
@@ -451,7 +454,7 @@ function EngineRow({
                         disabled={busy}
                         onClick={() => setEnvDrafts((prev) => prev.filter((_, i) => i !== idx))}
                       >
-                        移除
+                        {t('common.remove')}
                       </button>
                     )}
                   </div>
@@ -463,10 +466,10 @@ function EngineRow({
                   disabled={busy}
                   onClick={() => setEnvDrafts((prev) => [...prev, emptyEnvDraft()])}
                 >
-                  再加一行
+                  {t('detail.addRow')}
                 </button>
                 <button style={primaryBtn} disabled={busy} onClick={() => void saveEnvDrafts()}>
-                  {busy ? '保存中…' : '保存环境变量'}
+                  {busy ? t('common.saving') : t('engine.saveEnv')}
                 </button>
               </div>
             </div>
@@ -493,6 +496,7 @@ function EngineSetupSection({
   onNotice: (msg: string | null) => void;
   onEnvHints?: (hints: EngineEnvVarHint[]) => void;
 }) {
+  const { t } = useI18n();
   const [guide, setGuide] = useState<EngineSetupGuide | null>(null);
   const [status, setStatus] = useState<EngineInstallStatus | null>(null);
   const [platformLabel, setPlatformLabel] = useState<string | null>(null);
@@ -530,7 +534,7 @@ function EngineSetupSection({
     try {
       await api.engines.setOverride(engine.id, { disabled: false });
       setDisabled(false);
-      onNotice('引擎已启用。');
+      onNotice(t('engine.enabledOk'));
       onChanged();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -552,10 +556,10 @@ function EngineSetupSection({
       }
       if (result.ok) {
         setDisabled(false);
-        onNotice('安装完成，引擎已启用。');
+        onNotice(t('engine.installDone'));
         onChanged();
       } else {
-        onError(result.status.checkError ?? '安装未完成，请查看输出或按文档手动安装。');
+        onError(result.status.checkError ?? t('engine.installFail'));
       }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -567,8 +571,8 @@ function EngineSetupSection({
   if (loading) {
     return (
       <div style={subSection}>
-        <h5 style={subTitle}>环境与安装</h5>
-        <p style={hint}>正在检测环境…</p>
+        <h5 style={subTitle}>{t('engine.setupTitle')}</h5>
+        <p style={hint}>{t('engine.detecting')}</p>
       </div>
     );
   }
@@ -581,11 +585,11 @@ function EngineSetupSection({
   return (
     <div style={setupBlock}>
       <div style={setupHead}>
-        <h5 style={{ ...subTitle, margin: 0 }}>环境与安装</h5>
+        <h5 style={{ ...subTitle, margin: 0 }}>{t('engine.setupTitle')}</h5>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {platformLabel && (
             <span style={{ ...tag, background: '#313244', color: '#89b4fa' }}>
-              Hub 系统：{platformLabel}
+              {t('engine.hubOs', { platform: platformLabel })}
             </span>
           )}
           <span style={{
@@ -594,8 +598,8 @@ function EngineSetupSection({
             color: status.installed ? '#a6e3a1' : '#f38ba8',
           }}>
             {status.installed
-              ? `已安装${status.version ? ` · ${status.version}` : ''}`
-              : '未安装'}
+              ? t('engine.installed', { version: status.version ? ` · ${status.version}` : '' })
+              : t('engine.notInstalled')}
           </span>
         </div>
       </div>
@@ -604,21 +608,21 @@ function EngineSetupSection({
         {guide.summary}
         {platformLabel && (
           <span style={{ display: 'block', marginTop: 4, color: '#6c7086' }}>
-            安装命令与检测均在运行 Hub 的机器上执行（当前为 {platformLabel}）。
+            {t('engine.installHint', { platform: platformLabel })}
           </span>
         )}
       </p>
 
       {guide.acpCommand && (
         <div style={cmdBlock}>
-          <span style={{ color: '#6c7086', fontSize: 12 }}>ACP 上游命令</span>
+          <span style={{ color: '#6c7086', fontSize: 12 }}>{t('engine.upstreamCmd')}</span>
           <code style={cmdCode}>{guide.acpCommand}</code>
         </div>
       )}
 
       {status.binaryPath && (
         <p style={{ color: '#a6adc8', fontSize: 12, margin: '6px 0' }}>
-          检测到：<code style={{ color: '#f9e2af' }}>{status.binaryPath}</code>
+          {t('engine.detected')}<code style={{ color: '#f9e2af' }}>{status.binaryPath}</code>
         </p>
       )}
 
@@ -636,12 +640,12 @@ function EngineSetupSection({
 
       {guide.requiredEnvVars && guide.requiredEnvVars.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <span style={{ color: '#6c7086', fontSize: 12 }}>所需环境变量（可在下方「默认环境变量」配置）</span>
+          <span style={{ color: '#6c7086', fontSize: 12 }}>{t('engine.requiredEnv')}</span>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: '#a6adc8', fontSize: 13 }}>
             {guide.requiredEnvVars.map((v) => (
               <li key={v.key}>
                 <code style={{ color: '#f9e2af' }}>{v.key}</code>
-                {v.optional ? '（可选）' : ''} — {v.description}
+                {v.optional ? t('engine.optionalMark') : ''} — {v.description}
               </li>
             ))}
           </ul>
@@ -651,20 +655,20 @@ function EngineSetupSection({
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
         {showInstallBtn && (
           <button style={primaryBtn} disabled={installing} onClick={() => void installAndEnable()}>
-            {installing ? '安装中…' : '一键安装并启用'}
+            {installing ? t('engine.installing') : t('engine.installEnable')}
           </button>
         )}
         {showEnableBtn && (
           <button style={primaryBtn} disabled={installing} onClick={() => void enableEngine()}>
-            启用引擎
+            {t('engine.enableEngine')}
           </button>
         )}
         <button style={secondaryBtn} disabled={installing} onClick={() => void loadSetup()}>
-          重新检测
+          {t('engine.redetect')}
         </button>
         {guide.docsUrl && (
           <a href={guide.docsUrl} target="_blank" rel="noreferrer" style={docLink}>
-            查看官方文档 ↗
+            {t('engine.docs')}
           </a>
         )}
       </div>

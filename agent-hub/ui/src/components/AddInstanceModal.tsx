@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client.js';
 import type { EngineInfo, HubMeta } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 import { rememberCwd } from '../utils/cwdHistory.js';
 import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
@@ -44,13 +45,19 @@ function clearDraft() {
   draft = { ...EMPTY_DRAFT };
 }
 
+function basename(path: string): string {
+  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/);
+  return parts[parts.length - 1] || path || 'my-agent';
+}
+
 interface AddInstanceModalProps {
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (result?: { started: boolean }) => void;
   onOpenEngineSettings: (engineId: string) => void;
 }
 
 export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: AddInstanceModalProps) {
+  const { t } = useI18n();
   const [label, setLabel] = useState(draft.label);
   const [engine, setEngine] = useState(draft.engine);
   const [sessionMode, setSessionMode] = useState(draft.sessionMode);
@@ -62,7 +69,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const [tunnelServer, setTunnelServer] = useState(draft.tunnelServer);
   const [tunnelChannelId, setTunnelChannelId] = useState(draft.tunnelChannelId);
   const [tunnelSecret, setTunnelSecret] = useState(draft.tunnelSecret);
-  const [showTunnel, setShowTunnel] = useState(draft.showTunnel);
+  const [showAdvanced, setShowAdvanced] = useState(draft.showTunnel);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -82,9 +89,9 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       tunnelServer,
       tunnelChannelId,
       tunnelSecret,
-      showTunnel,
+      showTunnel: showAdvanced,
     };
-  }, [label, engine, sessionMode, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showTunnel]);
+  }, [label, engine, sessionMode, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showAdvanced]);
 
   useEffect(() => {
     api.engines.list()
@@ -133,10 +140,24 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       .catch(() => { /* history seed is optional */ });
   }, []);
 
+  // Prefill working directory with home when the field is empty.
+  useEffect(() => {
+    if (cwd) return;
+    api.fs
+      .browse()
+      .then((r) => {
+        setCwd(r.path);
+        setLabel((prev) => prev || basename(r.path));
+      })
+      .catch(() => {
+        /* user can browse manually */
+      });
+  }, [cwd]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedUnavailable) {
-      setErr(selectedEngine?.unavailableReason ?? '所选引擎当前不可用，请先完成环境安装。');
+      setErr(selectedEngine?.unavailableReason ?? t('add.errEngineUnavailable'));
       return;
     }
     setLoading(true);
@@ -147,7 +168,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       const effectiveSecret = (tunnelSecret === '__use_cache__' ? '' : tunnelSecret).trim();
       const hasTunnel = Boolean(server && channelId && effectiveSecret);
       if ((server || channelId || effectiveSecret) && !hasTunnel) {
-        setErr('填写 channel 时须同时提供 Server URL、Channel ID 与 Secret，或全部留空。');
+        setErr(t('add.errTunnelPartial'));
         setLoading(false);
         return;
       }
@@ -156,11 +177,17 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
         : undefined;
 
       const resolvedBaseUrl = baseUrl.trim() || (tunnel ? `${tunnel.serverUrl}/proxy/${tunnel.channelId}` : '');
+      const trimmedCwd = cwd.trim();
+      if (!trimmedCwd) {
+        setErr(t('add.errCwd'));
+        setLoading(false);
+        return;
+      }
 
-      await api.instances.create({
-        label: label || undefined,
+      const created = await api.instances.create({
+        label: label.trim() || basename(trimmedCwd),
         engine,
-        cwd,
+        cwd: trimmedCwd,
         host,
         baseUrl: resolvedBaseUrl,
         tunnel,
@@ -168,7 +195,13 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       });
       rememberCwd(cwd);
       clearDraft();
-      onCreated();
+      if (created.startError) {
+        setErr(t('add.errStartFailed', { error: created.startError }));
+        setLoading(false);
+        onCreated({ started: false });
+        return;
+      }
+      onCreated({ started: true });
       onClose();
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
@@ -181,36 +214,34 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
     <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Add Instance</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('add.title')}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
         <form onSubmit={(e) => void submit(e)} style={form}>
           <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
-            Upstream ACP agents handle their own login and API keys on the gateway host.
-            Hub only spawns the agent CLI — no credentials needed here.
-            Agent ID is auto-generated and shared with the Shepaw app.
+            {t('add.hint')}
           </p>
 
-          <label style={lbl}>Label</label>
-          <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Agent" />
+          <label style={lbl}>{t('add.label')}</label>
+          <input style={inp} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t('add.labelPlaceholder')} />
 
           <div style={fieldHead}>
-            <label style={{ ...lbl, margin: 0 }}>Engine <span style={req}>*</span></label>
+            <label style={{ ...lbl, margin: 0 }}>{t('add.engine')} <span style={req}>*</span></label>
             <button
               type="button"
               style={manageEngineBtn}
               onClick={() => onOpenEngineSettings(engine || engineOptions[0]?.id || 'codebuddy')}
             >
-              管理引擎
+              {t('add.manageEngines')}
             </button>
           </div>
           {engineOptions.length > 0 ? (
-            <div style={engineList} role="listbox" aria-label="Engine">
+            <div style={engineList} role="listbox" aria-label={t('add.engineAria')}>
               {engineOptions.map((e) => {
                 const unavailable = e.available === false;
                 const selected = engine === e.id;
-                const title = e.builtin ? e.displayName : `${e.displayName} (custom)`;
+                const title = e.builtin ? e.displayName : `${e.displayName} (${t('common.custom')})`;
                 return (
                   <div
                     key={e.id}
@@ -229,7 +260,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                       <div style={engineRowText}>
                         <span style={{ color: unavailable ? '#a6adc8' : '#cdd6f4' }}>
                           {title}
-                          {unavailable ? ' — 不可用' : ''}
+                          {unavailable ? t('add.unavailableSuffix') : ''}
                         </span>
                         {unavailable && e.unavailableReason && (
                           <span style={engineReason}>{e.unavailableReason}</span>
@@ -245,7 +276,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                           onOpenEngineSettings(e.id);
                         }}
                       >
-                        去配置 →
+                        {t('add.goConfigure')}
                       </button>
                     )}
                   </div>
@@ -268,36 +299,43 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           {selectedUnavailable && (
             <div style={unavailableBox}>
               <p style={{ margin: 0, color: '#f38ba8', fontSize: 13 }}>
-                {selectedEngine?.unavailableReason ?? '该引擎运行环境未就绪，无法创建实例。'}
+                {selectedEngine?.unavailableReason ?? t('add.engineNotReady')}
               </p>
               <button
                 type="button"
                 style={installLinkBtn}
                 onClick={() => onOpenEngineSettings(engine)}
               >
-                前往引擎设置配置 →
+                {t('add.goEngineSettings')}
               </button>
             </div>
           )}
 
           {!hasAvailableEngine && engineOptions.length > 0 && (
             <p style={{ color: '#fab387', fontSize: 12, margin: '4px 0 0' }}>
-              当前没有可用引擎。请点击「管理引擎」完成安装与凭据设置。
+              {t('add.noEngines')}
             </p>
           )}
 
-          <label style={lbl}>Agent 模式</label>
-          <SessionModeSelect
-            modes={sessionModes}
-            value={sessionMode}
-            onChange={setSessionMode}
-          />
+          {sessionModes.length > 0 && (
+            <>
+              <label style={lbl}>{t('add.sessionMode')}</label>
+              <SessionModeSelect
+                modes={sessionModes}
+                value={sessionMode}
+                onChange={setSessionMode}
+              />
+            </>
+          )}
 
-          <label style={lbl}>Working Directory <span style={req}>*</span></label>
+          <label style={lbl}>{t('add.cwd')} <span style={req}>*</span></label>
           <CwdPathInput
             value={cwd}
-            onChange={setCwd}
-            placeholder="/path/to/instance"
+            onChange={(path) => {
+              setCwd(path);
+              setLabel((prev) => (prev && prev !== basename(cwd) ? prev : basename(path)));
+            }}
+            placeholder={t('add.cwdPlaceholder')}
             required
             seedPaths={seedPaths}
             trailing={(
@@ -306,42 +344,41 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                 style={browseBtn}
                 onClick={() => setShowDirPicker(true)}
               >
-                浏览…
+                {t('common.browse')}
               </button>
             )}
           />
 
-          <label style={lbl}>Bind Host</label>
-          <select style={inp} value={host} onChange={(e) => setHost(e.target.value)}>
-            <option value="127.0.0.1">127.0.0.1 (loopback only)</option>
-            <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
-          </select>
-
-          <label style={lbl}>Base URL <span style={{ color: '#6c7086', fontSize: 11 }}>(optional — auto-derived from tunnel)</span></label>
-          <input style={inp} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="wss://example.com (leave blank if using tunnel)" />
-
           <button
             type="button"
             style={tunnelToggle}
-            onClick={() => setShowTunnel((v) => !v)}
+            onClick={() => setShowAdvanced((v) => !v)}
           >
-            {showTunnel ? '▼' : '▶'} 高级:单独的外网 channel (per-instance tunnel)
+            {showAdvanced ? '▼' : '▶'} {t('add.advanced')}
           </button>
 
-          {showTunnel && (
+          {showAdvanced && (
             <div style={tunnelBox}>
+              <label style={lbl}>{t('add.bindHost')}</label>
+              <select style={inp} value={host} onChange={(e) => setHost(e.target.value)}>
+                <option value="127.0.0.1">{t('add.bindLoopback')}</option>
+                <option value="0.0.0.0">{t('add.bindAll')}</option>
+              </select>
+
+              <label style={lbl}>{t('add.baseUrl')} <span style={{ color: '#6c7086', fontSize: 11 }}> ({t('common.optional')})</span></label>
+              <input style={inp} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="wss://example.com" />
+
               <p style={tunnelNote}>
-                可选。通常在「扫码配对」配置共享 channel 即可让所有 agent 外网可达，无需在此填写。
-                仅当该 agent 需要独立的 channel 时才配置；三项须同时填写，留空则跳过。
+                {t('add.tunnelHint')}
               </p>
-              <label style={lbl}>Server URL</label>
+              <label style={lbl}>{t('add.serverUrl')}</label>
               <input
                 style={inp}
                 value={tunnelServer}
                 onChange={(e) => setTunnelServer(e.target.value)}
                 placeholder={hubMeta?.lastTunnelServerUrl ?? 'https://channel.example.com'}
               />
-              <label style={lbl}>Channel ID</label>
+              <label style={lbl}>{t('add.channelId')}</label>
               <input
                 style={inp}
                 value={tunnelChannelId}
@@ -349,24 +386,24 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                 placeholder="ch_abc123"
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <label style={lbl}>Secret</label>
+                <label style={lbl}>{t('add.secret')}</label>
                 {hubMeta?.lastTunnelSecretHint && (
                   <button
                     type="button"
                     style={hintToggleBtn}
                     onClick={() => setTunnelSecret((v) => v ? '' : '__use_cache__')}
-                    title="Click to toggle cached secret"
+                    title={t('add.secretToggleTitle')}
                   >
                     {tunnelSecret === '__use_cache__'
-                      ? `Using: ${hubMeta.lastTunnelSecretHint}`
-                      : `Cached: ${hubMeta.lastTunnelSecretHint}`}
+                      ? t('add.secretUsing', { hint: hubMeta.lastTunnelSecretHint })
+                      : t('add.secretCached', { hint: hubMeta.lastTunnelSecretHint })}
                   </button>
                 )}
               </div>
               {tunnelSecret === '__use_cache__' ? (
                 <div style={cachedValueDisplay}>
                   <span style={{ color: '#a6e3a1', fontSize: 13 }}>{hubMeta?.lastTunnelSecretHint}</span>
-                  <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>(cached — click above to change)</span>
+                  <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>{t('add.secretCachedHint')}</span>
                 </div>
               ) : (
                 <input
@@ -374,7 +411,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                   type="password"
                   value={tunnelSecret}
                   onChange={(e) => setTunnelSecret(e.target.value)}
-                  placeholder={hubMeta?.lastTunnelSecretHint ? 'Enter new secret to override cached' : 'HMAC-SHA256 signing secret'}
+                  placeholder={hubMeta?.lastTunnelSecretHint ? t('add.secretPlaceholderOverride') : t('add.secretPlaceholder')}
                 />
               )}
             </div>
@@ -384,9 +421,9 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
 
           <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
             <button type="submit" style={submitBtn} disabled={loading || selectedUnavailable || !engine}>
-              {loading ? 'Creating...' : 'Create Instance'}
+              {loading ? t('add.submitting') : t('add.submit')}
             </button>
-            <button type="button" style={cancelBtn} onClick={onClose}>Cancel</button>
+            <button type="button" style={cancelBtn} onClick={onClose}>{t('common.cancel')}</button>
           </div>
         </form>
       </div>
@@ -396,6 +433,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           initialPath={cwd}
           onSelect={(path) => {
             setCwd(path);
+            setLabel((prev) => (prev && prev !== basename(cwd) ? prev : basename(path)));
             setShowDirPicker(false);
           }}
           onClose={() => setShowDirPicker(false)}

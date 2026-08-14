@@ -54,8 +54,26 @@ npm install -g shepaw-agent-hub
 脚本选项：`--proxy-only` / `--all` / `--skip-doctor`。装完后建议：
 
 ```bash
-shepaw-hub quickstart
-# 或逐步：shepaw-hub init && shepaw-hub doctor
+shepaw-hub web
+# 浏览器打开后添加实例；Peer 会随仪表盘自动启动
+```
+
+已安装的 Hub **不会被远程改写**。升到带 `update` 命令的版本之后，可用：
+
+```bash
+shepaw-hub update          # 检查并安装 npm 上的最新版
+shepaw-hub update --check  # 只检查，不安装
+shepaw-hub update --yes    # 跳过确认
+```
+
+`shepaw-hub doctor` 和 `shepaw-hub web` 启动时会查询 npm；若有新版本会提示。若希望仪表盘启动时自动安装，设置 `SHEPAW_HUB_AUTO_UPDATE=1`（仅对 `npm install -g` 安装生效，装完后需重启 `web`）。
+
+当前机器上若还是旧 CLI（没有 `update` 子命令），请先手动执行一次：
+
+```bash
+npm install -g shepaw-agent-hub@latest
+# 或重新跑安装脚本
+curl -fsSL https://raw.githubusercontent.com/shepaw/agent-bridge/main/scripts/install.sh | bash
 ```
 
 需要从源码构建（如定制或锁定提交）时：
@@ -135,19 +153,25 @@ Token 后即可使用（Token 保存在浏览器 localStorage，不会出现在 
 
 未设置 `SHEPAW_HUB_TOKEN` 时，`--host 0.0.0.0` 会被拒绝启动。
 
-浏览器访问 `http://<主机>:4000`，通过 **Add Instance** 创建并启动实例。
+`shepaw-hub web` **会自动启动 Peer 服务**（以及已配置的共享 Channel 隧道路由器）。
+浏览器访问 `http://<主机>:4000`，通过 **添加实例**（引擎 + 工作目录）创建并启动即可。
+第一个实例创建成功后会进入 **扫码配对**。
 
-> **说明**：添加实例时无需填写 per-instance channel。共享 Channel 在 **设置 → Peer 配对** 中统一配置。高级 tunnel 三项（Server URL、Channel ID、Secret）须**同时填写或全部留空**，否则会阻止提交。
+> **说明**：添加实例时无需填写 per-instance channel。共享 Channel 在 **扫码配对** 中统一配置。高级 tunnel 三项须**同时填写或全部留空**。
+
+若只要仪表盘、不拉起 Peer：`shepaw-hub web --no-peer`。
 
 ---
 
 ## 五、启动后台服务
 
-### 1. Peer 服务（推荐：手机 Device Pairing 扫码）
+### 1. Peer 服务（手机 Device Pairing 扫码）
+
+`shepaw-hub web` 会自动启动 Peer。一般不必再单独执行：
 
 ```bash
-shepaw-hub peer-start
-shepaw-hub peer-pair          # 终端输出 shepaw://peer 二维码
+shepaw-hub peer-start      # 仅在 --no-peer 或 Peer 已停止时需要
+shepaw-hub peer-pair       # 终端输出 shepaw://peer 二维码（仪表盘「扫码配对」同样可生成）
 ```
 
 - 手机与 Hub **同一局域网**时，扫二维码即可配对。
@@ -157,7 +181,7 @@ shepaw-hub peer-pair          # 终端输出 shepaw://peer 二维码
 
 ### 2. 共享 Channel + 隧道路由器（外网访问，可选）
 
-**Web**：**设置 → Peer 配对** → 填写 Channel → 启动隧道路由器。
+**Web**：**扫码配对** → 填写 Channel（保存后自动启动隧道路由器）。
 
 **CLI**：
 
@@ -167,12 +191,15 @@ shepaw-hub gateway-set-channel \
   --channel-id ch_xxx \
   --secret <hmac-secret>
 
+# `shepaw-hub web` 会自动启动路由器；仅 CLI 场景才需要：
 shepaw-hub gateway-start
 ```
 
 重新执行 `shepaw-hub peer-pair`（或仪表盘生成配对码），二维码将同时包含局域网入口（`local=`）与 Channel 远程入口（`channel=`）。
 
 ### 3. Web 仪表盘（管理界面）
+
+`shepaw-hub web` 会同时拉起 Peer；若已配置共享 Channel，也会拉起隧道路由器。
 
 ```bash
 # 本机（推荐）
@@ -185,12 +212,13 @@ shepaw-hub web --host 0.0.0.0 --port 4000 --no-open
 ```
 
 未设置 token 时，非 loopback 绑定会被拒绝。公网暴露时仍建议前置 HTTPS 反向代理。
+不自动启动 Peer / 路由器：`--no-peer` / `--no-gateway`。
 
 ---
 
 ## 六、手机配对与使用
 
-1. 确保 Peer 服务已启动，且至少有一个实例处于 **running / online**。
+1. 打开仪表盘（`shepaw-hub web` 已自动启动 Peer），并至少有一个实例处于 **running / online**。
 2. 打开 Shepaw App → **Device Pairing / Scan to Connect**。
 3. 扫描 Hub 生成的 `shepaw://peer` 二维码。
 4. 配对成功后，可通过 Peer 通道访问本机**全部已授权实例**。
@@ -231,13 +259,19 @@ shepaw-hub logs <instance-id> -f
 ### 最小可用（同一 WiFi）
 
 ```text
-npm install && npm run build
+npm install -g shepaw-agent-hub
+shepaw-hub web
+# 浏览器：添加实例（引擎 + 工作目录）→ 扫码配对
+```
+
+等价的逐步 CLI（调试或脚本）：
+
+```text
 shepaw-hub init
-shepaw-hub instance add demo --engine claude-code --cwd ~/project
-shepaw-hub instance start demo
-shepaw-hub peer-start
-shepaw-hub web --no-open
-# 生成 peer 配对码 → App Device Pairing 扫码
+shepaw-hub instance add --engine claude-code --cwd ~/project
+shepaw-hub start <id>
+shepaw-hub web --no-open          # 同时拉起 Peer
+# 仪表盘「扫码配对」或：shepaw-hub peer-pair
 ```
 
 ### 外网可用
@@ -245,9 +279,9 @@ shepaw-hub web --no-open
 在最小路径基础上增加：
 
 ```text
-配置 Channel（UI：设置 → Peer 配对，或 gateway-set-channel）
-shepaw-hub gateway-start
-shepaw-hub peer-start
+配置 Channel（UI：扫码配对，或 gateway-set-channel）
+# shepaw-hub web 会在 Channel 已配置时自动启动隧道路由器
+# 若 web 已在运行：保存 Channel 后会自动启动；或 shepaw-hub gateway-start
 重新生成 peer 配对码
 ```
 

@@ -1,4 +1,6 @@
 import type { LiveSession } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
+import type { MessageKey } from '../i18n/en.js';
 
 interface SessionListProps {
   sessions: LiveSession[];
@@ -8,16 +10,16 @@ interface SessionListProps {
   onSelect: (sessionId: string) => void;
 }
 
-function formatRelativeTime(iso?: string): string {
+function formatRelativeTime(iso: string | undefined, t: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
   if (iso === undefined || iso.length === 0) return '—';
   const ts = Date.parse(iso);
   if (Number.isNaN(ts)) return iso;
 
   const diffSec = Math.round((Date.now() - ts) / 1000);
-  if (diffSec < 60) return 'just now';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86_400) return `${Math.floor(diffSec / 3600)}h ago`;
-  if (diffSec < 604_800) return `${Math.floor(diffSec / 86_400)}d ago`;
+  if (diffSec < 60) return t('sessions.justNow');
+  if (diffSec < 3600) return t('sessions.minutesAgo', { n: Math.floor(diffSec / 60) });
+  if (diffSec < 86_400) return t('sessions.hoursAgo', { n: Math.floor(diffSec / 3600) });
+  if (diffSec < 604_800) return t('sessions.daysAgo', { n: Math.floor(diffSec / 86_400) });
   return new Date(ts).toLocaleDateString();
 }
 
@@ -34,8 +36,10 @@ export function SessionList({
   error,
   onSelect,
 }: SessionListProps) {
+  const { t } = useI18n();
+
   if (loading && sessions.length === 0) {
-    return <p style={hint}>Loading sessions…</p>;
+    return <p style={hint}>{t('sessions.loading')}</p>;
   }
 
   if (error) {
@@ -49,7 +53,7 @@ export function SessionList({
   if (sessions.length === 0) {
     return (
       <p style={hint}>
-        No sessions yet. Start a chat from the Shepaw app and they will appear here.
+        {t('sessions.none')}
       </p>
     );
   }
@@ -70,7 +74,7 @@ export function SessionList({
             onClick={() => onSelect(session.session_id)}
           >
             <span style={title}>{sessionLabel(session)}</span>
-            <span style={meta}>{formatRelativeTime(session.updated_at)}</span>
+            <span style={meta}>{formatRelativeTime(session.updated_at, t)}</span>
             <code style={idCode}>{session.session_id}</code>
           </button>
         );

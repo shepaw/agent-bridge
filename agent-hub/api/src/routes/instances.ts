@@ -3,7 +3,7 @@
  *
  * GET    /api/instances               — list all instances with live status
  * GET    /api/instances/meta          — hub metadata: lastTunnelServerUrl + credential hints
- * POST   /api/instances               — register a new instance
+ * POST   /api/instances               — register a new instance (starts by default)
  * GET    /api/instances/:id           — get one instance + state
  * DELETE /api/instances/:id           — unregister (stops first if running)
  * PATCH  /api/instances/:id           — update label/host/cwd/baseUrl/extraArgs
@@ -73,6 +73,7 @@ import {
   stopInstance,
   updateHubMeta,
   updateInstance,
+  tryAuthorizePeerServiceOnInstance,
   type AgentEngine,
   type CredentialHint,
   type HubCredentialCache,
@@ -342,6 +343,7 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
 
     addInstance(cfg, instance);
     ensureInstanceDir(id);
+    tryAuthorizePeerServiceOnInstance(id);
     // Mapping is also done inside addInstance; re-ensure so create response is consistent
     // even if the first attempt warned.
     try {
@@ -372,7 +374,20 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
       updateHubMeta(savedCfg, meta);
     }
 
-    res.status(201).json(await enrichInstance(saved));
+    // Dashboard create = register + start. Pass { start: false } to register only.
+    const shouldStart = req.body.start !== false;
+    let startError: string | undefined;
+    if (shouldStart) {
+      try {
+        await startInstance(saved);
+      } catch (err) {
+        startError = err instanceof Error ? err.message : String(err);
+        console.warn(`[shepaw-hub] instance "${id}" created but failed to start: ${startError}`);
+      }
+    }
+
+    const body = await enrichInstance(saved);
+    res.status(201).json(startError !== undefined ? { ...body, startError } : body);
   } catch (err) {
     if (err instanceof InstanceExistsError) {
       res.status(409).json({ error: err.message });
@@ -522,6 +537,7 @@ instancesRouter.post('/:id/start', async (req: Request, res: Response) => {
     const cfg = loadOrCreateHubConfig();
     const p = getInstance(cfg, req.params.id!);
     ensureInstanceDir(p.id);
+    tryAuthorizePeerServiceOnInstance(p.id);
     const result = await startInstance(p);
     res.json({ pid: result.pid, alreadyRunning: result.alreadyRunning });
   } catch (err) {

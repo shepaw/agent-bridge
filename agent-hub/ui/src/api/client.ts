@@ -1,6 +1,8 @@
+import { t } from '../i18n/index.js';
 import type {
   CreateCustomEngineInput,
   CreateInstanceInput,
+  CreateInstanceResult,
   EnrollToken,
   EngineInfo,
   EngineInstallResponse,
@@ -79,7 +81,7 @@ export async function verifyHubAuthToken(
   });
   if (res.ok) return { ok: true };
   const body = (await res.json().catch(() => ({}))) as { error?: string };
-  return { ok: false, error: body.error ?? `校验失败（HTTP ${res.status}）` };
+  return { ok: false, error: body.error ?? t('auth.verifyFailed', { status: res.status }) };
 }
 
 /**
@@ -127,7 +129,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     if (res.status === 413) {
-      throw new Error('文件太大，上传失败（单文件上限约 5MB）');
+      throw new Error(t('store.uploadFail'));
     }
     const msg =
       (body && typeof body === 'object' && 'error' in body && body.error)
@@ -149,7 +151,7 @@ export const api = {
     /** Get hub-level metadata: lastTunnelServerUrl and credential hints. */
     meta: (): Promise<HubMeta> => request('/instances/meta'),
 
-    create: (input: CreateInstanceInput): Promise<Instance> =>
+    create: (input: CreateInstanceInput): Promise<CreateInstanceResult> =>
       request('/instances', { method: 'POST', body: JSON.stringify(input) }),
 
     update: (id: string, patch: UpdateInstanceInput): Promise<Instance> =>

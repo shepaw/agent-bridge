@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import type { PeerAttachment } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface AttachmentsPanelProps {
   instanceId: string;
@@ -13,6 +14,7 @@ function formatBytes(size: number): string {
 }
 
 export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
+  const { t } = useI18n();
   const [attachments, setAttachments] = useState<PeerAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -40,7 +42,7 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
   }, [load]);
 
   const removeOne = async (name: string) => {
-    if (!confirm(`删除附件「${name}」？`)) return;
+    if (!confirm(t('attach.deleteOne', { name }))) return;
     setBusyName(name);
     setError(null);
     try {
@@ -55,7 +57,7 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
 
   const clearAll = async () => {
     if (attachments.length === 0) return;
-    if (!confirm(`清空全部 ${attachments.length} 个附件？此操作不可恢复。`)) return;
+    if (!confirm(t('attach.clearConfirm', { count: attachments.length }))) return;
     setClearing(true);
     setError(null);
     try {
@@ -75,8 +77,8 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
       <div style={toolbar}>
         <span style={{ color: '#a6adc8', fontSize: 12 }}>
           {loading
-            ? '加载中…'
-            : `${attachments.length} 个附件 · ${formatBytes(totalBytes)}`}
+            ? t('common.loading')
+            : t('attach.count', { count: attachments.length, size: formatBytes(totalBytes) })}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
@@ -88,7 +90,7 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
             disabled={attachments.length === 0 || clearing || loading}
             onClick={() => void clearAll()}
           >
-            {clearing ? '清空中…' : '清空全部'}
+            {clearing ? t('attach.clearing') : t('attach.clearAll')}
           </button>
           <button
             type="button"
@@ -99,7 +101,7 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
             disabled={loading || refreshing}
             onClick={() => void load('manual')}
           >
-            刷新
+            {t('common.refresh')}
           </button>
         </div>
       </div>
@@ -107,17 +109,17 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
       {error && <p style={errorText}>{error}</p>}
 
       {loading ? (
-        <p style={hint}>正在读取 peer-attachments…</p>
+        <p style={hint}>{t('attach.loadingDir')}</p>
       ) : attachments.length === 0 ? (
         <p style={hint}>
-          暂无附件。手机端经 Peer 推送的文件会保存在本实例的 <code style={code}>peer-attachments/</code> 目录。
+          {t('attach.empty')}
         </p>
       ) : (
         <div style={table}>
           <div style={headerRow}>
-            <span style={th}>文件名</span>
-            <span style={th}>大小</span>
-            <span style={th}>更新时间</span>
+            <span style={th}>{t('attach.colName')}</span>
+            <span style={th}>{t('attach.colSize')}</span>
+            <span style={th}>{t('attach.colMtime')}</span>
             <span style={th} />
           </div>
           {attachments.map((item) => (
@@ -138,7 +140,7 @@ export function AttachmentsPanel({ instanceId }: AttachmentsPanelProps) {
                 disabled={busyName === item.name || clearing}
                 onClick={() => void removeOne(item.name)}
               >
-                {busyName === item.name ? '…' : '删除'}
+                {busyName === item.name ? t('common.ellipsis') : t('common.delete')}
               </button>
             </div>
           ))}
@@ -188,14 +190,6 @@ const hint: React.CSSProperties = {
   fontSize: 14,
   margin: 0,
   lineHeight: 1.5,
-};
-
-const code: React.CSSProperties = {
-  background: '#313244',
-  padding: '1px 6px',
-  borderRadius: 4,
-  fontSize: 12,
-  color: '#cba6f7',
 };
 
 const table: React.CSSProperties = {

@@ -1,3 +1,5 @@
+import { useI18n } from '../i18n/index.js';
+
 interface SessionModeOption {
   id: string;
   name: string;
@@ -15,10 +17,11 @@ export function SessionModeSelect({
   onChange: (id: string) => void;
   disabled?: boolean;
 }) {
+  const { t } = useI18n();
   if (modes.length === 0) {
     return (
       <p style={{ color: '#6c7086', fontSize: 12, margin: 0 }}>
-        该引擎没有可配置的会话模式，沿用 agent 默认权限行为。工具确认仍会转到 App。
+        {t('sessionMode.empty')}
       </p>
     );
   }

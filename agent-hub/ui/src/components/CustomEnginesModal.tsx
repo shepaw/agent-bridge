@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import type { EngineInfo } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface CustomEnginesModalProps {
   onClose: () => void;
 }
 
 export function CustomEnginesModal({ onClose }: CustomEnginesModalProps) {
+  const { t } = useI18n();
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -73,43 +75,42 @@ export function CustomEnginesModal({ onClose }: CustomEnginesModalProps) {
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Custom ACP Engines</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('engine.customTitle')}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
         <div style={body}>
           <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 12px' }}>
-            Register locally installed ACP CLIs that are not in the built-in list.
-            Each entry needs an engine id, display name, and the command used to spawn the upstream agent.
+            {t('engine.customHint')}
           </p>
 
           <form onSubmit={(e) => void submit(e)} style={form}>
-            <label style={lbl}>Engine ID <span style={req}>*</span></label>
-            <input style={inp} value={id} onChange={(e) => setId(e.target.value)} placeholder="my-local-agent" required />
+            <label style={lbl}>{t('engine.engineId')} <span style={req}>*</span></label>
+            <input style={inp} value={id} onChange={(e) => setId(e.target.value)} placeholder={t('engine.idPlaceholderShort')} required />
 
-            <label style={lbl}>Display Name</label>
-            <input style={inp} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="My Local Agent" />
+            <label style={lbl}>{t('engine.displayName')}</label>
+            <input style={inp} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={t('engine.namePlaceholderShort')} />
 
-            <label style={lbl}>ACP Command <span style={req}>*</span></label>
+            <label style={lbl}>{t('engine.acpCommand')} <span style={req}>*</span></label>
             <input
               style={inp}
               value={acpCommand}
               onChange={(e) => setAcpCommand(e.target.value)}
-              placeholder='npx -y my-agent-acp@latest'
+              placeholder={t('engine.cmdPlaceholderShort')}
               required
             />
 
             <button type="submit" style={submitBtn} disabled={saving}>
-              {saving ? 'Adding...' : 'Add Engine'}
+              {saving ? t('common.adding') : t('engine.addEngine')}
             </button>
           </form>
 
           {err && <p style={{ color: '#f38ba8', margin: '12px 0 0' }}>{err}</p>}
 
-          <h4 style={sectionTitle}>Registered Custom Engines</h4>
-          {loading && <p style={{ color: '#a6adc8', fontSize: 13 }}>Loading...</p>}
+          <h4 style={sectionTitle}>{t('engine.registered')}</h4>
+          {loading && <p style={{ color: '#a6adc8', fontSize: 13 }}>{t('common.loading')}</p>}
           {!loading && custom.length === 0 && (
-            <p style={{ color: '#a6adc8', fontSize: 13 }}>No custom engines yet.</p>
+            <p style={{ color: '#a6adc8', fontSize: 13 }}>{t('engine.noneCustom')}</p>
           )}
           {custom.map((e) => (
             <div key={e.id} style={row}>
@@ -123,7 +124,7 @@ export function CustomEnginesModal({ onClose }: CustomEnginesModalProps) {
                 disabled={deleting === e.id}
                 onClick={() => void remove(e.id)}
               >
-                {deleting === e.id ? '…' : 'Remove'}
+                {deleting === e.id ? t('common.ellipsis') : t('common.remove')}
               </button>
             </div>
           ))}

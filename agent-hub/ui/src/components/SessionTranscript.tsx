@@ -1,4 +1,5 @@
 import type { SessionHistoryMessage } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface SessionTranscriptProps {
   sessionId: string | null;
@@ -13,10 +14,12 @@ export function SessionTranscript({
   loading,
   error,
 }: SessionTranscriptProps) {
+  const { t } = useI18n();
+
   if (sessionId === null) {
     return (
       <div style={placeholder}>
-        <p style={hint}>Select a session to view its conversation.</p>
+        <p style={hint}>{t('sessions.selectPrompt')}</p>
       </div>
     );
   }
@@ -24,7 +27,7 @@ export function SessionTranscript({
   if (loading) {
     return (
       <div style={placeholder}>
-        <p style={hint}>Loading history… This may take up to 40 seconds.</p>
+        <p style={hint}>{t('sessions.loadingHistory')}</p>
       </div>
     );
   }
@@ -41,7 +44,7 @@ export function SessionTranscript({
     return (
       <div style={placeholder}>
         <p style={hint}>
-          No history for this session. Some engines do not support transcript replay.
+          {t('sessions.noHistory')}
         </p>
       </div>
     );
@@ -67,7 +70,7 @@ export function SessionTranscript({
                 borderTopLeftRadius: isUser ? 12 : 4,
               }}
             >
-              <span style={roleLabel}>{isUser ? 'You' : 'Agent'}</span>
+              <span style={roleLabel}>{isUser ? t('sessions.you') : t('sessions.agent')}</span>
               <p style={content}>{message.content}</p>
             </div>
           </div>

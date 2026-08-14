@@ -28,6 +28,7 @@ import {
   resolveEngineAvailability,
   resolvePublicHost,
   startInstance,
+  tryAuthorizePeerServiceOnInstance,
   type HubConfig,
 } from '@shepaw/agent-hub-core';
 
@@ -199,6 +200,7 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
       createdAt: new Date().toISOString(),
     });
     ensureInstanceDir(id);
+    tryAuthorizePeerServiceOnInstance(id);
     const registered = loadOrCreateHubConfig().instances.find((p) => p.id === id);
     if (registered === undefined) {
       throw new Error(`Internal error: instance "${id}" missing after registration.`);

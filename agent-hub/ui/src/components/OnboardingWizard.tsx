@@ -1,8 +1,9 @@
 /**
- * First-run onboarding wizard for zero-instance dashboards.
+ * First-run wizard (engine → cwd → start → per-instance enroll QR).
  *
- * Steps: pick engine → working directory → create+start → pairing QR.
- * Defaults favor same-Wi-Fi pairing (bind host 0.0.0.0).
+ * The dashboard first-run path is now Add Instance + 扫码配对 (Peer is
+ * started by `shepaw-hub web`). This wizard remains for the explicit
+ * per-instance enroll flow if it is re-enabled.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -10,6 +11,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { EngineInfo, EnrollToken, Instance } from '../api/types.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
+import { useI18n } from '../i18n/index.js';
 
 type Step = 'engine' | 'cwd' | 'launch' | 'pair';
 
@@ -29,6 +31,7 @@ export function OnboardingWizard({
   onFinished,
   onOpenEngineSettings,
 }: OnboardingWizardProps) {
+  const { t } = useI18n();
   const [step, setStep] = useState<Step>('engine');
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [enginesLoading, setEnginesLoading] = useState(true);
@@ -84,11 +87,11 @@ export function OnboardingWizard({
   const goCwd = () => {
     setErr(null);
     if (!engine) {
-      setErr('请先选择一个引擎。');
+      setErr(t('add.errPickEngine'));
       return;
     }
     if (selectedUnavailable) {
-      setErr(selected?.unavailableReason ?? '所选引擎当前不可用，请先完成安装。');
+      setErr(selected?.unavailableReason ?? t('add.errEngineUnavailable'));
       return;
     }
     setStep('cwd');
@@ -98,28 +101,29 @@ export function OnboardingWizard({
     setErr(null);
     const trimmedCwd = cwd.trim();
     if (!trimmedCwd) {
-      setErr('请选择工作目录。');
+      setErr(t('add.errCwd'));
       return;
     }
     setStep('launch');
     setBusy(true);
-    setStatusLine('正在创建实例…');
+    setStatusLine(t('wizard.creatingInstance'));
     try {
       const instance = await api.instances.create({
         engine,
         cwd: trimmedCwd,
         label: label.trim() || basename(trimmedCwd),
         host: '0.0.0.0',
+        start: false,
       });
       setCreated(instance);
-      setStatusLine(`已创建 ${instance.id.slice(0, 8)}… · 正在启动网关…`);
+      setStatusLine(t('wizard.createdStarting', { id: instance.id.slice(0, 8) }));
       await api.instances.start(instance.id);
-      setStatusLine('网关已启动 · 正在生成配对二维码…');
-      const t = await api.enroll.mint(instance.id, {
+      setStatusLine(t('wizard.gatewayMinting'));
+      const enrollToken = await api.enroll.mint(instance.id, {
         ttlMinutes: 10,
         label: 'Dashboard onboarding',
       });
-      setToken(t);
+      setToken(enrollToken);
       setStep('pair');
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -139,9 +143,9 @@ export function OnboardingWizard({
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <div>
-            <h3 style={{ margin: 0, color: '#cdd6f4' }}>开始使用 Shepaw Hub</h3>
+            <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('wizard.title')}</h3>
             <p style={{ margin: '4px 0 0', color: '#a6adc8', fontSize: 13 }}>
-              三步把本机 Agent 接到手机：选引擎 → 选目录 → 扫码
+              {t('wizard.subtitle')}
             </p>
           </div>
           <button style={closeBtn} type="button" disabled={busy} onClick={onClose}>
@@ -150,7 +154,12 @@ export function OnboardingWizard({
         </div>
 
         <div style={stepsBar}>
-          {(['引擎', '目录', '启动', '配对'] as const).map((name, i) => (
+          {([
+            t('wizard.stepEngine'),
+            t('wizard.stepCwd'),
+            t('wizard.stepLaunch'),
+            t('wizard.stepPair'),
+          ] as const).map((name, i) => (
             <div
               key={name}
               style={{
@@ -168,16 +177,15 @@ export function OnboardingWizard({
           {step === 'engine' && (
             <>
               <p style={hint}>
-                Hub 会在本机拉起上游 ACP CLI（Claude Code / Cursor / Codex 等）。
-                API Key 与登录态由各引擎自己管理，不必填在这里。
+                {t('wizard.engineHint')}
               </p>
-              {enginesLoading && <p style={hint}>正在检测引擎…</p>}
+              {enginesLoading && <p style={hint}>{t('wizard.detectingEngines')}</p>}
               {!enginesLoading && engines.length === 0 && (
-                <p style={{ color: '#f38ba8' }}>未能加载引擎列表。请检查 Dashboard API 是否可达。</p>
+                <p style={{ color: '#f38ba8' }}>{t('wizard.loadEnginesFail')}</p>
               )}
               {!enginesLoading && !hasAvailable && engines.length > 0 && (
                 <div style={warnBox}>
-                  未检测到可用的引擎 CLI。可先到「设置 → 引擎」安装，或继续选择后稍后配置。
+                  {t('wizard.noEnginesWarn')}
                 </div>
               )}
               <div style={engineList} role="listbox" aria-label="Engine">
@@ -200,7 +208,7 @@ export function OnboardingWizard({
                       <span style={{ fontWeight: 600 }}>{e.displayName}</span>
                       <span style={{ color: '#6c7086', fontSize: 12 }}>{e.id}</span>
                       <span style={{ marginLeft: 'auto', fontSize: 12, color: unavailable ? '#f38ba8' : '#a6e3a1' }}>
-                        {unavailable ? (e.unavailableReason ?? '不可用') : '✓ 就绪'}
+                        {unavailable ? (e.unavailableReason ?? t('common.unavailable')) : t('wizard.ready')}
                       </span>
                     </button>
                   );
@@ -208,13 +216,13 @@ export function OnboardingWizard({
               </div>
               {selectedUnavailable && selected && (
                 <div style={warnBox}>
-                  {selected.unavailableReason ?? '引擎不可用'}
+                  {selected.unavailableReason ?? t('wizard.engineUnavailable')}
                   <button
                     type="button"
                     style={linkBtn}
                     onClick={() => onOpenEngineSettings(selected.id)}
                   >
-                    打开引擎设置
+                    {t('wizard.openEngineSettings')}
                   </button>
                 </div>
               )}
@@ -223,8 +231,8 @@ export function OnboardingWizard({
 
           {step === 'cwd' && (
             <>
-              <p style={hint}>选择 Agent 的工作目录（会作为上游 CLI 的 cwd）。</p>
-              <label style={lbl}>工作目录</label>
+              <p style={hint}>{t('wizard.cwdHint')}</p>
+              <label style={lbl}>{t('add.cwd')}</label>
               <div style={cwdRow}>
                 <input
                   style={{ ...inp, flex: 1 }}
@@ -236,26 +244,26 @@ export function OnboardingWizard({
                   placeholder="/path/to/project"
                 />
                 <button type="button" style={browseBtn} onClick={() => setShowDirPicker(true)}>
-                  浏览…
+                  {t('common.browse')}
                 </button>
               </div>
-              <label style={lbl}>显示名称（可选）</label>
+              <label style={lbl}>{t('wizard.displayNameOptional')}</label>
               <input
                 style={inp}
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                placeholder={basename(cwd) || 'My Agent'}
+                placeholder={basename(cwd) || t('add.labelPlaceholder')}
               />
               <p style={{ ...hint, marginTop: 8 }}>
-                网关将绑定 <code style={code}>0.0.0.0</code>（局域网可达），方便同 Wi-Fi 扫码配对。
+                {t('wizard.bindHint')}
               </p>
             </>
           )}
 
           {step === 'launch' && (
             <>
-              <p style={hint}>{statusLine || '准备中…'}</p>
-              {busy && <div style={spinnerRow}>请稍候</div>}
+              <p style={hint}>{statusLine || t('wizard.preparing')}</p>
+              {busy && <div style={spinnerRow}>{t('wizard.pleaseWait')}</div>}
               {err && (
                 <p style={{ color: '#f38ba8' }}>
                   {err}
@@ -267,8 +275,7 @@ export function OnboardingWizard({
           {step === 'pair' && token && (
             <>
               <p style={hint}>
-                在 Shepaw App 中打开「添加 Agent」，扫描下方二维码（或手动输入配对码）。
-                手机需与本机在同一 Wi-Fi。
+                {t('wizard.pairHint')}
               </p>
               {token.qrPayload && (
                 <div style={qrWrap}>
@@ -283,22 +290,27 @@ export function OnboardingWizard({
               )}
               <div style={tokenInfo}>
                 <p style={infoRow}>
-                  <span style={infoLabel}>配对码</span>
+                  <span style={infoLabel}>{t('detail.pairCode')}</span>
                   <code style={codeBox}>{token.display ?? token.code}</code>
                 </p>
                 <p style={infoRow}>
-                  <span style={infoLabel}>有效期至</span>
+                  <span style={infoLabel}>{t('wizard.expiresAt')}</span>
                   <span>{new Date(token.expiresAt).toLocaleString()}</span>
                 </p>
                 {token.pairUrl && (
                   <p style={infoRow}>
-                    <span style={infoLabel}>URL</span>
+                    <span style={infoLabel}>{t('enroll.url')}</span>
                     <code style={{ ...codeBox, fontSize: 11, wordBreak: 'break-all' }}>{token.pairUrl}</code>
                   </p>
                 )}
                 {created && (
                   <p style={{ ...hint, marginTop: 8 }}>
-                    实例 <code style={code}>{created.label}</code> · {created.engine} · {created.host}:{created.port}
+                    {t('wizard.instanceSummary', {
+                      label: created.label,
+                      engine: created.engine,
+                      host: created.host,
+                      port: created.port,
+                    })}
                   </p>
                 )}
               </div>
@@ -312,7 +324,7 @@ export function OnboardingWizard({
           {step === 'engine' && (
             <>
               <button type="button" style={cancelBtn} onClick={onClose}>
-                稍后
+                {t('wizard.later')}
               </button>
               <button
                 type="button"
@@ -320,33 +332,33 @@ export function OnboardingWizard({
                 disabled={!engine || enginesLoading}
                 onClick={goCwd}
               >
-                下一步
+                {t('wizard.next')}
               </button>
             </>
           )}
           {step === 'cwd' && (
             <>
               <button type="button" style={cancelBtn} onClick={() => setStep('engine')}>
-                上一步
+                {t('wizard.back')}
               </button>
               <button type="button" style={primaryBtn} disabled={busy} onClick={() => void launch()}>
-                创建并启动
+                {t('wizard.createAndStart')}
               </button>
             </>
           )}
           {step === 'launch' && err && !busy && (
             <>
               <button type="button" style={cancelBtn} onClick={() => setStep('cwd')}>
-                返回修改
+                {t('wizard.backEdit')}
               </button>
               <button type="button" style={primaryBtn} onClick={() => void launch()}>
-                重试
+                {t('common.retry')}
               </button>
             </>
           )}
           {step === 'pair' && (
             <button type="button" style={primaryBtn} onClick={finish}>
-              完成，查看实例
+              {t('wizard.finish')}
             </button>
           )}
         </div>
@@ -555,9 +567,4 @@ const codeBox: React.CSSProperties = {
   padding: '2px 8px',
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   fontSize: 13,
-};
-const code: React.CSSProperties = {
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  fontSize: 12,
-  color: '#cba6f7',
 };

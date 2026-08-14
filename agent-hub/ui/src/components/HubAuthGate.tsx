@@ -7,6 +7,8 @@ import {
   verifyHubAuthToken,
 } from '../api/client.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
+import { LanguageSwitcher } from './LanguageSwitcher.js';
+import { useI18n } from '../i18n/index.js';
 
 type GatePhase = 'checking' | 'blocked' | 'ready';
 
@@ -15,6 +17,7 @@ type GatePhase = 'checking' | 'blocked' | 'ready';
  * the server requires auth. Avoids bootstrapping secrets from URL query params.
  */
 export function HubAuthGate({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
   const [phase, setPhase] = useState<GatePhase>('checking');
   const [invalidExisting, setInvalidExisting] = useState(false);
 
@@ -54,7 +57,10 @@ export function HubAuthGate({ children }: { children: React.ReactNode }) {
   if (phase === 'checking') {
     return (
       <div style={splash}>
-        <p style={{ margin: 0, color: '#a6adc8', fontSize: 14 }}>正在连接 Hub…</p>
+        <div style={{ position: 'absolute', top: 20, right: 20 }}>
+          <LanguageSwitcher />
+        </div>
+        <p style={{ margin: 0, color: '#a6adc8', fontSize: 14 }}>{t('auth.connecting')}</p>
       </div>
     );
   }
@@ -62,6 +68,9 @@ export function HubAuthGate({ children }: { children: React.ReactNode }) {
   if (phase === 'blocked') {
     return (
       <div style={splash}>
+        <div style={{ position: 'absolute', top: 20, right: 20 }}>
+          <LanguageSwitcher />
+        </div>
         <div
           style={modal}
           role="dialog"
@@ -69,13 +78,11 @@ export function HubAuthGate({ children }: { children: React.ReactNode }) {
           aria-labelledby="hub-auth-gate-title"
         >
           <h2 id="hub-auth-gate-title" style={title}>
-            Dashboard 鉴权
+            {t('auth.gateTitle')}
           </h2>
           <p style={hint}>
-            服务端已启用 <code style={code}>SHEPAW_HUB_TOKEN</code>。
-            {invalidExisting
-              ? ' 本机保存的 Token 无效，请重新输入。'
-              : ' 请输入与启动 Hub 时相同的 Token 以继续。'}
+            {t('auth.gateEnabled')}
+            {invalidExisting ? t('auth.gateInvalid') : t('auth.gateEnter')}
           </p>
           <HubAuthTokenPanel
             onSaved={() => {
@@ -100,6 +107,7 @@ const splash: React.CSSProperties = {
   justifyContent: 'center',
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
   padding: 20,
+  position: 'relative',
 };
 
 const modal: React.CSSProperties = {
@@ -124,12 +132,4 @@ const hint: React.CSSProperties = {
   color: '#a6adc8',
   fontSize: 14,
   lineHeight: 1.55,
-};
-
-const code: React.CSSProperties = {
-  background: '#181825',
-  border: '1px solid #313244',
-  borderRadius: 4,
-  padding: '0 4px',
-  fontSize: 13,
 };

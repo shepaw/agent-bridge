@@ -1,20 +1,21 @@
 import type { InstanceStatus } from '../api/types.js';
+import { t } from '../i18n/index.js';
 
-const AVAILABILITY_LABELS: Record<InstanceStatus['availability'], string> = {
-  offline: '离线',
-  starting: '启动中',
-  online: '在线',
-  degraded: '异常',
+const AVAILABILITY_KEYS: Record<InstanceStatus['availability'], 'status.offline' | 'status.starting' | 'status.online' | 'status.degraded'> = {
+  offline: 'status.offline',
+  starting: 'status.starting',
+  online: 'status.online',
+  degraded: 'status.degraded',
 };
 
-const BUSY_LABELS: Record<NonNullable<InstanceStatus['busyLevel']>, string> = {
-  idle: '空闲',
-  busy: '繁忙',
-  overloaded: '高负载',
+const BUSY_KEYS: Record<NonNullable<InstanceStatus['busyLevel']>, 'status.idle' | 'status.busy' | 'status.overloaded'> = {
+  idle: 'status.idle',
+  busy: 'status.busy',
+  overloaded: 'status.overloaded',
 };
 
 export function availabilityLabel(status: InstanceStatus): string {
-  return AVAILABILITY_LABELS[status.availability];
+  return t(AVAILABILITY_KEYS[status.availability]);
 }
 
 export function availabilityColor(status: InstanceStatus): string {
@@ -32,9 +33,9 @@ export function availabilityColor(status: InstanceStatus): string {
 
 export function busyLabel(status: InstanceStatus): string | null {
   if (status.busyLevel === null) return null;
-  const label = BUSY_LABELS[status.busyLevel];
+  const label = t(BUSY_KEYS[status.busyLevel]);
   if (status.activeTasks !== null && status.activeTasks > 0) {
-    return `${label} · ${status.activeTasks} 任务`;
+    return t('status.tasks', { label, count: status.activeTasks });
   }
   return label;
 }
@@ -56,7 +57,7 @@ export function formatRuntimeSummary(status: InstanceStatus): string {
   const parts = [availabilityLabel(status)];
   const busy = busyLabel(status);
   if (busy !== null) parts.push(busy);
-  if (status.running && status.pid !== null) parts.push(`PID ${status.pid}`);
+  if (status.running && status.pid !== null) parts.push(t('status.pid', { pid: status.pid }));
   if (status.probeError) parts.push(status.probeError);
   return parts.join(' · ');
 }

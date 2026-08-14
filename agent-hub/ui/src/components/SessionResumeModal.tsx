@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import type { StoredSession } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface SessionResumeProps {
   instanceId: string;
@@ -8,6 +9,7 @@ interface SessionResumeProps {
 }
 
 export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) {
+  const { t } = useI18n();
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -42,7 +44,7 @@ export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) 
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setErr('Failed to copy to clipboard');
+      setErr(t('sessions.copyFail'));
     }
   };
 
@@ -64,31 +66,29 @@ export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) 
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>Resume Session — {instanceId}</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('sessions.resumeTitle', { id: instanceId })}</h3>
           <button style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
         <div style={body}>
           <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 12px' }}>
-            These are persisted Shepaw session IDs mapped to upstream ACP sessions.
-            In the Shepaw app, start a chat with the same session ID to continue
-            where you left off after a gateway restart.
+            {t('sessions.resumeHint')}
           </p>
 
-          {loading && <p style={{ color: '#a6adc8', fontSize: 13 }}>Loading sessions…</p>}
+          {loading && <p style={{ color: '#a6adc8', fontSize: 13 }}>{t('sessions.loading')}</p>}
           {err && <p style={{ color: '#f38ba8', margin: '8px 0' }}>{err}</p>}
 
           {!loading && sessions.length === 0 && !err && (
             <p style={{ color: '#a6adc8', fontSize: 13 }}>
-              No saved sessions yet. Mappings appear here after you chat from the Shepaw app.
+              {t('sessions.noSaved')}
             </p>
           )}
 
           {!loading && sessions.length > 0 && (
             <div style={table}>
               <div style={rowHeader}>
-                <span style={th}>SHEPAW SESSION</span>
-                <span style={th}>ACP SESSION</span>
+                <span style={th}>{t('sessions.shepawCol')}</span>
+                <span style={th}>{t('sessions.acpCol')}</span>
                 <span style={th} />
               </div>
               {sessions.map((s) => (
@@ -110,7 +110,7 @@ export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) 
                       void removeSession(s.shepawSessionId);
                     }}
                   >
-                    {deleting === s.shepawSessionId ? '…' : 'Remove'}
+                    {deleting === s.shepawSessionId ? t('common.ellipsis') : t('common.remove')}
                   </button>
                 </div>
               ))}
@@ -120,12 +120,12 @@ export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) 
           {selected !== undefined && (
             <div style={detailBox}>
               <p style={{ color: '#cdd6f4', fontSize: 13, margin: '0 0 8px' }}>
-                Use this session ID in the Shepaw app:
+                {t('sessions.useSessionId')}
               </p>
               <code style={highlightCode}>{selected.shepawSessionId}</code>
               <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
                 <button type="button" style={submitBtn} onClick={() => void copySessionId()}>
-                  {copied ? 'Copied!' : 'Copy Session ID'}
+                  {copied ? t('common.copied') : t('sessions.copyId')}
                 </button>
               </div>
             </div>
@@ -133,10 +133,10 @@ export function SessionResumeModal({ instanceId, onClose }: SessionResumeProps) 
 
           <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
             <button type="button" style={cancelBtn} onClick={() => void loadSessions()} disabled={loading}>
-              Refresh
+              {t('common.refresh')}
             </button>
             <button type="button" style={cancelBtn} onClick={onClose}>
-              Close
+              {t('common.close')}
             </button>
           </div>
         </div>

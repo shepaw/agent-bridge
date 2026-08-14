@@ -2,6 +2,7 @@ import { EngineManager } from './EngineManager.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
 import type { SettingsTab } from '../utils/settingsRoute.js';
+import { useI18n } from '../i18n/index.js';
 
 /**
  * Settings content panels (nav lives in App shell).
@@ -21,16 +22,14 @@ export function SettingsPage({
   onFocusEngineHandled: () => void;
   onAuthTokenSaved?: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <>
       {tab === 'global' && (
         <div style={panel}>
           <section style={card}>
-            <h3 style={cardTitle}>Dashboard 鉴权 Token</h3>
-            <p style={cardHint}>
-              当 Hub 以 <code style={inlineCode}>SHEPAW_HUB_TOKEN</code> 启动时，浏览器需保存同一 Token，
-              才能访问 Peer / Channel 等 API。Token 仅存于本机 localStorage。
-            </p>
+            <h3 style={cardTitle}>{t('settings.tokenTitle')}</h3>
+            <p style={cardHint}>{t('settings.tokenHint')}</p>
             <HubAuthTokenPanel onSaved={onAuthTokenSaved} />
           </section>
         </div>
@@ -38,8 +37,8 @@ export function SettingsPage({
 
       {tab === 'engines' && (
         <section style={card}>
-          <h3 style={cardTitle}>引擎管理</h3>
-          <p style={cardHint}>管理内置与自定义引擎，配置每个引擎的默认环境变量。</p>
+          <h3 style={cardTitle}>{t('settings.enginesTitle')}</h3>
+          <p style={cardHint}>{t('settings.enginesHint')}</p>
           <EngineManager
             focusEngineId={focusEngineId}
             onFocusEngineHandled={onFocusEngineHandled}
@@ -49,11 +48,8 @@ export function SettingsPage({
 
       {tab === 'peer' && (
         <section style={card}>
-          <h3 style={cardTitle}>扫码配对</h3>
-          <p style={cardHint}>
-            先启动 Peer 服务，再用 Shepaw App「Device Pairing / Scan to Connect」扫码。
-            配对后手机可通过 peer 通道访问本机全部实例。
-          </p>
+          <h3 style={cardTitle}>{t('settings.peerTitle')}</h3>
+          <p style={cardHint}>{t('settings.peerHint')}</p>
           <PeerPairingPanel />
         </section>
       )}
@@ -67,6 +63,3 @@ const card: React.CSSProperties = {
 };
 const cardTitle: React.CSSProperties = { margin: '0 0 4px', color: '#cdd6f4', fontSize: 16 };
 const cardHint: React.CSSProperties = { margin: '0 0 16px', color: '#a6adc8', fontSize: 13 };
-const inlineCode: React.CSSProperties = {
-  background: '#181825', border: '1px solid #313244', borderRadius: 4, padding: '0 4px',
-};

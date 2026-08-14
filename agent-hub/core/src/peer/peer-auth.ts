@@ -31,6 +31,22 @@ export function authorizePeerServiceOnInstance(
   addPeer(instancePaths(instance.id).peersPath, pubB64, PEER_SERVICE_PEER_LABEL);
 }
 
+/**
+ * Same as `authorizePeerServiceOnInstance`, but never fails the caller.
+ * New instances added while Peer is already running still need this or
+ * proxied chats fail with 4405.
+ */
+export function tryAuthorizePeerServiceOnInstance(instanceId: string): void {
+  try {
+    authorizePeerServiceOnInstance(instanceId);
+  } catch (err) {
+    console.warn(
+      `[shepaw-hub] Warning: could not authorize peer service on instance "${instanceId}": ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+}
+
 /** Idempotently authorize the peer service on every registered instance. */
 export function authorizePeerServiceOnAllInstances(
   cfg: HubConfig = loadOrCreateHubConfig(),

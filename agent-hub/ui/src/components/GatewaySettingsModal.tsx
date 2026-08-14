@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import type { GatewayInfo } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 /**
  * Shared Channel Service tunnel + tunnel router controls. Used on the Peer
  * pairing tab so remote phones can reach `/peer/ws` via the channel.
  */
 export function ChannelSettingsPanel() {
+  const { t } = useI18n();
   const [info, setInfo] = useState<GatewayInfo | null>(null);
   const [serverUrl, setServerUrl] = useState('');
   const [channelId, setChannelId] = useState('');
@@ -36,7 +38,7 @@ export function ChannelSettingsPanel() {
     setBusy(true); setErr(null); setNotice(null);
     try {
       if (!serverUrl.trim() || !channelId.trim() || !secret.trim()) {
-        throw new Error('Server URL、Channel ID、Secret 均为必填。');
+        throw new Error(t('gateway.required'));
       }
       await api.gateway.setChannel({
         serverUrl: serverUrl.trim(),
@@ -45,7 +47,21 @@ export function ChannelSettingsPanel() {
         routerPort: routerPort.trim() ? Number(routerPort) : undefined,
       });
       setSecret('');
-      setNotice('已保存。若路由器正在运行，请重启以生效。');
+      const wasRunning = info?.status.running === true;
+      if (!wasRunning) {
+        try {
+          await api.gateway.start();
+          setNotice(t('gateway.savedStarted'));
+        } catch (startErr) {
+          setNotice(
+            t('gateway.savedStartFail', {
+              error: startErr instanceof Error ? startErr.message : String(startErr),
+            }),
+          );
+        }
+      } else {
+        setNotice(t('gateway.savedRestart'));
+      }
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -59,7 +75,7 @@ export function ChannelSettingsPanel() {
     try {
       await api.gateway.clearChannel();
       setSecret('');
-      setNotice('已移除共享 channel（仅局域网可用）。');
+      setNotice(t('gateway.removed'));
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -100,40 +116,41 @@ export function ChannelSettingsPanel() {
         <div>
           <span style={statusDot(running)} />
           <strong style={{ color: '#cdd6f4' }}>
-            隧道路由器：{running ? `运行中 (pid ${info?.status.pid})` : '已停止'}
+            {running
+              ? t('gateway.routerRunning', { pid: info?.status.pid ?? '' })
+              : t('gateway.routerStopped')}
           </strong>
           {info && (
             <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>
-              端口 {info.status.routerPort}
+              {t('peer.port', { port: info.status.routerPort })}
             </span>
           )}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {running ? (
-            <button style={dangerBtn} disabled={busy} onClick={() => void stopRouter()}>停止</button>
+            <button style={dangerBtn} disabled={busy} onClick={() => void stopRouter()}>{t('common.stop')}</button>
           ) : (
-            <button style={primaryBtn} disabled={busy} onClick={() => void startRouter()}>启动</button>
+            <button style={primaryBtn} disabled={busy} onClick={() => void startRouter()}>{t('common.start')}</button>
           )}
         </div>
       </div>
 
       <p style={channelHint}>
-        配置 Channel 后，配对二维码会附带远程入口（<code style={code}>channel=</code>），手机不在同一局域网也可连接。
-        远程访问前需启动隧道路由器，并确保 Peer 服务已运行。
+        {t('gateway.hint')}
       </p>
 
-      <label style={labelStyle}>Channel Service URL</label>
+      <label style={labelStyle}>{t('gateway.channelServiceUrl')}</label>
       <input style={input} value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://channel.example.com" />
-      <label style={labelStyle}>Channel ID</label>
+      <label style={labelStyle}>{t('gateway.channelId')}</label>
       <input style={input} value={channelId} onChange={(e) => setChannelId(e.target.value)} placeholder="ch_abc123" />
-      <label style={labelStyle}>Secret{info?.channel?.secretSet ? '（已设置，留空则保留原值）' : ''}</label>
-      <input style={input} type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={info?.channel?.secretSet ? '••••••••' : 'HMAC-SHA256 secret'} />
-      <label style={labelStyle}>本地分发端口</label>
+      <label style={labelStyle}>{t('gateway.secret')}{info?.channel?.secretSet ? t('gateway.secretSet') : ''}</label>
+      <input style={input} type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={info?.channel?.secretSet ? '••••••••' : t('gateway.secretPlaceholder')} />
+      <label style={labelStyle}>{t('gateway.localPort')}</label>
       <input style={input} value={routerPort} onChange={(e) => setRouterPort(e.target.value)} placeholder="18789" />
       <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <button style={primaryBtn} disabled={busy} onClick={() => void saveChannel()}>保存 Channel</button>
+        <button style={primaryBtn} disabled={busy} onClick={() => void saveChannel()}>{t('gateway.save')}</button>
         {info?.channel && (
-          <button style={secondaryBtn} disabled={busy} onClick={() => void clearChannel()}>移除 Channel</button>
+          <button style={secondaryBtn} disabled={busy} onClick={() => void clearChannel()}>{t('gateway.remove')}</button>
         )}
       </div>
 
@@ -150,14 +167,15 @@ export function GatewaySettingsPanel() {
 
 /** Modal wrapper retained for any legacy callers. */
 export function GatewaySettingsModal({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
           <div>
-            <h3 style={{ margin: 0, color: '#cdd6f4' }}>网关 / 共享 Channel</h3>
+            <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('gateway.modalTitle')}</h3>
             <p style={{ margin: '6px 0 0', color: '#a6adc8', fontSize: 13 }}>
-              一个 channel 代理本机全部 Agent，供外网 Shepaw App 访问
+              {t('gateway.modalHint')}
             </p>
           </div>
           <button style={closeBtn} onClick={onClose}>×</button>

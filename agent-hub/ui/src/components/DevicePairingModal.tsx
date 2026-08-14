@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { GatewayInfo, HubPairingResult, HubPairedDevice } from '../api/types.js';
+import { useI18n } from '../i18n/index.js';
 
 interface DevicePairingModalProps {
   onClose: () => void;
@@ -14,14 +15,15 @@ export function DevicePairingPanel() {
 
 /** Modal wrapper retained for any legacy callers. */
 export function DevicePairingModal({ onClose }: DevicePairingModalProps) {
+  const { t } = useI18n();
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
           <div>
-            <h3 style={{ margin: 0, color: '#cdd6f4' }}>设备配对</h3>
+            <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('device.title')}</h3>
             <p style={{ margin: '6px 0 0', color: '#a6adc8', fontSize: 13 }}>
-              用 Shepaw App 扫描一次，授权本机上的全部 Agent
+              {t('device.hint')}
             </p>
           </div>
           <button style={closeBtn} onClick={onClose}>×</button>
@@ -33,6 +35,7 @@ export function DevicePairingModal({ onClose }: DevicePairingModalProps) {
 }
 
 function DevicePairingBody() {
+  const { t } = useI18n();
   const [pairing, setPairing] = useState<HubPairingResult | null>(null);
   const [devices, setDevices] = useState<HubPairedDevice[]>([]);
   const [gateway, setGateway] = useState<GatewayInfo | null>(null);
@@ -103,7 +106,7 @@ function DevicePairingBody() {
     setErr(null);
     try {
       const result = await api.pair.mint({
-        label: label.trim() || 'Shepaw 设备',
+        label: label.trim() || t('device.defaultName'),
         ttlMinutes: 10,
       });
       setPairing(result);
@@ -128,25 +131,25 @@ function DevicePairingBody() {
       {gateway?.channel && !gateway.status.running && (
         <div style={warnBanner}>
           <span style={{ flex: 1 }}>
-            ⚠ 已配置共享 channel，但隧道路由器未运行——外网扫码/连接将失败。
+            ⚠ {t('device.routerWarn')}
           </span>
           <button style={primaryBtn} disabled={startingRouter} onClick={() => void startRouter()}>
-            {startingRouter ? '启动中…' : '启动路由器'}
+            {startingRouter ? t('common.starting') : t('device.startRouter')}
           </button>
         </div>
       )}
 
       {!pairing ? (
         <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>设备名称（可选）</label>
+          <label style={labelStyle}>{t('device.nameLabel')}</label>
           <input
             style={input}
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            placeholder="例如：iPhone"
+            placeholder={t('device.namePlaceholder')}
           />
           <button style={primaryBtn} disabled={loading} onClick={() => void mint()}>
-            {loading ? '生成中…' : '生成配对二维码'}
+            {loading ? t('peer.minting') : t('device.mint')}
           </button>
         </div>
       ) : (
@@ -156,18 +159,18 @@ function DevicePairingBody() {
             {pairing.display}
           </p>
           <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>
-            {secondsLeft > 0 ? `${secondsLeft}s 后过期` : '已过期'}
+            {secondsLeft > 0 ? t('peer.expiresIn', { seconds: secondsLeft }) : t('peer.expired')}
           </p>
           <p style={{ color: '#6c7086', fontSize: 12, marginTop: 8 }}>
-            首次连接入口：{pairing.bootstrapInstanceId}
+            {t('device.bootstrap', { id: pairing.bootstrapInstanceId })}
           </p>
         </div>
       )}
 
       <div style={section}>
-        <h4 style={sectionTitle}>配对后可用 Agent（{pairing?.agents.length ?? '—'}）</h4>
+        <h4 style={sectionTitle}>{t('device.agentsTitle', { count: pairing?.agents.length ?? '—' })}</h4>
         <p style={hint}>
-          扫码并完成首次连接后，以下 Agent 均已授权。在 App 中「添加远端助手」粘贴各 Agent 的 WS URL 即可（无需再次输入配对码）。
+          {t('device.agentsHint')}
         </p>
         <div style={agentList}>
           {(pairing?.agents ?? []).map((a) => (
@@ -181,24 +184,24 @@ function DevicePairingBody() {
             </div>
           ))}
           {!pairing && (
-            <p style={{ color: '#6c7086', fontSize: 13 }}>生成二维码后显示 Agent 列表</p>
+            <p style={{ color: '#6c7086', fontSize: 13 }}>{t('device.agentsPending')}</p>
           )}
         </div>
       </div>
 
       {devices.length > 0 && (
         <div style={section}>
-          <h4 style={sectionTitle}>已配对设备</h4>
+          <h4 style={sectionTitle}>{t('device.pairedTitle')}</h4>
           {devices.map((d) => (
             <div key={d.fingerprint} style={deviceRow}>
               <div>
                 <strong style={{ color: '#cdd6f4' }}>{d.label || d.fingerprint}</strong>
                 <span style={{ color: '#6c7086', fontSize: 12, marginLeft: 8 }}>
-                  {d.instanceIds.length} 个 Agent
+                  {t('device.agentCount', { count: d.instanceIds.length })}
                 </span>
               </div>
               <button style={dangerBtn} onClick={() => void revokeDevice(d.fingerprint)}>
-                撤销
+                {t('peer.revoke')}
               </button>
             </div>
           ))}

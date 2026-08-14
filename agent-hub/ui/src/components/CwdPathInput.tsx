@@ -5,13 +5,14 @@ import {
   loadCwdHistory,
   seedCwdHistory,
 } from '../utils/cwdHistory.js';
+import { useI18n } from '../i18n/index.js';
 
 export interface CwdPathInputProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   required?: boolean;
-  /** Optional trailing control (e.g. 浏览… button). */
+  /** Optional trailing control (e.g. browse button). */
   trailing?: React.ReactNode;
   /** Seed history from existing instance cwd paths. */
   seedPaths?: string[];
@@ -43,6 +44,7 @@ export function CwdPathInput({
   seedPaths,
   inputStyle,
 }: CwdPathInputProps) {
+  const { t } = useI18n();
   const listId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -219,13 +221,13 @@ export function CwdPathInput({
         {showDropdown && (
           <ul id={listId} role="listbox" style={dropdown}>
             {emptyHint && (
-              <li style={emptyItem}>暂无历史路径，直接输入或浏览选择</li>
+              <li style={emptyItem}>{t('cwd.noHistory')}</li>
             )}
             {!value.trim() && suggestions.length > 0 && (
-              <li style={sectionLabel}>最近使用</li>
+              <li style={sectionLabel}>{t('cwd.recent')}</li>
             )}
             {value.trim() && historySuggestions.length > 0 && fsSuggestions.length > 0 && (
-              <li style={sectionLabel}>匹配建议</li>
+              <li style={sectionLabel}>{t('cwd.suggestions')}</li>
             )}
             {suggestions.map((s, i) => {
               const active = i === highlight;
@@ -245,12 +247,12 @@ export function CwdPathInput({
                   }}
                 >
                   <span style={itemPath}>{s.path}</span>
-                  <span style={itemKind}>{s.kind === 'history' ? '历史' : '目录'}</span>
+                  <span style={itemKind}>{s.kind === 'history' ? t('cwd.history') : t('cwd.dir')}</span>
                 </li>
               );
             })}
             {loadingFs && suggestions.length === 0 && (
-              <li style={emptyItem}>匹配目录中…</li>
+              <li style={emptyItem}>{t('cwd.matching')}</li>
             )}
           </ul>
         )}
