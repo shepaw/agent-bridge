@@ -1,8 +1,9 @@
 /**
  * Channel mailbox HTTP client (agent side).
  *
- * Pulls inbound sealed messages, deposits sealed replies, acks processed
- * items. Auth: HMAC-SHA256(channel_secret, "{channel_id}\\n{agent_id}\\n{ts}\\n{nonce}").
+ * Pulls inbound sealed messages, deposits sealed replies (including stream
+ * chunks for typewriter), acks processed items.
+ * Auth: HMAC-SHA256(channel_secret, "{channel_id}\\n{agent_id}\\n{ts}\\n{nonce}").
  */
 
 import { createHmac, randomBytes } from 'node:crypto';
@@ -18,11 +19,15 @@ export interface MailboxClientOptions {
 export interface InboundMail {
   id: string;
   message_id: string;
+  request_id?: string;
   session_id: string;
+  group_id?: string;
   caller_fp: string;
   ciphertext: string;
   created_at: string;
 }
+
+export type MailboxReplyKind = 'chat' | 'stream' | 'article';
 
 export class MailboxClient {
   private readonly base: string;
@@ -73,7 +78,10 @@ export class MailboxClient {
     callerFp: string;
     replyTo: string;
     sessionId: string;
-    messageId?: string;
+    messageId: string;
+    requestId?: string;
+    groupId?: string;
+    kind?: MailboxReplyKind;
     ciphertext: string;
   }): Promise<void> {
     const auth = this.signBody();
@@ -87,6 +95,9 @@ export class MailboxClient {
           reply_to: opts.replyTo,
           session_id: opts.sessionId,
           message_id: opts.messageId,
+          request_id: opts.requestId,
+          group_id: opts.groupId,
+          kind: opts.kind ?? 'chat',
           ciphertext: opts.ciphertext,
           ...auth,
         }),
@@ -115,4 +126,83 @@ export class MailboxClient {
     const signature = createHmac('sha256', this.secret).update(signingString).digest('hex');
     return { timestamp, nonce, signature };
   }
+}
+
+/** Live mailbox stream sink: each text delta → sealed chunk in inbox. */
+export interface MailboxStreamSink {
+  readonly texts: string[];
+  depositChunk(delta: string): Promise<void>;
+  depositFinal(fullText: string): Promise<void>;
+}
+
+export function createMailboxStreamSink(opts: {
+  client: MailboxClient;
+  callerFp: string;
+  replyTo: string;
+  requestId: string;
+  sessionId: string;
+  groupId?: string;
+  sealJson: (obj: unknown, pub: Uint8Array) => string;
+  callerPublicKey: Uint8Array;
+}): MailboxStreamSink {
+  let seq = 0;
+  const texts: string[] = [];
+  const { client, callerFp, replyTo, requestId, sessionId, groupId, sealJson, callerPublicKey } =
+    opts;
+
+  return {
+    texts,
+    async depositChunk(delta: string): Promise<void> {
+      if (!delta) return;
+      texts.push(delta);
+      seq += 1;
+      const ciphertext = sealJson(
+        {
+          kind: 'stream',
+          reply_to: replyTo,
+          request_id: requestId,
+          session_id: sessionId,
+          seq,
+          delta,
+          is_final: false,
+          ts: Date.now(),
+        },
+        callerPublicKey,
+      );
+      await client.depositReply({
+        callerFp,
+        replyTo,
+        sessionId,
+        requestId,
+        groupId,
+        kind: 'stream',
+        messageId: `${requestId}:chunk:${seq}`,
+        ciphertext,
+      });
+    },
+    async depositFinal(fullText: string): Promise<void> {
+      const ciphertext = sealJson(
+        {
+          kind: 'chat',
+          reply_to: replyTo,
+          request_id: requestId,
+          session_id: sessionId,
+          content: fullText,
+          is_final: true,
+          ts: Date.now(),
+        },
+        callerPublicKey,
+      );
+      await client.depositReply({
+        callerFp,
+        replyTo,
+        sessionId,
+        requestId,
+        groupId,
+        kind: 'chat',
+        messageId: `${requestId}:final`,
+        ciphertext,
+      });
+    },
+  };
 }

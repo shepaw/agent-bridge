@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 
 import { jsonrpcNotification, jsonrpcRequest } from './jsonrpc.js';
+import type { MailboxStreamSink } from './mailbox.js';
 import type {
   UIActionOption,
   UIChoiceOption,
@@ -139,6 +140,11 @@ export interface TaskContextInit {
    */
   offlineSink?: { texts: string[] };
   /**
+   * Inbox stream mode: each `sendText` delta is sealed into the cloud mailbox
+   * for the caller to poll (typewriter while offline from live WS).
+   */
+  mailboxStream?: MailboxStreamSink;
+  /**
    * When set, ALL outbound messages go through this instead of wsSend(ws).
    * The server uses it to route via a re-bindable live connection and to tap
    * replayable events into a per-task buffer, so a client that reconnects
@@ -157,6 +163,7 @@ export class TaskContext {
   private readonly pendingResponses: Map<string, Deferred<Record<string, unknown>>>;
   private readonly takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
   private readonly offlineSink?: { texts: string[] };
+  private readonly mailboxStream?: MailboxStreamSink;
   private readonly transport?: (message: Record<string, unknown>) => Promise<void>;
 
   constructor(init: TaskContextInit) {
@@ -167,17 +174,26 @@ export class TaskContext {
     this.pendingResponses = init.pendingResponses;
     this.takeEarlyResponse = init.takeEarlyResponse;
     this.offlineSink = init.offlineSink;
+    this.mailboxStream = init.mailboxStream;
     this.transport = init.transport;
   }
 
   /** Collected assistant text in offline/mailbox mode (empty string online). */
   get collectedText(): string {
+    if (this.mailboxStream !== undefined) {
+      return this.mailboxStream.texts.join('');
+    }
     return this.offlineSink?.texts.join('') ?? '';
   }
 
   // ── Streaming text ────────────────────────────────────────────
 
   async sendText(content: string): Promise<void> {
+    if (this.mailboxStream !== undefined) {
+      this.mailboxStream.texts.push(content);
+      await this.mailboxStream.depositChunk(content);
+      return;
+    }
     if (this.offlineSink !== undefined) {
       this.offlineSink.texts.push(content);
       return;
@@ -192,7 +208,7 @@ export class TaskContext {
   }
 
   async sendTextFinal(): Promise<void> {
-    if (this.offlineSink !== undefined) return;
+    if (this.mailboxStream !== undefined || this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('ui.textContent', {
         task_id: this.taskId,
@@ -205,7 +221,7 @@ export class TaskContext {
   // ── Task lifecycle ────────────────────────────────────────────
 
   async started(): Promise<void> {
-    if (this.offlineSink !== undefined) return;
+    if (this.mailboxStream !== undefined || this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('task.started', {
         task_id: this.taskId,
@@ -215,7 +231,7 @@ export class TaskContext {
   }
 
   async completed(): Promise<void> {
-    if (this.offlineSink !== undefined) return;
+    if (this.mailboxStream !== undefined || this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('task.completed', {
         task_id: this.taskId,
@@ -226,7 +242,7 @@ export class TaskContext {
   }
 
   async error(message: string, code = -32603): Promise<void> {
-    if (this.offlineSink !== undefined) return;
+    if (this.mailboxStream !== undefined || this.offlineSink !== undefined) return;
     await this.sendRaw(
       jsonrpcNotification('task.error', {
         task_id: this.taskId,

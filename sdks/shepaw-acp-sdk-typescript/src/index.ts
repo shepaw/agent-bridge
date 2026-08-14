@@ -102,8 +102,13 @@ export type {
   TunnelClientOptions,
 } from './tunnel.js';
 export { seal, open, sealJson, openJson, SealBoxError } from './sealbox.js';
-export { MailboxClient } from './mailbox.js';
-export type { MailboxClientOptions, InboundMail } from './mailbox.js';
+export { MailboxClient, createMailboxStreamSink } from './mailbox.js';
+export type {
+  MailboxClientOptions,
+  InboundMail,
+  MailboxReplyKind,
+  MailboxStreamSink,
+} from './mailbox.js';
 export { GrantSyncClient } from './grant-sync.js';
 export type { GrantSyncOptions } from './grant-sync.js';
 

@@ -39,7 +39,7 @@ import {
 import type { AgentIdentity } from './identity.js';
 import { loadOrCreateIdentity } from './identity.js';
 import { jsonrpcNotification, jsonrpcResponse } from './jsonrpc.js';
-import { MailboxClient } from './mailbox.js';
+import { MailboxClient, createMailboxStreamSink } from './mailbox.js';
 import { GrantSyncClient } from './grant-sync.js';
 import { NoiseHandshakeError, NoiseSession, NoiseTransportError } from './noise.js';
 import type { AuthorizedPeer, AuthorizedPeers } from './peers.js';
@@ -1628,7 +1628,9 @@ export class ACPAgentServer {
   private async processMailboxItem(mail: {
     id: string;
     message_id: string;
+    request_id?: string;
     session_id: string;
+    group_id?: string;
     caller_fp: string;
     ciphertext: string;
   }): Promise<void> {
@@ -1638,6 +1640,8 @@ export class ACPAgentServer {
       message?: string;
       session_id?: string;
       message_id?: string;
+      request_id?: string;
+      group_id?: string;
       history?: ConversationMessage[];
     };
     try {
@@ -1664,19 +1668,33 @@ export class ACPAgentServer {
     }
 
     const sessionId = mail.session_id || payload.session_id || mail.message_id;
+    const requestId =
+      mail.request_id ||
+      payload.request_id ||
+      mail.message_id;
+    const groupId = mail.group_id || payload.group_id;
     const taskId = `mailbox_${mail.message_id}`;
     const abortController = new AbortController();
     this.activeTasks.set(taskId, abortController);
 
-    const sink = { texts: [] as string[] };
-    // Offline TaskContext: lifecycle/text go to sink; interactive UI is unsupported.
+    const mailboxStream = createMailboxStreamSink({
+      client: this.mailboxClient,
+      callerFp: mail.caller_fp,
+      replyTo: mail.message_id,
+      requestId,
+      sessionId,
+      groupId,
+      sealJson,
+      callerPublicKey: peer.publicKey,
+    });
+
     const ctx = new TaskContext({
       ws: { readyState: 3 } as unknown as WebSocket, // CLOSED stub
       taskId,
       sessionId,
       pendingHubRequests: this.pendingHubRequests,
       pendingResponses: this.pendingResponses,
-      offlineSink: sink,
+      mailboxStream,
     });
 
     try {
@@ -1703,23 +1721,7 @@ export class ACPAgentServer {
 
       if (replyText.length > 0) {
         this.convMgr.addAssistantMessage(sessionId, replyText);
-        const ciphertext = sealJson(
-          {
-            reply_to: mail.message_id,
-            session_id: sessionId,
-            message_id: `reply_${mail.message_id}`,
-            content: replyText,
-            ts: Date.now(),
-          },
-          peer.publicKey,
-        );
-        await this.mailboxClient.depositReply({
-          callerFp: mail.caller_fp,
-          replyTo: mail.message_id,
-          sessionId,
-          messageId: `reply_${mail.message_id}`,
-          ciphertext,
-        });
+        await mailboxStream.depositFinal(replyText);
       }
       await this.mailboxClient.ackInbound([mail.id]);
     } catch (err) {
