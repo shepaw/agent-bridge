@@ -127,7 +127,9 @@ export class SessionStore {
       return;
     }
     this.mapping.set(shepawSessionId, sdkSessionId);
-    this.schedulePersist();
+    // Bindings must hit disk before the next chat, not 200ms later — a crash
+    // in that window is how one app conversation silently session/new's.
+    void this.flush().catch((err) => log.gateway('SessionStore persist failed: %s', String(err)));
   }
 
   /**
@@ -158,6 +160,18 @@ export class SessionStore {
   delete(shepawSessionId: string): void {
     if (!this.mapping.has(shepawSessionId)) return;
     this.mapping.delete(shepawSessionId);
+    this.schedulePersist();
+  }
+
+  /** All Shepaw-side session ids currently mapped. */
+  allShepawSessionIds(): string[] {
+    return [...this.mapping.keys()];
+  }
+
+  /** Drop every Shepaw→upstream mapping (does not clear orphaned ids). */
+  clearAll(): void {
+    if (this.mapping.size === 0) return;
+    this.mapping.clear();
     this.schedulePersist();
   }
 

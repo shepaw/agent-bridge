@@ -61,7 +61,7 @@ export interface EngineInfo {
   readonly available?: boolean;
   /** Human-readable reason when {@link available} is false. */
   readonly unavailableReason?: string | null;
-  /** Native session modes this engine can be started in. Empty = none. */
+  /** Native run / permission modes this engine supports. Empty = none. */
   readonly sessionModes?: ReadonlyArray<{ id: string; name: string; description: string }>;
   readonly defaultSessionMode?: string;
 }

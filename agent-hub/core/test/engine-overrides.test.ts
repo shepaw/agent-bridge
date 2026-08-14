@@ -60,7 +60,7 @@ function addTestInstance(id: string, engine = 'claude-code'): void {
 describe('instance sessionMode', () => {
   it('fills the engine default when omitted', () => {
     addTestInstance('p1', 'cursor');
-    expect(loadOrCreateHubConfig().instances.find((p) => p.id === 'p1')?.sessionMode).toBe('agent');
+    expect(loadOrCreateHubConfig().instances.find((p) => p.id === 'p1')?.sessionMode).toBe('auto-review');
   });
 
   it('persists an explicit mode and rejects unknown catalog ids', () => {

@@ -1,14 +1,15 @@
 /**
- * Per-engine native session / permission modes.
+ * Per-engine native ACP modes exposed in the Hub/App picker.
  *
- * Hub does not invent its own allow/ask/deny policy. Each ACP agent already
- * has modes that control how often it prompts; we just persist the operator's
- * choice on the instance and ask the proxy to set it via ACP
- * `session/set_mode` / `session/set_config_option`.
+ * Most engines expose permission / run modes (how often tools need approval).
+ * Cursor is run mode only (`approvalMode`: auto-review / allowlist /
+ * unrestricted) — not session mode (agent/plan/ask). We persist the operator's
+ * choice on the instance and ask the proxy to apply it via CLI flags at spawn
+ * and/or `session/set_config_option` when the agent advertises one.
  *
  * Catalogs are create/edit pickers and the App fallback when ACP has not
  * advertised modes yet (no live session). Unknown engines leave the picker
- * empty so we don't pretend they share Cursor's modes.
+ * empty so we don't invent modes for them.
  */
 
 export interface EngineSessionMode {
@@ -31,14 +32,24 @@ export interface ParseSessionModeOptions {
   readonly allowUnknown?: boolean;
 }
 
-/** Cursor ACP: agent / plan / ask (https://cursor.com/docs/cli/acp). */
+/**
+ * Cursor CLI run modes (`approvalMode` in cli-config; `--auto-review` / `--force`).
+ * @see https://cursor.com/docs/agent/security/run-modes
+ */
 const CURSOR_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'agent',
+  defaultModeId: 'auto-review',
   modes: [
-    { id: 'agent', name: 'Agent', description: '完整工具权限，必要时询问' },
-    { id: 'plan', name: 'Plan', description: '只规划，不改代码' },
-    { id: 'ask', name: 'Ask', description: '只问答，只读' },
+    { id: 'auto-review', name: 'Auto-review', description: '白名单与沙箱自动执行，其余经分类器审核' },
+    { id: 'allowlist', name: 'Allowlist', description: '仅白名单内自动执行，其余询问' },
+    { id: 'unrestricted', name: 'Run Everything', description: '跳过几乎所有确认（`--force`）' },
   ],
+};
+
+/** Pre-run-mode catalog ids stored on older instances — mapped on read. */
+const CURSOR_LEGACY_SESSION_MODE_IDS: Readonly<Record<string, string>> = {
+  agent: 'auto-review',
+  plan: 'allowlist',
+  ask: 'allowlist',
 };
 
 /** Claude Code permission modes. */
@@ -144,8 +155,11 @@ export function parseSessionMode(
   if (typeof raw !== 'string') {
     throw new Error('sessionMode must be a string.');
   }
-  const id = raw.trim();
+  let id = raw.trim();
   if (id.length === 0) return undefined;
+  if (engineId === 'cursor') {
+    id = CURSOR_LEGACY_SESSION_MODE_IDS[id] ?? id;
+  }
   const catalog = getEngineSessionCatalog(engineId);
   if (
     catalog.modes.length > 0 &&

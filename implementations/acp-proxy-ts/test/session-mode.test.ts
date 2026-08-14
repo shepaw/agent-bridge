@@ -3,17 +3,17 @@ import type * as acp from '@agentclientprotocol/sdk';
 
 import {
   advertisedModesList,
+  cursorRunModeSpawnArgs,
   findModeConfigOption,
   matchRequestedModeId,
   planRequestedMode,
   requestedSessionMode,
 } from '../src/session-mode.js';
 
-const CURSOR_MODES = [
-  { id: 'agent', name: 'Agent' },
-  { id: 'plan', name: 'Plan' },
-  { id: 'ask', name: 'Ask' },
-  { id: 'auto', name: 'Auto' },
+const CURSOR_RUN_MODES = [
+  { id: 'auto-review', name: 'Auto-review' },
+  { id: 'allowlist', name: 'Allowlist' },
+  { id: 'unrestricted', name: 'Run Everything' },
 ];
 
 const CLAUDE_MODES = [
@@ -42,14 +42,10 @@ describe('requestedSessionMode', () => {
 });
 
 describe('matchRequestedModeId', () => {
-  it('matches Cursor catalog ids exactly', () => {
-    expect(matchRequestedModeId(CURSOR_MODES, 'auto', 'ask')).toBe('auto');
-    expect(matchRequestedModeId(CURSOR_MODES, 'agent', 'ask')).toBe('agent');
-    expect(matchRequestedModeId(CURSOR_MODES, 'plan', 'agent')).toBe('plan');
-  });
-
-  it('matches advertised yolo when Hub requested auto', () => {
-    expect(matchRequestedModeId([{ id: 'yolo', name: 'Yolo' }, { id: 'ask', name: 'Ask' }], 'auto', 'ask')).toBe('yolo');
+  it('matches Cursor run mode ids', () => {
+    expect(matchRequestedModeId(CURSOR_RUN_MODES, 'auto-review', 'allowlist')).toBe('auto-review');
+    expect(matchRequestedModeId(CURSOR_RUN_MODES, 'unrestricted', 'allowlist')).toBe('unrestricted');
+    expect(matchRequestedModeId(CURSOR_RUN_MODES, 'yolo', 'allowlist')).toBe('unrestricted');
   });
 
   it('matches Claude catalog ids', () => {
@@ -74,11 +70,11 @@ describe('matchRequestedModeId', () => {
   });
 
   it('returns undefined when already on the requested mode', () => {
-    expect(matchRequestedModeId(CURSOR_MODES, 'agent', 'agent')).toBeUndefined();
+    expect(matchRequestedModeId(CURSOR_RUN_MODES, 'auto-review', 'auto-review')).toBeUndefined();
   });
 
   it('returns undefined when nothing advertised matches', () => {
-    expect(matchRequestedModeId(CURSOR_MODES, 'bypassPermissions', 'agent')).toBeUndefined();
+    expect(matchRequestedModeId(CURSOR_RUN_MODES, 'agent', 'allowlist')).toBeUndefined();
   });
 
   it('does not auto-pick the most autonomous mode', () => {
@@ -140,6 +136,37 @@ describe('advertisedModesList', () => {
 });
 
 describe('planRequestedMode', () => {
+  it('prefers approvalMode config over session category=mode', () => {
+    const plan = planRequestedMode({
+      requested: 'auto-review',
+      configOptions: [
+        {
+          id: 'mode',
+          name: 'Session Mode',
+          type: 'select',
+          category: 'mode',
+          currentValue: 'agent',
+          options: [
+            { value: 'agent', name: 'Agent' },
+            { value: 'plan', name: 'Plan' },
+          ],
+        },
+        {
+          id: 'approvalMode',
+          name: 'Run Mode',
+          type: 'select',
+          currentValue: 'allowlist',
+          options: [
+            { value: 'allowlist', name: 'Allowlist' },
+            { value: 'auto-review', name: 'Auto-review' },
+            { value: 'unrestricted', name: 'Run Everything' },
+          ],
+        },
+      ],
+    });
+    expect(plan).toEqual({ kind: 'config-select', configId: 'approvalMode', value: 'auto-review' });
+  });
+
   it('prefers configOptions category=mode over legacy modes', () => {
     const plan = planRequestedMode({
       requested: 'auto',
@@ -186,11 +213,33 @@ describe('planRequestedMode', () => {
       requested: 'bypassPermissions',
       configOptions: [],
       modes: {
-        currentModeId: 'ask',
-        availableModes: CURSOR_MODES,
+        currentModeId: 'agent',
+        availableModes: [
+          { id: 'agent', name: 'Agent' },
+          { id: 'plan', name: 'Plan' },
+        ],
       },
     });
     expect(plan).toBeUndefined();
+  });
+});
+
+describe('cursorRunModeSpawnArgs', () => {
+  it('adds --auto-review for auto-review mode', () => {
+    expect(cursorRunModeSpawnArgs('auto-review', ['acp'])).toEqual(['--auto-review', 'acp']);
+  });
+
+  it('adds --force for unrestricted / yolo', () => {
+    expect(cursorRunModeSpawnArgs('unrestricted', ['acp'])).toEqual(['--force', 'acp']);
+    expect(cursorRunModeSpawnArgs('yolo', ['acp'])).toEqual(['--force', 'acp']);
+  });
+
+  it('leaves allowlist unchanged', () => {
+    expect(cursorRunModeSpawnArgs('allowlist', ['acp'])).toEqual(['acp']);
+  });
+
+  it('does not duplicate flags', () => {
+    expect(cursorRunModeSpawnArgs('auto-review', ['--auto-review', 'acp'])).toEqual(['--auto-review', 'acp']);
   });
 });
 
@@ -220,6 +269,27 @@ describe('findModeConfigOption', () => {
       },
     ]);
     expect(opt?.id).toBe('permissionMode');
+  });
+
+  it('prefers approvalMode over category=mode', () => {
+    const opt = findModeConfigOption([
+      {
+        id: 'mode',
+        name: 'Session Mode',
+        type: 'select',
+        category: 'mode',
+        currentValue: 'agent',
+        options: [{ value: 'agent', name: 'Agent' }],
+      },
+      {
+        id: 'approvalMode',
+        name: 'Run Mode',
+        type: 'select',
+        currentValue: 'allowlist',
+        options: [{ value: 'auto-review', name: 'Auto-review' }],
+      },
+    ]);
+    expect(opt?.id).toBe('approvalMode');
   });
 
   it('finds Codex approvalPolicy by id', () => {

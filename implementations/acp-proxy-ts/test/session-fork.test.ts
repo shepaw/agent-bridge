@@ -3,8 +3,8 @@
  *
  * When sessions.json already maps an app session to an upstream id, ACP
  * restart must resume that id — never silently session/new a parallel
- * upstream session. Forking is only allowed when the upstream session is
- * confirmed gone from session/list.
+ * upstream session. Forking is only allowed when session/list returns a
+ * non-empty set that does not include the bound id (empty list is unknown).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,6 +89,15 @@ function rejectResumeListHas(id: string): RequestBehavior {
   };
 }
 
+function rejectResumeListOthers(missingId: string): RequestBehavior {
+  return (method) => {
+    if (method.includes('list')) {
+      return Promise.resolve({ sessions: [{ sessionId: 'someone-else', cwd: '/tmp' }] });
+    }
+    return Promise.reject(new Error(`session ${missingId} not found`));
+  };
+}
+
 interface SubHarness {
   sub: AcpSubprocess;
   getOrCreate: (shepawId: string, opts: RunPromptTurnOptions) => Promise<unknown>;
@@ -135,7 +144,23 @@ describe('getOrCreateSession strict binding', () => {
     vi.restoreAllMocks();
   });
 
-  it('forks only when restore fails and session/list confirms the upstream id is gone', async () => {
+  it('does not treat an empty session/list as confirmed-gone (idle death)', async () => {
+    const h = makeSub();
+    h.setConnection(
+      fakeConnection({ onRequest: rejectResumeListEmpty, newSessionId: 'sdk-new' }),
+    );
+
+    const abandoned: string[] = [];
+    await expect(
+      h.getOrCreate('shepaw-1', {
+        getStoredAcpSessionId: () => 'sdk-old',
+        onAbandonedAcpSessionId: (id) => abandoned.push(id),
+      }),
+    ).rejects.toThrow(/could not verify via session\/list/);
+    expect(abandoned).toEqual([]);
+  });
+
+  it('forks and rehydrates when restore fails, list is empty, and prior history is present', async () => {
     const h = makeSub();
     h.setConnection(
       fakeConnection({ onRequest: rejectResumeListEmpty, newSessionId: 'sdk-new' }),
@@ -143,16 +168,38 @@ describe('getOrCreateSession strict binding', () => {
 
     const abandoned: string[] = [];
     const restoreFailed: string[] = [];
+    const result = (await h.getOrCreate('shepaw-1', {
+      getStoredAcpSessionId: () => 'sdk-old',
+      onAbandonedAcpSessionId: (id) => abandoned.push(id),
+      onRestoreFailed: (id) => restoreFailed.push(id),
+      priorHistory: [{ role: 'user', content: 'hello' }],
+    })) as { session: FakeActiveSession; origin: string };
+
+    expect(result.session.sessionId).toBe('sdk-new');
+    expect(result.origin).toBe('created');
+    expect(abandoned).toEqual(['sdk-old']);
+    expect(restoreFailed).toEqual(['shepaw-1']);
+  });
+
+  it('forks only when restore fails and session/list confirms the upstream id is gone', async () => {
+    const h = makeSub();
+    h.setConnection(
+      fakeConnection({ onRequest: rejectResumeListOthers('sdk-old'), newSessionId: 'sdk-new' }),
+    );
+
+    const abandoned: string[] = [];
+    const restoreFailed: string[] = [];
     const mapped: Array<[string, string]> = [];
 
-    const session = (await h.getOrCreate('shepaw-1', {
+    const result = (await h.getOrCreate('shepaw-1', {
       getStoredAcpSessionId: () => 'sdk-old',
       onAbandonedAcpSessionId: (id) => abandoned.push(id),
       onRestoreFailed: (id) => restoreFailed.push(id),
       onAcpSessionId: (sid, acpId) => mapped.push([sid, acpId]),
-    })) as FakeActiveSession;
+    })) as { session: FakeActiveSession; origin: string };
 
-    expect(session.sessionId).toBe('sdk-new');
+    expect(result.session.sessionId).toBe('sdk-new');
+    expect(result.origin).toBe('created');
     expect(abandoned).toEqual(['sdk-old']);
     expect(restoreFailed).toEqual(['shepaw-1']);
     expect(mapped).toEqual([['shepaw-1', 'sdk-new']]);
@@ -183,9 +230,9 @@ describe('getOrCreateSession strict binding', () => {
     const session = (await h.getOrCreate('shepaw-1', {
       getStoredAcpSessionId: () => 'sdk-old',
       onAbandonedAcpSessionId: (id) => abandoned.push(id),
-    })) as FakeActiveSession;
+    })) as { session: FakeActiveSession };
 
-    expect(session.sessionId).toBe('sdk-old');
+    expect(session.session.sessionId).toBe('sdk-old');
     expect(h.restartMock).toHaveBeenCalledTimes(1);
     expect(abandoned).toEqual([]);
   });
@@ -213,12 +260,13 @@ describe('getOrCreateSession strict binding', () => {
     h.setConnection(fakeConnection({ onRequest: rejectResume, newSessionId: 'sdk-new' }));
 
     const abandoned: string[] = [];
-    const session = (await h.getOrCreate('shepaw-1', {
+    const result = (await h.getOrCreate('shepaw-1', {
       getStoredAcpSessionId: () => undefined,
       onAbandonedAcpSessionId: (id) => abandoned.push(id),
-    })) as FakeActiveSession;
+    })) as { session: FakeActiveSession; origin: string };
 
-    expect(session.sessionId).toBe('sdk-new');
+    expect(result.session.sessionId).toBe('sdk-new');
+    expect(result.origin).toBe('created');
     expect(abandoned).toEqual([]);
   });
 

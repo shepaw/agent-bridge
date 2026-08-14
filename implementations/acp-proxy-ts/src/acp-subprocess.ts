@@ -51,6 +51,7 @@ import {
   promptToPlainText,
   SessionTranscriptSink,
 } from './session-transcript-sink.js';
+import { prependHistoryToPrompt, type PriorHistoryTurn } from './session-rehydrate.js';
 import {
   CURSOR_STALE_AUTH_MESSAGE,
   CURSOR_STALE_AUTH_RETRIES,
@@ -136,6 +137,10 @@ export interface TurnContext {
   readonly signal: AbortSignal;
 }
 
+export type SessionOrigin = 'live' | 'restored' | 'created';
+
+export type { PriorHistoryTurn } from './session-rehydrate.js';
+
 export interface RunPromptTurnOptions {
   readonly getStoredAcpSessionId?: (shepawSessionId: string) => string | undefined;
   readonly onAcpSessionId?: (shepawSessionId: string, acpSessionId: string) => void;
@@ -147,6 +152,19 @@ export interface RunPromptTurnOptions {
    * agent-side; callers persist it so session/list sync never surfaces the
    * orphaned half as a new app session.
    */
+  readonly onAbandonedAcpSessionId?: (acpSessionId: string) => void;
+  /**
+   * App-side transcript for this Shepaw conversation. Injected only when
+   * `session/new` opens a fresh upstream session (restore failed / first
+   * bind), so a process death cannot silently wipe context.
+   */
+  readonly priorHistory?: ReadonlyArray<PriorHistoryTurn>;
+}
+
+/** Hooks shared by prompt turns and explicit session cleanup (`agent.sessions.*`). */
+export interface ClearShepawSessionHooks {
+  readonly getStoredAcpSessionId?: (shepawSessionId: string) => string | undefined;
+  readonly onMappingRemoved?: (shepawSessionId: string) => void;
   readonly onAbandonedAcpSessionId?: (acpSessionId: string) => void;
 }
 
@@ -186,7 +204,7 @@ export class AcpSubprocess {
   /** Preferred model value applied to newly created sessions. */
   private preferredModelValue: string | undefined;
 
-  /** Preferred session mode (Hub `PAW_ACP_SESSION_MODE` or App picker). */
+  /** Preferred run / permission mode (Hub `PAW_ACP_SESSION_MODE` or App picker). */
   private preferredModeId: string | undefined;
 
   /** Latest advertised session modes per Shepaw session. */
@@ -774,8 +792,9 @@ export class AcpSubprocess {
     }
 
     let session: acp.ActiveSession;
+    let origin: SessionOrigin;
     try {
-      session = await this.getOrCreateSession(shepawSessionId, opts);
+      ({ session, origin } = await this.getOrCreateSession(shepawSessionId, opts));
     } catch (err) {
       // ACP SDK often wraps upstream failures as RequestError(-32603, "Internal error")
       // with details only in `.data` — surface them so peer/app aren't left guessing.
@@ -785,9 +804,20 @@ export class AcpSubprocess {
       throw new Error(detail);
     }
 
-    const promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
+    let promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
       ? [...prompt]
       : (prompt as string | acp.ContentBlock);
+    if (origin === 'created' && opts.priorHistory !== undefined && opts.priorHistory.length > 0) {
+      promptArg = prependHistoryToPrompt(promptArg, opts.priorHistory);
+      log(
+        'rehydrated %d history turn(s) into new upstream session for shepaw %s',
+        opts.priorHistory.length,
+        shepawSessionId,
+      );
+      console.error(
+        `[acp-proxy] rehydrated ${opts.priorHistory.length} history turn(s) into new session shepaw=${shepawSessionId}`,
+      );
+    }
     const userText = promptToPlainText(promptArg as string | acp.ContentBlock | acp.ContentBlock[]);
     if (userText) {
       this.transcriptSink?.append(shepawSessionId, 'user', userText);
@@ -817,6 +847,38 @@ export class AcpSubprocess {
 
     const run = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
     return await Promise.race([run, abortPromise]);
+  }
+
+  /**
+   * Drop live + persisted mapping for one Shepaw conversation so the next
+   * turn opens a fresh upstream session. Optionally deletes the upstream
+   * ACP session when the engine supports `session/delete`.
+   */
+  async clearShepawSession(
+    shepawSessionId: string,
+    hooks: ClearShepawSessionHooks = {},
+  ): Promise<boolean> {
+    if (shepawSessionId.length === 0) return false;
+    const live = this.sessions.get(shepawSessionId);
+    const upstreamId =
+      live?.sessionId ?? hooks.getStoredAcpSessionId?.(shepawSessionId);
+    if (live !== undefined) {
+      hooks.onAbandonedAcpSessionId?.(live.sessionId);
+    }
+    this.dropLiveShepawSession(shepawSessionId);
+    hooks.onMappingRemoved?.(shepawSessionId);
+    if (upstreamId !== undefined && upstreamId.length > 0) {
+      await this.tryDeleteUpstreamSession(upstreamId);
+    }
+    return true;
+  }
+
+  /** Clear every in-memory Shepaw session handle (mappings cleared via hooks). */
+  async clearAllShepawSessions(hooks: ClearShepawSessionHooks = {}): Promise<void> {
+    const liveIds = [...this.sessions.keys()];
+    for (const id of liveIds) {
+      await this.clearShepawSession(id, hooks);
+    }
   }
 
   /** Drop in-memory session state without clearing the persisted Shepaw→ACP map. */
@@ -895,10 +957,10 @@ export class AcpSubprocess {
   private async getOrCreateSession(
     shepawSessionId: string,
     opts: RunPromptTurnOptions,
-  ): Promise<acp.ActiveSession> {
+  ): Promise<{ session: acp.ActiveSession; origin: SessionOrigin }> {
     const existing = this.sessions.get(shepawSessionId);
     if (existing !== undefined) {
-      return existing;
+      return { session: existing, origin: 'live' };
     }
 
     const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
@@ -931,7 +993,7 @@ export class AcpSubprocess {
           if (this.preferredModelValue !== undefined) {
             await this.applyModelToSession(restored, shepawSessionId, this.preferredModelValue);
           }
-          return restored;
+          return { session: restored, origin: 'restored' };
         }
 
         if (attempt.kind === 'timed_out') {
@@ -944,10 +1006,15 @@ export class AcpSubprocess {
           throw new Error(msg);
         }
 
-        // resume/load rejected. Only fork when the upstream session is confirmed
-        // gone — if it still exists (or we cannot tell), keep the binding.
+        // resume/load rejected. Empty session/list is `unknown` (typical after
+        // Cursor idle death) — do not treat it as gone. Fork only when:
+        //   - list is non-empty and the id is missing (`no`), or
+        //   - we cannot tell (`unknown`) BUT the app sent prior history, so we
+        //     can rehydrate instead of opening a blank chat.
         const existence = await this.upstreamSessionExists(storedId);
-        if (existence === 'yes' || existence === 'unknown') {
+        const canRehydrate =
+          opts.priorHistory !== undefined && opts.priorHistory.length > 0;
+        if (existence === 'yes' || (existence === 'unknown' && !canRehydrate)) {
           const msg =
             `Bound ACP session ${storedId} for shepaw ${shepawSessionId} could not be resumed` +
             (existence === 'yes'
@@ -959,12 +1026,15 @@ export class AcpSubprocess {
         }
 
         log(
-          'stored ACP session %s confirmed gone from session/list; creating new session for shepaw %s',
+          'stored ACP session %s %s; creating new session for shepaw %s (rehydrate=%s)',
           storedId,
+          existence === 'no' ? 'confirmed gone from session/list' : 'unverified after restore failure',
           shepawSessionId,
+          canRehydrate,
         );
         console.error(
-          `[acp-proxy] bound upstream ${storedId} gone; forking new session for shepaw=${shepawSessionId}`,
+          `[acp-proxy] bound upstream ${storedId} ${existence === 'no' ? 'gone' : 'unverified'}; ` +
+            `forking new session for shepaw=${shepawSessionId} rehydrate=${canRehydrate}`,
         );
         opts.onAbandonedAcpSessionId?.(storedId);
         opts.onRestoreFailed?.(shepawSessionId);
@@ -1000,13 +1070,18 @@ export class AcpSubprocess {
       await this.applyModelToSession(session, shepawSessionId, this.preferredModelValue);
     }
 
-    return session;
+    return { session, origin: 'created' };
   }
 
   /**
    * Whether `sessionId` still appears in the upstream agent's raw session/list.
    * Used to decide if a failed restore should fork (gone) or keep the binding
    * (still there / unknown).
+   *
+   * An empty list is `unknown`, not `no`: after Cursor/Claude idle death the
+   * freshly spawned process often lists nothing even though the session still
+   * exists on disk. Treating that as "gone" is how one app conversation
+   * silently session/new's into amnesia.
    */
   private async upstreamSessionExists(
     sessionId: string,
@@ -1018,6 +1093,7 @@ export class AcpSubprocess {
         cwd: this.cwd,
       })) as acp.ListSessionsResponse;
       const raw = response.sessions ?? [];
+      if (raw.length === 0) return 'unknown';
       return raw.some((s) => s.sessionId === sessionId) ? 'yes' : 'no';
     } catch (err) {
       log(

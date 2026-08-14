@@ -253,6 +253,27 @@ export interface SessionHistoryResult {
   messages: SessionHistoryMessage[];
 }
 
+/** `agent.sessions.delete` request params. */
+export interface SessionDeleteParams {
+  /** Shepaw-side session id (same value as `agent.chat`'s `session_id`). */
+  session_id: string;
+}
+
+/** `agent.sessions.delete` response. */
+export interface SessionDeleteResult {
+  ok: boolean;
+}
+
+/** `agent.sessions.clear` request params (reserved). */
+export interface SessionsClearParams {
+  // Reserved for future filters (cwd, etc.).
+}
+
+/** `agent.sessions.clear` response. */
+export interface SessionsClearResult {
+  ok: boolean;
+}
+
 // ── Model selection (agent.models.list / agent.models.setCurrent) ──
 
 /**

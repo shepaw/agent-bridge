@@ -60,6 +60,11 @@ export interface AcpChatRequest {
   readonly taskId: string;
   /** ACP-compatible attachment objects (base64 `data`, `file_name`, …). */
   readonly attachments?: ReadonlyArray<Record<string, unknown>>;
+  /**
+   * App transcript for this conversation. The proxy injects it only when it
+   * has to session/new (restore failed); live/resumed sessions ignore it.
+   */
+  readonly history?: ReadonlyArray<{ role: string; content: string }>;
 }
 
 interface InflightTurn {
@@ -165,6 +170,7 @@ export class PeerAcpClient {
         ...(req.attachments && req.attachments.length > 0
           ? { attachments: req.attachments }
           : {}),
+        ...(req.history && req.history.length > 0 ? { history: req.history } : {}),
       },
     });
 

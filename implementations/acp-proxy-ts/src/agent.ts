@@ -199,7 +199,11 @@ export class AcpProxyAgent extends ACPAgentServer {
       { taskCtx: ctx, signal },
       {
         getStoredAcpSessionId: (id) => this.sessionStore.get(id),
-        onAcpSessionId: (id, acpId) => this.sessionStore.set(id, acpId),
+        onAcpSessionId: (id, acpId) => {
+          this.sessionStore.set(id, acpId);
+          void this.sessionStore.flush();
+        },
+        priorHistory: kwargs.history,
         onRestoreFailed: (id) => {
           this.sessionStore.delete(id);
         },

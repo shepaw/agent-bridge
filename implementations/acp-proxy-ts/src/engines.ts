@@ -10,6 +10,7 @@
  */
 
 import { parseShellCommand } from './command-line.js';
+import { cursorRunModeSpawnArgs, requestedSessionMode } from './session-mode.js';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -259,6 +260,7 @@ export function spawnCommand(
     if (typeof apiKey === 'string' && apiKey.length > 0 && !args.includes('--api-key')) {
       args = ['--api-key', apiKey, ...args];
     }
+    args = cursorRunModeSpawnArgs(requestedSessionMode(env), args);
   }
   if (command === 'npx' && process.platform === 'win32') {
     return { command: 'npx.cmd', args };

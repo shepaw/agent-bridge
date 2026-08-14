@@ -49,6 +49,13 @@ describe('engines', () => {
     }
   });
 
+  it('spawnCommand adds Cursor run mode flags from PAW_ACP_SESSION_MODE', () => {
+    const spec = getBuiltinEngineSpec('cursor');
+    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'auto-review' }).args[0]).toBe('--auto-review');
+    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'unrestricted' }).args[0]).toBe('--force');
+    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'allowlist' }).args).toEqual(['acp']);
+  });
+
   it('validates engine ids', () => {
     expect(isAcpEngineId('claude-code')).toBe(true);
     expect(isAcpEngineId('unknown')).toBe(false);

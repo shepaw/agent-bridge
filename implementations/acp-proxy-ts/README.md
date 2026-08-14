@@ -10,13 +10,14 @@ Unified gateway that connects the [Shepaw](https://shepaw.com) mobile app to any
   (incl. Cursor load-only), using `sessions.json` mappings. Hung restores are
   bounded by a timeout that restarts the upstream agent before falling back to
   `session/new`.
-- **Session mode** — after `session/new` / resume / load, applies the instance
-  `PAW_ACP_SESSION_MODE` (Cursor `agent`/`plan`/`ask`, Claude `acceptEdits`, Codex
-  `on-request`/`never`, OpenCode `build`/`plan`, …) via `session/set_mode` or `session/set_config_option`. Unset
-  leaves the agent's default. The App can list/switch modes the same way as
-  models (`agent.modes.list` / `agent.modes.setCurrent`, peer frames
-  `agent_modes_req` / `agent_modes_set_req`). Remaining
-  `session/request_permission` calls are forwarded to the App
+- **Run / permission mode** — after `session/new` / resume / load, applies the instance
+  `PAW_ACP_SESSION_MODE` (Cursor run mode `auto-review`/`allowlist`/`unrestricted` via
+  `--auto-review`/`--force` + `approvalMode` config when advertised; Claude
+  `acceptEdits`, Codex `on-request`/`never`, OpenCode `build`/`plan`, …) via
+  `session/set_config_option` or `session/set_mode`. Unset leaves the agent's default.
+  The App can list/switch modes the same way as models (`agent.modes.list` /
+  `agent.modes.setCurrent`, peer frames `agent_modes_req` / `agent_modes_set_req`).
+  Remaining `session/request_permission` calls are forwarded to the App
   (`PAW_ACP_APPROVAL_MODE` defaults to `ask`).
 - **Model picker** — maps ACP `configOptions` (category `model`) to Shepaw
   `agent.models.list` / `agent.models.setCurrent` via `session/set_config_option`

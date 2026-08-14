@@ -58,6 +58,21 @@ const APPROVAL_TIMEOUT_MS = 20 * 60 * 1000;
 // 'lost' (which would fail an already-computed turn).
 const TURN_RESULT_TTL_MS = 25 * 60 * 1000;
 
+function parsePeerChatHistory(
+  raw: unknown,
+): ReadonlyArray<{ role: string; content: string }> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: Array<{ role: string; content: string }> = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue;
+    const rec = item as { role?: unknown; content?: unknown };
+    if (rec.role !== 'user' && rec.role !== 'assistant') continue;
+    if (typeof rec.content !== 'string' || rec.content.length === 0) continue;
+    out.push({ role: rec.role, content: rec.content });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /** Verdict of a phone approval. `migrated` = peer WS flapped mid-approval; the
  * hub keeps the record pending and the verdict will arrive via the deferred
  * relay on a later connection — the (old-connection) turn must NOT relay
@@ -740,12 +755,14 @@ export async function drivePeerConnection(opts: {
     try {
       const refs = normalizePeerAttachmentRefs(params.attachments);
       const attachments = resolveAttachmentsForAcp(agentId, refs, storedFiles);
+      const history = parsePeerChatHistory(params.history);
       await client.chat(
         {
           message,
           sessionId: params.session_id as string | undefined,
           taskId,
           attachments,
+          history,
         },
         handlers,
       );

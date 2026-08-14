@@ -1,14 +1,16 @@
 /**
- * Apply the operator-chosen ACP session mode from `PAW_ACP_SESSION_MODE`.
+ * Apply the operator-chosen ACP mode from `PAW_ACP_SESSION_MODE`.
  *
- * Hub catalogs per-engine ids (cursor `agent`/`plan`/`ask`, claude
- * `acceptEdits`, Codex `on-request`, OpenCode `build`, …). Proxy matches that
- * id against whatever the agent advertised after `session/new|resume|load`:
- *   - `configOptions` with `category: "mode"` (or approvalPolicy) + `session/set_config_option`
- *   - legacy `modes.availableModes` + `session/set_mode`
+ * Hub catalogs per-engine ids (Cursor run mode `auto-review`/`allowlist`/
+ * `unrestricted`, Claude `acceptEdits`, Codex `on-request`, OpenCode `build`,
+ * …). Proxy matches that id against whatever the agent advertised after
+ * `session/new|resume|load`:
+ *   - `configOptions` with `approvalMode` / `approvalPolicy` / `permissionMode`
+ *     + `session/set_config_option`
+ *   - legacy `modes.availableModes` + `session/set_mode` (non-Cursor engines)
  *
- * Unset / empty → leave the agent's default. Never auto-pick the most
- * autonomous advertised mode.
+ * Cursor run mode is also applied at spawn via `--auto-review` / `--force`.
+ * Unset / empty → leave the agent's default.
  */
 
 import type * as acp from '@agentclientprotocol/sdk';
@@ -24,6 +26,9 @@ export type SessionModePlan =
  * Keys are {@link normalize}d.
  */
 const ALIASES: Readonly<Record<string, readonly string[]>> = {
+  autoreview: ['autoreview', 'auto-review'],
+  allowlist: ['allowlist'],
+  unrestricted: ['unrestricted', 'runeverything', 'run-everything', 'yolo', 'force'],
   auto: ['auto', 'yolo', 'onfailure'],
   agent: ['agent', 'agentic', 'code', 'build'],
   plan: ['plan', 'architect'],
@@ -31,7 +36,7 @@ const ALIASES: Readonly<Record<string, readonly string[]>> = {
   default: ['default', 'onrequest'],
   acceptedits: ['acceptedits'],
   dontask: ['dontask'],
-  bypasspermissions: ['bypasspermissions', 'unrestricted'],
+  bypasspermissions: ['bypasspermissions'],
   onrequest: ['onrequest', 'default', 'ask'],
   onfailure: ['onfailure', 'auto'],
   never: ['never', 'fullauto'],
@@ -62,10 +67,19 @@ function aliasKeys(requested: string): string[] {
   return [key, ...extra.map(normalize)];
 }
 
+function isRunModeConfigOption(opt: acp.SessionConfigOption): boolean {
+  if (opt.type !== 'select') return false;
+  const hay = `${opt.id} ${opt.name}`;
+  return /approvalMode|approvalPolicy|permissionMode|runMode|run.?mode|approval.?polic/i.test(hay);
+}
+
 export function findModeConfigOption(
   configOptions: ReadonlyArray<acp.SessionConfigOption> | undefined | null,
 ): (acp.SessionConfigOption & { type: 'select' }) | undefined {
   if (configOptions === undefined || configOptions === null) return undefined;
+  for (const opt of configOptions) {
+    if (isRunModeConfigOption(opt)) return opt;
+  }
   for (const opt of configOptions) {
     if (opt.type !== 'select') continue;
     if (opt.category === 'mode') return opt;
@@ -85,6 +99,23 @@ export function findModeConfigOption(
     }
   }
   return undefined;
+}
+
+/** Extra `agent acp` argv for a Cursor run mode (Hub `PAW_ACP_SESSION_MODE`). */
+export function cursorRunModeSpawnArgs(
+  mode: string | undefined,
+  existingArgs: readonly string[],
+): string[] {
+  if (mode === undefined) return [...existingArgs];
+  const key = normalize(mode);
+  const args = [...existingArgs];
+  const has = (flag: string): boolean => args.includes(flag);
+  if (key === 'autoreview') {
+    if (!has('--auto-review')) args.unshift('--auto-review');
+  } else if (key === 'unrestricted' || key === 'yolo' || key === 'force') {
+    if (!has('--force') && !has('--yolo')) args.unshift('--force');
+  }
+  return args;
 }
 
 export interface ListedSessionMode {
