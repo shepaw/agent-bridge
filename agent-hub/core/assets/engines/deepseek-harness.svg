@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="DeepSeek Harness">
+  <rect width="128" height="128" rx="28" fill="#4D6BFE"/>
+  <path fill="#FFFFFF" d="M22 74c2-22 22-38 48-38 12 0 22 4 30 10 4-8 14-14 26-14-10 6-14 16-12 26 8 6 12 16 12 26 0 18-18 32-46 32H50C34 116 22 102 22 86c0-4 0-8 0-12z"/>
+  <circle cx="52" cy="64" r="5" fill="#4D6BFE"/>
+  <path fill="#FFFFFF" opacity="0.9" d="M84 36c8-10 20-14 30-12-10 4-16 12-18 22-6-4-10-8-12-10z"/>
+</svg>

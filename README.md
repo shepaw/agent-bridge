@@ -93,7 +93,8 @@ shepaw-acp-proxy pair
 In the Shepaw app: **Add agent → scan the QR**. That's it — start chatting.
 
 Supported `--engine` values: `claude-code`, `codebuddy`, `codex`,
-`opencode`, `openclaw`, `cursor`, `hermes`, `kimi`. Pairing from outside
+`opencode`, `openclaw`, `cursor`, `hermes`, `kimi`, `zcode`,
+`deepseek-harness`, `qwen-code`. Pairing from outside
 your LAN (tunnel / channel) is covered in
 [`implementations/acp-proxy-ts/README.md`](implementations/acp-proxy-ts/README.md).
 

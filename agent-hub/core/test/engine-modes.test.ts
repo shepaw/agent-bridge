@@ -22,6 +22,18 @@ describe('engine session mode catalogs', () => {
     expect(getEngineSessionCatalog('opencode').modes.map((m) => m.id)).toEqual([
       'build', 'plan',
     ]);
+    expect(getEngineSessionCatalog('zcode').defaultModeId).toBe('build');
+    expect(getEngineSessionCatalog('zcode').modes.map((m) => m.id)).toEqual([
+      'plan', 'build', 'edit', 'yolo',
+    ]);
+    expect(getEngineSessionCatalog('deepseek-harness').defaultModeId).toBe('workspace-write');
+    expect(getEngineSessionCatalog('deepseek-harness').modes.map((m) => m.id)).toEqual([
+      'read-only', 'workspace-write', 'danger-full-access',
+    ]);
+    expect(getEngineSessionCatalog('qwen-code').defaultModeId).toBe('auto');
+    expect(getEngineSessionCatalog('qwen-code').modes.map((m) => m.id)).toEqual([
+      'plan', 'default', 'auto-edit', 'auto', 'yolo',
+    ]);
   });
 
   it('leaves CodeBuddy / Hermes / Kimi / OpenClaw without a native catalog', () => {
@@ -44,6 +56,13 @@ describe('parseSessionMode', () => {
     expect(parseSessionMode('claude-code', 'bypassPermissions')).toBe('bypassPermissions');
     expect(parseSessionMode('codex', 'on-failure')).toBe('on-failure');
     expect(parseSessionMode('opencode', 'build')).toBe('build');
+    expect(parseSessionMode('zcode', 'yolo')).toBe('yolo');
+    expect(parseSessionMode('deepseek-harness', 'workspace-write')).toBe('workspace-write');
+    expect(parseSessionMode('qwen-code', 'auto-edit')).toBe('auto-edit');
+    expect(parseSessionMode('qwen-code', 'yolo')).toBe('yolo');
+    expect(() => parseSessionMode('qwen-code', 'bypassPermissions')).toThrow(/Unknown session mode/);
+    expect(() => parseSessionMode('deepseek-harness', 'yolo')).toThrow(/Unknown session mode/);
+    expect(() => parseSessionMode('zcode', 'bypassPermissions')).toThrow(/Unknown session mode/);
     expect(() => parseSessionMode('cursor', 'agent')).not.toThrow();
     expect(parseSessionMode('cursor', 'agent')).toBe('auto-review');
     expect(parseSessionMode('cursor', 'plan')).toBe('allowlist');
@@ -87,6 +106,8 @@ describe('catalogModesWire', () => {
     expect(catalogModesWire('cursor').current).toBe('auto-review');
     expect(catalogModesWire('claude-code').current).toBe('acceptEdits');
     expect(catalogModesWire('codex').current).toBe('on-request');
+    expect(catalogModesWire('deepseek-harness').current).toBe('workspace-write');
+    expect(catalogModesWire('qwen-code').current).toBe('auto');
   });
 
   it('leaves engines without a catalog empty', () => {

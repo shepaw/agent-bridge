@@ -176,6 +176,14 @@ OPENAI_API_KEY              (required)
 OPENAI_BASE_URL             (optional, custom endpoint)
 ```
 
+### qwen-code
+```
+OPENAI_API_KEY                 (optional if qwen /auth or ~/.qwen/settings.json is set)
+OPENAI_BASE_URL                (optional, custom endpoint)
+OPENAI_MODEL                   (optional, e.g. qwen3-coder-plus)
+BAILIAN_CODING_PLAN_API_KEY    (optional, Alibaba Coding Plan)
+```
+
 ### opencode
 ```
 (no standard credentials)

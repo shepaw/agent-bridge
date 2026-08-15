@@ -221,6 +221,9 @@ export {
   hubPlatformLabel,
   spawnPathPrefixes,
   kimiCliSearchPaths,
+  zcodeCliSearchPaths,
+  resolveZcodeCliBinary,
+  checkZcodeInstallStatus,
   getEngineSetupGuide,
   resolveBinaryPath,
   resolveEngineAvailability,
@@ -251,6 +254,14 @@ export {
   validateCustomEngineId,
 } from './engines.js';
 export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo, EngineOverrideInstanceion } from './engines.js';
+export {
+  BUILTIN_ENGINE_BY_ID,
+  BUILTIN_ENGINE_CATALOG,
+  acpCommandForEngine,
+  findBuiltinEngineDefinition,
+  isBuiltinEngineId,
+} from './engine-catalog.js';
+export type { BuiltinEngineDefinition, BuiltinEngineEnvHint } from './engine-catalog.js';
 export {
   catalogModesWire,
   defaultSessionModeId,

@@ -139,16 +139,21 @@ Recommended Node is 20 (see repo `.nvmrc` / Docker `node:20`).
 
 ## Supported upstream agents
 
+Built-in `--engine` ids match Hub's catalog (Paseo's 39 providers plus OpenClaw,
+ZCode, and DeepSeek Harness). Common ones:
+
 | `--engine`   | Upstream command |
 |-------------|------------------|
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp@latest` |
-| `codebuddy`   | `codebuddy --acp` |
 | `codex`       | `npx -y @agentclientprotocol/codex-acp@latest` |
-| `opencode`    | `npx opencode-ai@latest acp` |
-| `openclaw`    | `npx openclaw acp` |
 | `cursor`      | `agent acp` |
-| `hermes`      | `hermes acp` |
-| `kimi`        | `kimi acp` |
+| `gemini`      | `npx -y @google/gemini-cli@latest --acp` |
+| `copilot`     | `copilot --acp` |
+| `pi`          | `npx -y pi-acp` |
+| `qwen-code`   | `qwen --acp` |
+
+See `agent-hub/core/src/engine-catalog.ts` for the full list. Unknown ids can
+still be launched with `--acp-command`.
 
 ## Quick start
 

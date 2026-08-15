@@ -34,7 +34,8 @@ const ALIASES: Readonly<Record<string, readonly string[]>> = {
   plan: ['plan', 'architect'],
   ask: ['ask', 'read', 'readonly', 'chat'],
   default: ['default', 'onrequest'],
-  acceptedits: ['acceptedits'],
+  acceptedits: ['acceptedits', 'autoedit', 'auto-edit'],
+  autoedit: ['autoedit', 'auto-edit', 'acceptedits'],
   dontask: ['dontask'],
   bypasspermissions: ['bypasspermissions'],
   onrequest: ['onrequest', 'default', 'ask'],
@@ -42,6 +43,11 @@ const ALIASES: Readonly<Record<string, readonly string[]>> = {
   never: ['never', 'fullauto'],
   untrusted: ['untrusted'],
   build: ['build', 'agent', 'code'],
+  edit: ['edit', 'autoedit'],
+  yolo: ['yolo', 'fullaccess'],
+  readonly: ['readonly', 'read-only', 'ask'],
+  workspacewrite: ['workspacewrite', 'workspace-write'],
+  dangerfullaccess: ['dangerfullaccess', 'danger-full-access', 'unrestricted', 'never'],
 };
 
 function normalize(raw: string): string {
@@ -115,6 +121,31 @@ export function cursorRunModeSpawnArgs(
   } else if (key === 'unrestricted' || key === 'yolo' || key === 'force') {
     if (!has('--force') && !has('--yolo')) args.unshift('--force');
   }
+  return args;
+}
+
+const QWEN_APPROVAL_MODE_BY_KEY: Readonly<Record<string, string>> = {
+  plan: 'plan',
+  default: 'default',
+  autoedit: 'auto-edit',
+  acceptedits: 'auto-edit',
+  auto: 'auto',
+  yolo: 'yolo',
+  unrestricted: 'yolo',
+  bypasspermissions: 'yolo',
+};
+
+/** Extra `qwen --acp` argv for a Qwen Code approval mode (Hub `PAW_ACP_SESSION_MODE`). */
+export function qwenApprovalModeSpawnArgs(
+  mode: string | undefined,
+  existingArgs: readonly string[],
+): string[] {
+  if (mode === undefined) return [...existingArgs];
+  const args = [...existingArgs];
+  if (args.includes('--approval-mode')) return args;
+  const mapped = QWEN_APPROVAL_MODE_BY_KEY[normalize(mode)];
+  if (mapped === undefined) return args;
+  args.push('--approval-mode', mapped);
   return args;
 }
 

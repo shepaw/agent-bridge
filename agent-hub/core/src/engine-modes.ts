@@ -85,6 +85,48 @@ const OPENCODE_MODES: EngineSessionModeCatalog = {
   ],
 };
 
+/**
+ * ZCode execution modes advertised by zcode-acp-server (`plan`/`build`/`edit`/`yolo`).
+ * @see https://zcode.z.ai/en/docs/agents
+ */
+const ZCODE_MODES: EngineSessionModeCatalog = {
+  defaultModeId: 'build',
+  modes: [
+    { id: 'plan', name: 'Plan', description: '先规划，确认后再改代码' },
+    { id: 'build', name: 'Build', description: '改文件和命令前询问' },
+    { id: 'edit', name: 'Edit', description: '自动接受文件编辑，命令仍需确认' },
+    { id: 'yolo', name: 'YOLO', description: '减少确认，持续自动执行' },
+  ],
+};
+
+/**
+ * DeepSeek Harness sandbox / permission presets (`DSH_PERMISSION_MODE`).
+ * ACP itself does not advertise modes; Hub injects the env at spawn.
+ */
+const DEEPSEEK_HARNESS_MODES: EngineSessionModeCatalog = {
+  defaultModeId: 'workspace-write',
+  modes: [
+    { id: 'read-only', name: 'Read only', description: '禁止写入工作区文件' },
+    { id: 'workspace-write', name: 'Workspace write', description: '写入限于工作区与临时目录，其余询问' },
+    { id: 'danger-full-access', name: 'Full access', description: '跳过沙箱与审批（仅隔离环境）' },
+  ],
+};
+
+/**
+ * Qwen Code approval modes advertised over ACP (`session/set_mode`).
+ * @see https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/
+ */
+const QWEN_MODES: EngineSessionModeCatalog = {
+  defaultModeId: 'auto',
+  modes: [
+    { id: 'plan', name: 'Plan', description: '只分析规划，不改文件、不跑命令' },
+    { id: 'default', name: 'Ask Permissions', description: '文件编辑和命令均需确认' },
+    { id: 'auto-edit', name: 'Auto-edit', description: '自动接受文件编辑，命令仍需确认' },
+    { id: 'auto', name: 'Auto', description: '分类器自动放行安全操作，高风险仍拦截' },
+    { id: 'yolo', name: 'YOLO', description: '跳过几乎所有确认（仅隔离环境）' },
+  ],
+};
+
 const EMPTY_CATALOG: EngineSessionModeCatalog = {
   defaultModeId: undefined,
   modes: [],
@@ -99,6 +141,9 @@ const BY_ENGINE: Record<string, EngineSessionModeCatalog> = {
   hermes: EMPTY_CATALOG,
   kimi: EMPTY_CATALOG,
   codebuddy: EMPTY_CATALOG,
+  zcode: ZCODE_MODES,
+  'deepseek-harness': DEEPSEEK_HARNESS_MODES,
+  'qwen-code': QWEN_MODES,
 };
 
 export function getEngineSessionCatalog(engineId: string): EngineSessionModeCatalog {

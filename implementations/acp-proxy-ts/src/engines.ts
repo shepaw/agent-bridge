@@ -10,7 +10,7 @@
  */
 
 import { parseShellCommand } from './command-line.js';
-import { cursorRunModeSpawnArgs, requestedSessionMode } from './session-mode.js';
+import { cursorRunModeSpawnArgs, qwenApprovalModeSpawnArgs, requestedSessionMode } from './session-mode.js';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -24,7 +24,41 @@ export type BuiltinEngineId =
   | 'openclaw'
   | 'cursor'
   | 'hermes'
-  | 'kimi';
+  | 'kimi'
+  | 'deepseek-harness'
+  | 'zcode'
+  | 'qwen-code'
+  | 'pi'
+  | 'copilot'
+  | 'gemini'
+  | 'agoragentic'
+  | 'amp'
+  | 'auggie'
+  | 'autohand'
+  | 'cline'
+  | 'codewhale'
+  | 'cortex-code'
+  | 'corust-agent'
+  | 'crow-cli'
+  | 'deepagents'
+  | 'dimcode'
+  | 'dirac'
+  | 'factory-droid'
+  | 'fast-agent'
+  | 'glm'
+  | 'goose'
+  | 'grok'
+  | 'junie'
+  | 'kilo'
+  | 'minion-code'
+  | 'mistral-vibe'
+  | 'nova'
+  | 'poolside'
+  | 'qoder'
+  | 'sigit'
+  | 'stakpak'
+  | 'traecli'
+  | 'vtcode';
 
 /** @deprecated Use BuiltinEngineId — kept for existing imports. */
 export type AcpEngineId = BuiltinEngineId;
@@ -36,6 +70,8 @@ export interface AcpEngineSpec {
   readonly args: ReadonlyArray<string>;
   /** Default Shepaw agent card name when --name is not supplied. */
   readonly defaultAgentName: string;
+  /** Default env injected at ACP spawn (caller env wins). */
+  readonly spawnEnv?: Readonly<Record<string, string>>;
 }
 
 export interface ResolveEngineSpecOptions {
@@ -104,6 +140,257 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     command: 'kimi',
     args: ['acp'],
     defaultAgentName: 'Kimi CLI',
+  },
+  zcode: {
+    id: 'zcode',
+    displayName: 'ZCode',
+    command: 'npx',
+    // Community ACP adapter that launches `zcode app-server --stdio`.
+    // Injects ZCODE_BIN at spawn when the desktop CLI is off PATH.
+    args: ['-y', 'zcode-acp-server@latest'],
+    defaultAgentName: 'ZCode',
+  },
+  'deepseek-harness': {
+    id: 'deepseek-harness',
+    displayName: 'DeepSeek Harness',
+    command: 'npx',
+    // Official ACP stdio bin (`dsh-acp-demo`). Needs DEEPSEEK_API_KEY and a
+    // cordis.yml in the instance cwd (see Hub engine setup).
+    args: ['-y', '@deepseek-ai/dsh-acp-demo@latest'],
+    defaultAgentName: 'DeepSeek Harness',
+  },
+  'qwen-code': {
+    id: 'qwen-code',
+    displayName: 'Qwen Code',
+    command: 'qwen',
+    args: ['--acp'],
+    defaultAgentName: 'Qwen Code',
+  },
+  pi: {
+    id: 'pi',
+    displayName: 'Pi',
+    command: 'npx',
+    args: ['-y', 'pi-acp'],
+    defaultAgentName: 'Pi',
+  },
+  copilot: {
+    id: 'copilot',
+    displayName: 'GitHub Copilot',
+    command: 'copilot',
+    args: ['--acp'],
+    defaultAgentName: 'GitHub Copilot',
+  },
+  gemini: {
+    id: 'gemini',
+    displayName: 'Gemini CLI',
+    command: 'npx',
+    args: ['-y', '@google/gemini-cli@latest', '--acp'],
+    defaultAgentName: 'Gemini CLI',
+  },
+  agoragentic: {
+    id: 'agoragentic',
+    displayName: 'Agoragentic',
+    command: 'npx',
+    args: ['-y', 'agoragentic-mcp@latest', '--acp'],
+    defaultAgentName: 'Agoragentic',
+  },
+  amp: {
+    id: 'amp',
+    displayName: 'Amp',
+    command: 'amp-acp',
+    args: [],
+    defaultAgentName: 'Amp',
+  },
+  auggie: {
+    id: 'auggie',
+    displayName: 'Auggie CLI',
+    command: 'npx',
+    args: ['-y', '@augmentcode/auggie@latest', '--acp'],
+    defaultAgentName: 'Auggie CLI',
+    spawnEnv: { AUGMENT_DISABLE_AUTO_UPDATE: '1' },
+  },
+  autohand: {
+    id: 'autohand',
+    displayName: 'Autohand Code',
+    command: 'npx',
+    args: ['-y', '@autohandai/autohand-acp@latest'],
+    defaultAgentName: 'Autohand Code',
+  },
+  cline: {
+    id: 'cline',
+    displayName: 'Cline',
+    command: 'npx',
+    args: ['-y', 'cline@latest', '--acp'],
+    defaultAgentName: 'Cline',
+  },
+  codewhale: {
+    id: 'codewhale',
+    displayName: 'CodeWhale',
+    command: 'codewhale',
+    args: ['serve', '--acp'],
+    defaultAgentName: 'CodeWhale',
+  },
+  'cortex-code': {
+    id: 'cortex-code',
+    displayName: 'Cortex Code',
+    command: 'cortex',
+    args: ['acp', 'serve'],
+    defaultAgentName: 'Cortex Code',
+  },
+  'corust-agent': {
+    id: 'corust-agent',
+    displayName: 'Corust Agent',
+    command: 'corust-agent-acp',
+    args: [],
+    defaultAgentName: 'Corust Agent',
+  },
+  'crow-cli': {
+    id: 'crow-cli',
+    displayName: 'crow-cli',
+    command: 'crow-cli',
+    args: ['acp'],
+    defaultAgentName: 'crow-cli',
+  },
+  deepagents: {
+    id: 'deepagents',
+    displayName: 'DeepAgents',
+    command: 'npx',
+    args: ['-y', 'deepagents-acp@latest'],
+    defaultAgentName: 'DeepAgents',
+  },
+  dimcode: {
+    id: 'dimcode',
+    displayName: 'DimCode',
+    command: 'npx',
+    args: ['-y', 'dimcode@latest', 'acp'],
+    defaultAgentName: 'DimCode',
+  },
+  dirac: {
+    id: 'dirac',
+    displayName: 'Dirac',
+    command: 'npx',
+    args: ['-y', 'dirac-cli@latest', '--acp'],
+    defaultAgentName: 'Dirac',
+  },
+  'factory-droid': {
+    id: 'factory-droid',
+    displayName: 'Factory Droid',
+    command: 'npx',
+    args: ['-y', 'droid@latest', 'exec', '--output-format', 'acp-daemon'],
+    defaultAgentName: 'Factory Droid',
+    spawnEnv: {
+      DROID_DISABLE_AUTO_UPDATE: 'true',
+      FACTORY_DROID_AUTO_UPDATE_ENABLED: 'false',
+    },
+  },
+  'fast-agent': {
+    id: 'fast-agent',
+    displayName: 'fast-agent',
+    command: 'uvx',
+    args: ['--from', 'fast-agent-acp', 'fast-agent-acp', '-x'],
+    defaultAgentName: 'fast-agent',
+  },
+  glm: {
+    id: 'glm',
+    displayName: 'GLM Agent',
+    command: 'npx',
+    args: ['-y', 'glm-acp-agent@latest'],
+    defaultAgentName: 'GLM Agent',
+  },
+  goose: {
+    id: 'goose',
+    displayName: 'goose',
+    command: 'goose',
+    args: ['acp'],
+    defaultAgentName: 'goose',
+  },
+  grok: {
+    id: 'grok',
+    displayName: 'Grok',
+    command: 'grok',
+    args: ['agent', 'stdio'],
+    defaultAgentName: 'Grok',
+  },
+  junie: {
+    id: 'junie',
+    displayName: 'Junie',
+    command: 'junie',
+    args: ['--acp', 'true'],
+    defaultAgentName: 'Junie',
+  },
+  kilo: {
+    id: 'kilo',
+    displayName: 'Kilo',
+    command: 'kilo',
+    args: ['acp'],
+    defaultAgentName: 'Kilo',
+  },
+  'minion-code': {
+    id: 'minion-code',
+    displayName: 'Minion Code',
+    command: 'uvx',
+    args: ['--from', 'minion-code', 'minion-code', 'acp'],
+    defaultAgentName: 'Minion Code',
+  },
+  'mistral-vibe': {
+    id: 'mistral-vibe',
+    displayName: 'Mistral Vibe',
+    command: 'vibe-acp',
+    args: [],
+    defaultAgentName: 'Mistral Vibe',
+  },
+  nova: {
+    id: 'nova',
+    displayName: 'Nova',
+    command: 'npx',
+    args: ['-y', '@compass-ai/nova@latest', 'acp'],
+    defaultAgentName: 'Nova',
+  },
+  poolside: {
+    id: 'poolside',
+    displayName: 'Poolside',
+    command: 'pool',
+    args: ['acp'],
+    defaultAgentName: 'Poolside',
+  },
+  qoder: {
+    id: 'qoder',
+    displayName: 'Qoder CLI',
+    command: 'npx',
+    args: ['-y', '@qoder-ai/qodercli@latest', '--acp'],
+    defaultAgentName: 'Qoder CLI',
+  },
+  sigit: {
+    id: 'sigit',
+    displayName: 'siGit Code',
+    command: 'sigit',
+    args: [],
+    defaultAgentName: 'siGit Code',
+  },
+  stakpak: {
+    id: 'stakpak',
+    displayName: 'Stakpak',
+    command: 'stakpak',
+    args: ['acp'],
+    defaultAgentName: 'Stakpak',
+  },
+  traecli: {
+    id: 'traecli',
+    displayName: 'TRAE CLI',
+    command: 'traecli',
+    args: ['acp', 'serve'],
+    defaultAgentName: 'TRAE CLI',
+  },
+  vtcode: {
+    id: 'vtcode',
+    displayName: 'VT Code',
+    command: 'vtcode',
+    args: ['acp'],
+    defaultAgentName: 'VT Code',
+    spawnEnv: {
+      VT_ACP_ENABLED: '1',
+      VT_ACP_ZED_ENABLED: '1',
+    },
   },
 };
 
@@ -246,6 +533,31 @@ export function resolveCodexCliBinary(): string | null {
   return null;
 }
 
+/**
+ * Prefer `ZCODE_BIN`, then PATH `zcode`, then the ZCode desktop bundled
+ * `zcode.cjs`. `zcode-acp-server` uses ZCODE_BIN when set.
+ */
+export function resolveZcodeCliBinary(): string | null {
+  const fromEnv = process.env.ZCODE_BIN?.trim();
+  if (fromEnv !== undefined && fromEnv.length > 0 && existsSync(fromEnv)) {
+    return fromEnv;
+  }
+  const found = whichBinary('zcode');
+  if (found !== null) return found;
+  const bundled =
+    process.platform === 'darwin'
+      ? '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
+      : process.platform === 'win32'
+        ? join(process.env.LOCALAPPDATA ?? '', 'Programs', 'ZCode', 'resources', 'glm', 'zcode.cjs')
+        : join(homedir(), 'ZCode', 'resources', 'glm', 'zcode.cjs');
+  if (bundled.length > 0 && existsSync(bundled)) return bundled;
+  if (process.platform === 'linux') {
+    const opt = '/opt/ZCode/resources/glm/zcode.cjs';
+    if (existsSync(opt)) return opt;
+  }
+  return null;
+}
+
 /** Resolve npx on Windows (.cmd shim); resolve Cursor CLI binary at spawn time. */
 export function spawnCommand(
   spec: AcpEngineSpec,
@@ -262,8 +574,14 @@ export function spawnCommand(
     }
     args = cursorRunModeSpawnArgs(requestedSessionMode(env), args);
   }
+  if (spec.id === 'qwen-code') {
+    args = qwenApprovalModeSpawnArgs(requestedSessionMode(env), args);
+  }
   if (command === 'npx' && process.platform === 'win32') {
     return { command: 'npx.cmd', args };
+  }
+  if (command === 'uvx' && process.platform === 'win32') {
+    return { command: 'uvx.exe', args };
   }
   return { command, args };
 }

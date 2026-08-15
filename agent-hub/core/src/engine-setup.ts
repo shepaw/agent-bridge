@@ -8,6 +8,13 @@ import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  acpCommandForEngine,
+  BUILTIN_ENGINE_BY_ID,
+  BUILTIN_ENGINE_CATALOG,
+  formatCatalogAcpCommand,
+  type BuiltinEngineDefinition,
+} from './engine-catalog.js';
 import { findCustomEngine, isBuiltinEngine, type BuiltinAgentEngine, type CustomEngineDefinition, type EngineInfo } from './engines.js';
 
 export interface EngineSetupStep {
@@ -86,16 +93,9 @@ export interface EngineInstallResult {
 }
 
 /** Built-in upstream ACP spawn commands (mirrors acp-proxy-ts/src/engines.ts). */
-export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = {
-  'claude-code': 'npx -y @agentclientprotocol/claude-agent-acp@latest',
-  codebuddy: 'codebuddy --acp',
-  codex: 'npx -y @agentclientprotocol/codex-acp@latest',
-  opencode: 'npx -y opencode-ai@latest acp',
-  openclaw: 'npx -y openclaw acp',
-  cursor: 'agent acp',
-  hermes: 'hermes acp',
-  kimi: 'kimi acp',
-};
+export const BUILTIN_ENGINE_ACP_COMMANDS: Record<BuiltinAgentEngine, string> = Object.fromEntries(
+  BUILTIN_ENGINE_CATALOG.map((e) => [e.id, acpCommandForEngine(e.id)]),
+) as Record<BuiltinAgentEngine, string>;
 
 const LOCAL_BIN = join(homedir(), '.local', 'bin');
 
@@ -680,7 +680,90 @@ function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatf
       };
     case 'kimi':
       return buildKimiGuide(platform);
+    case 'zcode':
+      return buildZcodeGuide(platform);
+    case 'deepseek-harness':
+      return buildDeepseekHarnessGuide(platform);
+    case 'qwen-code':
+      return buildQwenGuide(platform);
+    default:
+      return buildCatalogGuide(engineId, platform);
   }
+}
+
+function runtimeInstallStep(entry: BuiltinEngineDefinition, platform: HubPlatform): EngineSetupStep | undefined {
+  if (entry.command === 'npx' || entry.checkBinary === 'npx') {
+    return nodeInstallStep(platform);
+  }
+  if (entry.command === 'uvx' || entry.checkBinary === 'uvx') {
+    if (platform === 'win32') {
+      return {
+        title: '安装 uv',
+        description:
+          '需要 uv / uvx。可从 https://docs.astral.sh/uv 安装，或使用：powershell -c "irm https://astral.sh/uv/install.ps1 | iex"。',
+        command: 'uv --version && uvx --version',
+      };
+    }
+    return {
+      title: '安装 uv',
+      description:
+        '需要 uv / uvx。推荐：curl -LsSf https://astral.sh/uv/install.sh | sh。',
+      command: 'uv --version && uvx --version',
+    };
+  }
+  return undefined;
+}
+
+function buildCatalogGuide(engineId: BuiltinAgentEngine, platform: HubPlatform): EngineSetupGuide {
+  const entry = BUILTIN_ENGINE_BY_ID[engineId];
+  const acpCommand = formatCatalogAcpCommand(entry);
+  const platformName = hubPlatformLabel(platform);
+  const runtimeStep = runtimeInstallStep(entry, platform);
+  const steps: EngineSetupStep[] = [];
+  if (runtimeStep !== undefined) steps.push(runtimeStep);
+
+  if (entry.installable && entry.installCommand !== undefined) {
+    steps.push({
+      title: `安装 / 预热 ${entry.displayName}`,
+      description: `一键安装会在 Hub 所在的 ${platformName} 上执行该命令。首次对话时也可能自动拉取。`,
+      command: entry.installCommand,
+    });
+  } else {
+    steps.push({
+      title: `安装 ${entry.displayName} CLI`,
+      description:
+        entry.docsUrl !== undefined
+          ? `按官方文档在 ${platformName} 上安装，并确保 \`${entry.checkBinary}\` 在 PATH 中。`
+          : `安装上游 CLI，并确保 \`${entry.checkBinary}\` 在 PATH 中。`,
+      command: `${entry.checkBinary} --version`,
+    });
+  }
+
+  steps.push({
+    title: '验证 ACP',
+    description: `Gateway 通过 \`${acpCommand}\` 启动子进程。进程应保持运行（Ctrl+C 退出）。`,
+    command: acpCommand,
+  });
+
+  if ((entry.requiredEnvVars ?? []).length > 0) {
+    steps.push({
+      title: '配置凭据',
+      description: '在下方「默认环境变量」按需添加该引擎所需的键值；实例侧也可覆盖。',
+    });
+  }
+
+  return {
+    engineId,
+    summary: `${entry.description}（${platformName}）。`,
+    acpCommand,
+    ...(entry.docsUrl !== undefined ? { docsUrl: entry.docsUrl } : {}),
+    checkBinary: entry.checkBinary,
+    ...(entry.checkPaths !== undefined ? { checkPaths: entry.checkPaths } : {}),
+    installable: entry.installable,
+    ...(entry.installCommand !== undefined ? { installCommand: entry.installCommand } : {}),
+    ...(entry.requiredEnvVars !== undefined ? { requiredEnvVars: entry.requiredEnvVars } : {}),
+    steps,
+  };
 }
 
 const KIMI_INSTALL_UNIX = 'curl -LsSf https://code.kimi.com/install.sh | bash';
@@ -742,6 +825,266 @@ function buildKimiGuide(platform: HubPlatform): EngineSetupGuide {
         title: '验证 ACP',
         description: 'Gateway 通过 kimi acp 子进程接入；进程应保持运行（Ctrl+C 退出）。',
         command: 'kimi acp',
+      },
+    ],
+  };
+}
+
+/**
+ * ZCode CLI is bundled inside the desktop app (`zcode.cjs`) and is often
+ * absent from PATH. `zcode-acp-server` reads `ZCODE_BIN` when set.
+ */
+export function zcodeCliSearchPaths(platform: HubPlatform = detectHubPlatform()): string[] {
+  const paths: string[] = [LOCAL_BIN];
+  if (platform === 'darwin') {
+    paths.push('/Applications/ZCode.app/Contents/Resources/glm');
+    paths.push('/opt/homebrew/bin', '/usr/local/bin');
+  }
+  if (platform === 'linux') {
+    paths.push('/opt/ZCode/resources/glm');
+    paths.push(join(homedir(), 'ZCode', 'resources', 'glm'));
+  }
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      paths.push(join(localAppData, 'Programs', 'ZCode', 'resources', 'glm'));
+    }
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) {
+      paths.push(join(userProfile, '.local', 'bin'));
+    }
+  }
+  return paths;
+}
+
+function zcodeBundledRuntimePath(platform: HubPlatform): string | null {
+  if (platform === 'darwin') {
+    return '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs';
+  }
+  if (platform === 'linux') {
+    const candidates = [
+      '/opt/ZCode/resources/glm/zcode.cjs',
+      join(homedir(), 'ZCode', 'resources', 'glm', 'zcode.cjs'),
+    ];
+    return candidates.find((p) => existsSync(p)) ?? candidates[0]!;
+  }
+  const localAppData = process.env.LOCALAPPDATA;
+  if (localAppData) {
+    return join(localAppData, 'Programs', 'ZCode', 'resources', 'glm', 'zcode.cjs');
+  }
+  return null;
+}
+
+/** Prefer `ZCODE_BIN`, then PATH `zcode`, then the desktop-app bundled `zcode.cjs`. */
+export function resolveZcodeCliBinary(
+  platform: HubPlatform = detectHubPlatform(),
+): string | null {
+  const fromEnv = process.env.ZCODE_BIN?.trim();
+  if (fromEnv !== undefined && fromEnv.length > 0) {
+    const expanded = expandHome(fromEnv);
+    if (existsSync(expanded)) return expanded;
+  }
+
+  const onPath = resolveBinaryPath('zcode', [...spawnPathPrefixes(platform), ...zcodeCliSearchPaths(platform)]);
+  if (onPath !== null) return onPath;
+
+  const bundled = zcodeBundledRuntimePath(platform);
+  if (bundled !== null && existsSync(bundled)) return bundled;
+  return null;
+}
+
+export function checkZcodeInstallStatus(opts: EngineProbeOptions = {}): EngineInstallStatus {
+  const cacheKey = `zcode:install:${opts.skipVersion === true ? 'nov' : 'v'}`;
+  const cached = cacheGet(installStatusCache, cacheKey);
+  if (cached !== undefined) return cached;
+
+  const binaryPath = resolveZcodeCliBinary();
+  if (binaryPath === null) {
+    return cacheSet(
+      installStatusCache,
+      cacheKey,
+      {
+        installed: false,
+        binaryPath: null,
+        version: null,
+        checkError: '未找到 ZCode 运行时（zcode / zcode.cjs）。请安装桌面版并登录，或设置 ZCODE_BIN',
+      },
+      INSTALL_STATUS_TTL_MS,
+    );
+  }
+  return cacheSet(
+    installStatusCache,
+    cacheKey,
+    {
+      installed: true,
+      binaryPath,
+      version: opts.skipVersion === true ? null : probeVersion(binaryPath, 'zcode'),
+      checkError: null,
+    },
+    INSTALL_STATUS_TTL_MS,
+  );
+}
+
+function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
+  const bundled = zcodeBundledRuntimePath(platform);
+  return {
+    engineId: 'zcode',
+    summary: `ZCode（智谱 Z.AI）通过社区 ACP 适配器 zcode-acp-server 接入；需要本机 ZCode 运行时与 ~/.zcode 登录凭据（${hubPlatformLabel(platform)}）。适配器要求 Node.js ≥ 22。`,
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS.zcode,
+    docsUrl: 'https://zcode.z.ai/en/docs/install',
+    checkBinary: 'zcode',
+    checkPaths: zcodeCliSearchPaths(platform),
+    installable: false,
+    requiredEnvVars: [
+      {
+        key: 'ZCODE_BIN',
+        description: 'ZCode CLI / zcode.cjs 路径（桌面版未加入 PATH 时填写）',
+        optional: true,
+      },
+      {
+        key: 'ZCODE_MODEL',
+        description: '覆盖默认模型 ID',
+        optional: true,
+      },
+      {
+        key: 'ZCODE_BASE_URL',
+        description: '覆盖模型服务 Base URL',
+        optional: true,
+      },
+    ],
+    steps: [
+      {
+        title: '安装 ZCode 桌面版并登录',
+        description:
+          `从 https://zcode.z.ai 安装 ZCode，完成 Connect Z.ai / BigModel / API Key。凭据写入 ~/.zcode/v2/config.json。` +
+          (bundled !== null ? ` 内置 CLI 通常位于 ${bundled}。` : ''),
+      },
+      {
+        title: '安装 Node.js 22+',
+        description:
+          'zcode-acp-server 需要 Node.js ≥ 22（node:sqlite）。Hub 会通过 npx 拉取适配器。',
+        command: 'node --version && npx --version',
+      },
+      {
+        title: '验证运行时',
+        description:
+          '优先使用 PATH 上的 zcode；否则设置 ZCODE_BIN 指向桌面应用内的 zcode.cjs。Gateway 启动时会自动注入。',
+        command: bundled !== null ? `ls "${bundled}"` : 'which zcode',
+      },
+    ],
+  };
+}
+
+function buildDeepseekHarnessGuide(platform: HubPlatform): EngineSetupGuide {
+  return {
+    engineId: 'deepseek-harness',
+    summary: `DeepSeek Harness 通过官方 ACP stdio 入口 @deepseek-ai/dsh-acp-demo 接入（${hubPlatformLabel(platform)}）。需要 Node.js 22.19+、DEEPSEEK_API_KEY，以及实例工作目录中的 cordis.yml。`,
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['deepseek-harness'],
+    docsUrl: 'https://github.com/deepseek-ai/deepseek-harness',
+    checkBinary: 'npx',
+    installable: true,
+    installCommand: 'npx -y -p @deepseek-ai/dsh-acp-demo@latest node -e "process.exit(0)"',
+    requiredEnvVars: [
+      {
+        key: 'DEEPSEEK_API_KEY',
+        description: 'DeepSeek API Key（https://platform.deepseek.com）',
+      },
+      {
+        key: 'DEEPSEEK_BASE_URL',
+        description: '自定义 API Base URL（默认 https://api.deepseek.com）',
+        optional: true,
+      },
+    ],
+    steps: [
+      {
+        title: '安装 Node.js 22.19+',
+        description:
+          'DeepSeek Harness 要求 Node.js 22.19+ 或 24+。可用 nvm / Homebrew / 发行版包管理器，或从 https://nodejs.org 安装。',
+        command: 'node --version && npx --version',
+      },
+      {
+        title: '配置 DeepSeek 凭据',
+        description:
+          '在下方「默认环境变量」添加 DEEPSEEK_API_KEY。自定义网关可另加 DEEPSEEK_BASE_URL。',
+      },
+      {
+        title: '准备 ACP 组合配置',
+        description:
+          'dsh-acp-demo 默认读取实例工作目录下的 cordis.yml。可从官方仓库 examples/acp-agent/cordis.yml 复制到项目根目录。权限预设由环境变量 DSH_PERMISSION_MODE 控制（read-only / workspace-write / danger-full-access）。',
+        command:
+          'curl -fsSL https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/examples/acp-agent/cordis.yml -o cordis.yml',
+      },
+      {
+        title: '预热 ACP 包（可选）',
+        description: '首次启动也会自动下载；一键安装会预先拉取 @deepseek-ai/dsh-acp-demo。',
+        command: 'npx -y -p @deepseek-ai/dsh-acp-demo@latest node -e "process.exit(0)"',
+      },
+    ],
+  };
+}
+
+const QWEN_INSTALL_UNIX =
+  'curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash';
+const QWEN_INSTALL_WIN32 =
+  "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm 'https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1' | iex\"";
+
+function buildQwenGuide(platform: HubPlatform): EngineSetupGuide {
+  const installCommand = platform === 'win32' ? QWEN_INSTALL_WIN32 : QWEN_INSTALL_UNIX;
+  const installStepCommand =
+    platform === 'win32'
+      ? "irm 'https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1' | iex"
+      : QWEN_INSTALL_UNIX;
+
+  return {
+    engineId: 'qwen-code',
+    summary: `Qwen Code 原生支持 ACP（qwen --acp）；需安装 qwen CLI 并配置模型凭据（${hubPlatformLabel(platform)}）。官方独立安装包会放到 ~/.local/bin。`,
+    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['qwen-code'],
+    docsUrl: 'https://github.com/QwenLM/qwen-code',
+    checkBinary: 'qwen',
+    checkPaths: [LOCAL_BIN],
+    installable: true,
+    installCommand,
+    requiredEnvVars: [
+      {
+        key: 'OPENAI_API_KEY',
+        description: 'OpenAI 兼容 API Key（已用 qwen /auth 或 ~/.qwen/settings.json 配置时可省略）',
+        optional: true,
+      },
+      {
+        key: 'OPENAI_BASE_URL',
+        description: '自定义 API 端点（如 DashScope / Coding Plan / OpenRouter）',
+        optional: true,
+      },
+      {
+        key: 'OPENAI_MODEL',
+        description: '默认模型 ID（如 qwen3-coder-plus）',
+        optional: true,
+      },
+      {
+        key: 'BAILIAN_CODING_PLAN_API_KEY',
+        description: '阿里云百炼 Coding Plan Key（使用 Coding Plan 端点时）',
+        optional: true,
+      },
+    ],
+    steps: [
+      {
+        title: '安装 Qwen Code CLI',
+        description:
+          platform === 'win32'
+            ? '在 PowerShell 中运行官方独立安装脚本（安装到用户目录）。也可：npm install -g @qwen-code/qwen-code@latest（需 Node.js 22+）。'
+            : '运行官方独立安装脚本（安装到 ~/.local/bin/qwen）。也可：npm install -g @qwen-code/qwen-code@latest 或 brew install qwen-code（需 Node.js 22+）。',
+        command: installStepCommand,
+      },
+      {
+        title: '配置认证',
+        description:
+          '交互式运行 qwen 后执行 /auth（阿里云百炼 / 第三方 / 自定义端点）。ACP / 无头模式请在下方配置 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL，或使用 ~/.qwen/settings.json。',
+        command: 'qwen',
+      },
+      {
+        title: '验证 ACP',
+        description: 'Gateway 通过 qwen --acp 子进程接入；进程应保持运行（Ctrl+C 退出）。',
+        command: 'qwen --acp',
       },
     ],
   };
@@ -961,6 +1304,9 @@ export function checkEngineInstallStatus(
 ): EngineInstallStatus {
   if (engineId === 'cursor') {
     return checkCursorInstallStatus(opts);
+  }
+  if (engineId === 'zcode') {
+    return checkZcodeInstallStatus(opts);
   }
 
   const cacheKey = `engine:${engineId}:${platform}:${opts.skipVersion === true ? 'nov' : 'v'}`;

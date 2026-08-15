@@ -15,7 +15,7 @@ import { TaskCancelledError } from 'shepaw-acp-sdk';
 import type { ModelsListResult, ModelsSetCurrentResult, ModesListResult, ModesSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
-import { resolveCodexCliBinary, spawnCommand } from './engines.js';
+import { resolveCodexCliBinary, resolveZcodeCliBinary, spawnCommand } from './engines.js';
 import { loadUpstreamSessionTranscript } from './session-history.js';
 import {
   buildSetModelResult,
@@ -450,6 +450,33 @@ export class AcpSubprocess {
         log('CODEX_PATH unset; using local Codex CLI: %s', codexBin);
       }
     }
+    if (
+      this.spec.id === 'zcode' &&
+      (mergedEnv.ZCODE_BIN === undefined || mergedEnv.ZCODE_BIN.length === 0)
+    ) {
+      const zcodeBin = resolveZcodeCliBinary();
+      if (zcodeBin !== null) {
+        mergedEnv.ZCODE_BIN = zcodeBin;
+        log('ZCODE_BIN unset; using local ZCode runtime: %s', zcodeBin);
+      }
+    }
+    if (this.spec.id === 'deepseek-harness') {
+      const mode = requestedSessionMode(mergedEnv);
+      if (
+        mode !== undefined &&
+        (mergedEnv.DSH_PERMISSION_MODE === undefined || mergedEnv.DSH_PERMISSION_MODE.length === 0)
+      ) {
+        mergedEnv.DSH_PERMISSION_MODE = mode;
+        log('DSH_PERMISSION_MODE unset; using Hub session mode: %s', mode);
+      }
+    }
+    if (this.spec.spawnEnv !== undefined) {
+      for (const [key, value] of Object.entries(this.spec.spawnEnv)) {
+        if (mergedEnv[key] === undefined || mergedEnv[key] === '') {
+          mergedEnv[key] = value;
+        }
+      }
+    }
 
     const { command, args } = spawnCommand(this.spec, mergedEnv);
     log('spawning ACP agent: %s %s (cwd=%s)', command, args.join(' '), this.cwd);
@@ -492,6 +519,12 @@ export class AcpSubprocess {
       } else if (this.spec.id === 'codex') {
         hint =
           ' — install Codex CLI (`npm i -g @openai/codex`) or set CODEX_PATH; run `codex login` if needed';
+      } else if (this.spec.id === 'zcode') {
+        hint =
+          ' — install ZCode (https://zcode.z.ai) or set ZCODE_BIN; sign in so ~/.zcode/v2/config.json exists';
+      } else if (this.spec.id === 'deepseek-harness') {
+        hint =
+          ' — set DEEPSEEK_API_KEY; put cordis.yml in the instance cwd (see Hub engine setup)';
       }
       const detail = stderrTail.trim().length > 0 ? ` stderr: ${summarizeStderr(stderrTail)}` : '';
       return new Error(`ACP agent exited (${code ?? signal})${hint}${detail}`);

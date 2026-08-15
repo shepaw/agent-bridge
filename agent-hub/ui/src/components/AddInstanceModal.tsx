@@ -9,7 +9,7 @@ import { SessionModeSelect } from './SessionModeSelect.js';
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'codex',
-  'opencode', 'openclaw', 'cursor', 'hermes', 'kimi',
+  'opencode', 'openclaw', 'cursor', 'hermes', 'kimi', 'zcode', 'deepseek-harness', 'qwen-code',
 ];
 
 /** Survives modal unmount so closing without submit keeps the draft. */

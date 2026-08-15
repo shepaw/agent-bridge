@@ -4,6 +4,7 @@ import type * as acp from '@agentclientprotocol/sdk';
 import {
   advertisedModesList,
   cursorRunModeSpawnArgs,
+  qwenApprovalModeSpawnArgs,
   findModeConfigOption,
   matchRequestedModeId,
   planRequestedMode,
@@ -240,6 +241,27 @@ describe('cursorRunModeSpawnArgs', () => {
 
   it('does not duplicate flags', () => {
     expect(cursorRunModeSpawnArgs('auto-review', ['--auto-review', 'acp'])).toEqual(['--auto-review', 'acp']);
+  });
+});
+
+describe('qwenApprovalModeSpawnArgs', () => {
+  it('appends --approval-mode for catalog ids', () => {
+    expect(qwenApprovalModeSpawnArgs('auto', ['--acp'])).toEqual(['--acp', '--approval-mode', 'auto']);
+    expect(qwenApprovalModeSpawnArgs('auto-edit', ['--acp'])).toEqual(['--acp', '--approval-mode', 'auto-edit']);
+    expect(qwenApprovalModeSpawnArgs('yolo', ['--acp'])).toEqual(['--acp', '--approval-mode', 'yolo']);
+  });
+
+  it('maps Claude-style aliases onto Qwen ids', () => {
+    expect(qwenApprovalModeSpawnArgs('acceptEdits', ['--acp'])).toEqual(['--acp', '--approval-mode', 'auto-edit']);
+    expect(qwenApprovalModeSpawnArgs('bypassPermissions', ['--acp'])).toEqual(['--acp', '--approval-mode', 'yolo']);
+  });
+
+  it('leaves unknown or already-set flags unchanged', () => {
+    expect(qwenApprovalModeSpawnArgs(undefined, ['--acp'])).toEqual(['--acp']);
+    expect(qwenApprovalModeSpawnArgs('allowlist', ['--acp'])).toEqual(['--acp']);
+    expect(qwenApprovalModeSpawnArgs('yolo', ['--acp', '--approval-mode', 'plan'])).toEqual([
+      '--acp', '--approval-mode', 'plan',
+    ]);
   });
 });
 

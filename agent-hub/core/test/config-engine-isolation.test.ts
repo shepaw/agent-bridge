@@ -113,4 +113,56 @@ describe('hub config engine isolation', () => {
     expect(cfg.instances.find((i) => i.id === 'shepaw-kimi')?.engine).toBe('kimi');
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it('recognizes built-in zcode engine without customEngines entry', () => {
+    writeHubJson({
+      version: 1,
+      instances: [
+        {
+          id: 'shepaw-zcode',
+          label: 'ZCode',
+          engine: 'zcode',
+          cwd: home,
+          port: 18005,
+          host: '127.0.0.1',
+          baseUrl: '',
+          extraArgs: [],
+          createdAt: new Date().toISOString(),
+          envVars: {},
+        },
+      ],
+      customEngines: [],
+    });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = loadOrCreateHubConfig();
+    expect(cfg.instances.find((i) => i.id === 'shepaw-zcode')?.engine).toBe('zcode');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('recognizes built-in deepseek-harness engine without customEngines entry', () => {
+    writeHubJson({
+      version: 1,
+      instances: [
+        {
+          id: 'shepaw-dsh',
+          label: 'DeepSeek Harness',
+          engine: 'deepseek-harness',
+          cwd: home,
+          port: 18006,
+          host: '127.0.0.1',
+          baseUrl: '',
+          extraArgs: [],
+          createdAt: new Date().toISOString(),
+          envVars: {},
+        },
+      ],
+      customEngines: [],
+    });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = loadOrCreateHubConfig();
+    expect(cfg.instances.find((i) => i.id === 'shepaw-dsh')?.engine).toBe('deepseek-harness');
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

@@ -3,35 +3,23 @@
  */
 
 import { BUILTIN_ENGINE_ACP_COMMANDS, getCursorAcpCommand } from './engine-setup.js';
+import {
+  BUILTIN_ENGINE_BY_ID,
+  BUILTIN_ENGINE_IDS,
+  BUILTIN_ENGINE_LABELS,
+  type BuiltinAgentEngine,
+} from './engine-catalog.js';
 import { getEngineSessionCatalog } from './engine-modes.js';
 import { validateInstanceId } from './paths.js';
 
-export const BUILTIN_ENGINE_IDS = [
-  'codebuddy',
-  'claude-code',
-  'codex',
-  'opencode',
-  'openclaw',
-  'cursor',
-  'hermes',
-  'kimi',
-] as const;
-
-export type BuiltinAgentEngine = (typeof BUILTIN_ENGINE_IDS)[number];
+export {
+  BUILTIN_ENGINE_IDS,
+  BUILTIN_ENGINE_LABELS,
+  type BuiltinAgentEngine,
+} from './engine-catalog.js';
 
 /** @deprecated Prefer BuiltinAgentEngine — kept for existing imports. */
 export type AgentEngine = BuiltinAgentEngine | (string & {});
-
-export const BUILTIN_ENGINE_LABELS: Record<BuiltinAgentEngine, string> = {
-  codebuddy: 'CodeBuddy Code',
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-  openclaw: 'OpenClaw',
-  cursor: 'Cursor',
-  hermes: 'Hermes',
-  kimi: 'Kimi CLI',
-};
 
 export interface CustomEngineDefinition {
   readonly id: string;
@@ -53,6 +41,8 @@ export interface EngineOverrideInstanceion {
 export interface EngineInfo {
   readonly id: string;
   readonly displayName: string;
+  /** Short operator-facing blurb from the built-in catalog. */
+  readonly description?: string;
   readonly acpCommand: string;
   readonly builtin: boolean;
   /** True when an operator has disabled this engine via overrides. */
@@ -189,9 +179,11 @@ export function listEngineInfos(
 
   const builtin: EngineInfo[] = BUILTIN_ENGINE_IDS.map((id) => {
     const ov = overrides?.[id];
+    const catalog = BUILTIN_ENGINE_BY_ID[id];
     return withModes(id, {
       id,
       displayName: ov?.displayName ?? BUILTIN_ENGINE_LABELS[id],
+      description: catalog.description,
       acpCommand: id === 'cursor' ? getCursorAcpCommand() : BUILTIN_ENGINE_ACP_COMMANDS[id],
       builtin: true,
       ...(ov?.disabled && { disabled: true }),

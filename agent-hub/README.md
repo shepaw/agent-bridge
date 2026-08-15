@@ -116,7 +116,7 @@ pair the phone under **扫码配对**.
 **Options for `project add`:**
 
 ```
---engine <engine>     Gateway type: codebuddy | claude-code | codex | opencode  (default: codebuddy)
+--engine <engine>     Gateway type: built-in id (claude-code, qwen-code, …) or custom (default: codebuddy)
 --cwd <dir>           Working directory for the gateway      (default: current dir)
 --label <text>        Display name
 --port <n>            Bind port                              (default: next free from 8090)

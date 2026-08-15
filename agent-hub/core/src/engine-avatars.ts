@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { type BuiltinAgentEngine, isBuiltinEngine } from './engines.js';
+import { BUILTIN_ENGINE_IDS, type BuiltinAgentEngine, isBuiltinEngine } from './engines.js';
 
 export const GENERIC_DEFAULT_AVATAR = '🤖';
 
@@ -134,13 +134,6 @@ export function listBundledEngineAvatarIds(): string[] {
 }
 
 /** @deprecated Prefer {@link engineAvatarMarker} / {@link loadEngineAvatarPayload}. */
-export const BUILTIN_ENGINE_AVATARS: Record<BuiltinAgentEngine, string> = {
-  codebuddy: engineAvatarMarker('codebuddy'),
-  'claude-code': engineAvatarMarker('claude-code'),
-  codex: engineAvatarMarker('codex'),
-  opencode: engineAvatarMarker('opencode'),
-  openclaw: engineAvatarMarker('openclaw'),
-  cursor: engineAvatarMarker('cursor'),
-  hermes: engineAvatarMarker('hermes'),
-  kimi: engineAvatarMarker('kimi'),
-};
+export const BUILTIN_ENGINE_AVATARS: Record<BuiltinAgentEngine, string> = Object.fromEntries(
+  BUILTIN_ENGINE_IDS.map((id) => [id, engineAvatarMarker(id)]),
+) as Record<BuiltinAgentEngine, string>;

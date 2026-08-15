@@ -52,11 +52,13 @@ import {
   resolveBinaryPath,
   resolveCursorCliBinary,
   resolveEngineAvailability,
+  resolveZcodeCliBinary,
   SPAWN_PATH_PREFIXES,
 } from './engine-setup.js';
 import { loadOrCreateHubConfig, isEngineDisabled, resolveEngineEnvVars } from './config.js';
 import { hubFanoutEnvPaths } from './pairing.js';
 import { findCustomEngine, formatShellCommand, isKnownEngine } from './engines.js';
+import { findBuiltinEngineDefinition } from './engine-catalog.js';
 import { instancePaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
 import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
@@ -199,6 +201,16 @@ export async function startInstance(instance: InstanceConfig): Promise<{
           resolveBinaryPath('codex', [...SPAWN_PATH_PREFIXES]) ??
           undefined)
         : undefined;
+    const zcodeBin =
+      instance.engine === 'zcode'
+        ? (instanceEnv.ZCODE_BIN ??
+          engineEnv.ZCODE_BIN ??
+          process.env.ZCODE_BIN ??
+          resolveZcodeCliBinary() ??
+          undefined)
+        : undefined;
+
+    const catalogEnv = findBuiltinEngineDefinition(instance.engine)?.spawnEnv ?? {};
 
     const child = nodeSpawn(process.execPath, args, {
       // Detached so the child survives the hub CLI exiting. On Windows this
@@ -211,6 +223,9 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       stdio: ['ignore', logFd, logFd],
       env: augmentSpawnPath({
         ...process.env,
+        // Catalog defaults (e.g. Auggie / Droid / VT Code ACP flags). Engine
+        // and instance env below override these.
+        ...catalogEnv,
         // Engine-default credentials (engineOverrides[engine].envVars). These
         // are the base layer: a instance can override individual keys via its
         // own envVars below. Decrypted at spawn time; never on disk plaintext.
@@ -220,6 +235,7 @@ export async function startInstance(instance: InstanceConfig): Promise<{
         // argv or hub.json in plaintext. Instance values override engine defaults.
         ...instanceEnv,
         ...(codexPath !== undefined && codexPath.length > 0 ? { CODEX_PATH: codexPath } : {}),
+        ...(zcodeBin !== undefined && zcodeBin.length > 0 ? { ZCODE_BIN: zcodeBin } : {}),
         // Redirect SDK file-resolution to this instance's isolated dir.
         // These three vars are the entire integration surface between hub
         // and the unmodified gateway binaries.
