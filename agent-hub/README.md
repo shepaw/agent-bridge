@@ -49,8 +49,8 @@ shepaw-hub start <id>
 # Check status
 shepaw-hub status
 
-# Pair a mobile device (QR code in terminal)
-shepaw-hub pair <id>
+# Pair a mobile device (QR code in terminal; one scan authorizes all local agents)
+shepaw-hub pair
 
 # Diagnose setup issues
 shepaw-hub doctor
@@ -77,8 +77,8 @@ shepaw-hub web --port 8080 --host 0.0.0.0
 # Start without auto-opening browser
 shepaw-hub web --no-open
 
-# Dashboard only (do not start Peer / tunnel router)
-shepaw-hub web --no-peer --no-gateway
+# Dashboard only (do not start Peer)
+shepaw-hub web --no-peer
 ```
 
 The dashboard runs on `http://127.0.0.1:4000` by default.
@@ -100,7 +100,7 @@ pair the phone under **扫码配对**.
 |---------|-------------|
 | `shepaw-hub init` | Create `~/.config/shepaw-hub/` and `hub.json` (idempotent) |
 | `shepaw-hub doctor` | Pre-flight diagnostics: Node version, gateway package, engine CLIs, per-instance state and port conflicts. `--full` adds engine version / remote auth probes. Exits non-zero on hard failures |
-| `shepaw-hub quickstart` | Interactive onboarding: probe engines → pick one → set cwd → start on LAN (`0.0.0.0`) → print pairing QR. Flags: `--engine`, `--cwd`, `--label`, `--yes`, `--no-qr` |
+| `shepaw-hub quickstart` | Interactive onboarding: probe engines → pick one → set cwd → start instance + Peer → print `shepaw://peer` QR. Flags: `--engine`, `--cwd`, `--label`, `--yes`, `--no-qr` |
 | `shepaw-hub test [id]` | Connectivity probe. Default: HTTP `/status`. `--rpc` adds Noise WS + `agent.sessions.list`. `--chat` sends a short turn (auto-approves tools). Exits non-zero on failures |
 
 ### Project Management
@@ -146,8 +146,10 @@ pair the phone under **扫码配对**.
 
 | Command | Description |
 |---------|-------------|
-| `shepaw-hub pair <id>` | Mint a single-use pairing code + QR for the Shepaw app |
-| `shepaw-hub enroll <id>` | Alias for `pair` |
+| `shepaw-hub pair` | Mint a `shepaw://peer` pairing QR (scan in the Shepaw app Device Pairing) |
+| `shepaw-hub peer pair` | Same as `pair` |
+| `shepaw-hub gateway pair [id]` | Legacy ACP/gateway pairing QR (hub-wide, or one instance) |
+| `shepaw-hub enroll <id>` | Alias for `gateway pair <id>` |
 | `shepaw-hub enroll list <id>` | Show outstanding pairing codes |
 | `shepaw-hub enroll revoke <id> <code>` | Cancel an unused code |
 
@@ -168,7 +170,7 @@ pair the phone under **扫码配对**.
 | `shepaw-hub web --host <host>` | Custom bind host |
 | `shepaw-hub web --no-open` | Skip auto-opening browser |
 | `shepaw-hub web --no-peer` | Do not auto-start the device peer service |
-| `shepaw-hub web --no-gateway` | Do not auto-start the tunnel router |
+| `shepaw-hub web --gateway` | Also start the tunnel router if a channel is configured |
 
 ---
 
@@ -177,10 +179,9 @@ pair the phone under **扫码配对**.
 | Feature | Description |
 |---------|-------------|
 | **Project CRUD** | Add, view, update, and remove agent projects directly from the UI |
-| **QR Code + Tunnel Config** | Generate pairing codes with QR, support tunnel/proxy URLs for external connections |
+| **Pair device** | Peer QR under 扫码配对; one scan authorizes every local agent |
 | **Start / Stop** | One-click lifecycle control per project |
 | **Real-time logs** | WebSocket-streamed log viewer with auto-scroll (tail N lines) |
-| **Pair device** | Modal dialog for generating single-use enrollment codes |
 | **Peer management** | View authorized devices and revoke access |
 | **Session Resume** | List persisted Shepaw→ACP session mappings, copy session IDs, remove stale entries |
 | **Auto-refresh** | Status polling every 3 seconds — CLI and Web stay in sync |

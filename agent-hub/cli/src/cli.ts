@@ -21,8 +21,10 @@
  *   logs <id>                      Tail the gateway's stdout/stderr
  *   logs rotate <id>               Force log rotation
  *
- *   pair <id>                      Mint an enroll code, print QR + short code.
- *   enroll <id>                    Same as pair; preserved for consistency with gateway CLIs.
+ *   pair                           Mint a shepaw://peer pairing QR (scan in the Shepaw app)
+ *   peer pair                      Same as pair
+ *   gateway pair [id]              Legacy ACP/gateway pairing QR (hub-wide or one instance)
+ *   enroll <id>                    Alias for `gateway pair <id>`
  *   enroll-list <id>               List this instance's outstanding codes
  *   enroll-revoke <id> <code>      Cancel an unused code
  *
@@ -170,7 +172,7 @@ cli
   });
 
 cli
-  .command('quickstart', 'Interactive onboarding: pick engine → start agent → print pairing QR')
+  .command('quickstart', 'Interactive onboarding: pick engine → start agent → start Peer → print pairing QR')
   .option('--engine <id>', 'Skip the engine picker')
   .option('--cwd <dir>', 'Working directory (default: current dir)')
   .option('--label <text>', 'Display label (default: directory basename)')
@@ -552,7 +554,7 @@ cli
         console.log(`Started "${id}" — pid ${result.pid}, bind ${p.host}:${p.port}.`);
         const paths = instancePaths(id);
         console.log(`  log: ${paths.logFile}`);
-        console.log(`  pair: shepaw-hub pair ${id}`);
+        console.log('  pair: shepaw-hub pair');
       }
     } catch (err) {
       exitWithError(err);
@@ -723,6 +725,34 @@ function runPair(
   console.log('');
 }
 
+async function printPeerPairing(opts: { qr?: boolean } = {}): Promise<void> {
+  const start = await startPeerService();
+  if (start.relocated) {
+    console.log(`Preferred peer port was busy; listening on ${start.host}:${start.port} instead.`);
+    console.log('');
+  }
+  const res = await mintPairingQr();
+  console.log('');
+  console.log('╭──────────────────────────────────────────────╮');
+  console.log(`│  Pairing code:  ${res.code.padEnd(28, ' ')} │`);
+  console.log('╰──────────────────────────────────────────────╯');
+  console.log('');
+  console.log(`  Expires in:    ${Math.round((res.expiresAt - Date.now()) / 1000)}s`);
+  console.log(`  Local:         ${res.localEndpoint}`);
+  if (res.channelEndpoint) console.log(`  Channel:       ${res.channelEndpoint}`);
+  console.log(`  Fingerprint:   ${res.fingerprint}`);
+  console.log('');
+  console.log('  Scan with the Shepaw app (Device Pairing / Scan to Connect).');
+  console.log('  One scan authorizes every local agent on this machine.');
+  console.log('');
+  if (opts.qr !== false) {
+    qrcode.generate(res.qrPayload, { small: true }, (qr: string) => {
+      process.stdout.write(qr);
+    });
+    console.log('');
+  }
+}
+
 function runHubPair(
   opts: { label?: string; ttlMinutes?: number | string; qr?: boolean; baseUrl?: string },
 ): void {
@@ -759,7 +789,22 @@ function runHubPair(
 }
 
 cli
-  .command('pair [id]', 'Mint pairing QR (all agents if no id, else one instance)')
+  .command('pair [id]', 'Mint a shepaw://peer pairing QR (scan in the Shepaw app)')
+  .option('--label <text>', 'Unused placeholder (kept for symmetry)')
+  .option('--no-qr', 'Suppress the terminal QR code')
+  .action(async (id: string | undefined, opts: { qr?: boolean }) => {
+    try {
+      if (id !== undefined) {
+        console.log('Note: `shepaw-hub pair` uses the peer channel and authorizes every agent on this machine.');
+        console.log(`      For a per-agent ACP/gateway QR, use: shepaw-hub gateway pair ${id}`);
+        console.log('');
+      }
+      await printPeerPairing({ qr: opts.qr !== false });
+    } catch (err) { exitWithError(err); }
+  });
+
+cli
+  .command('gateway-pair [id]', 'Mint ACP/gateway pairing QR (legacy; prefer `shepaw-hub pair`)')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
   .option('--base-url <url>', 'Override public WS base URL for the QR')
@@ -775,24 +820,32 @@ cli
   });
 
 cli
-  .command('pair-instance <id>', 'Mint a pairing code + QR for one instance only')
+  .command('pair-instance <id>', 'Mint a pairing code + QR for one instance only (alias: gateway pair)')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
   .option('--base-url <url>', 'Override the instance\'s configured base URL for this pairing')
   .option('--no-qr', 'Suppress the terminal QR code')
   .action((id: string, opts: { label?: string; ttlMinutes?: number | string; baseUrl?: string; qr?: boolean }) => {
-    try { runPair(id, opts); }
+    try {
+      console.log('Note: prefer `shepaw-hub pair` (peer channel) or `shepaw-hub gateway pair <id>`.');
+      console.log('');
+      runPair(id, opts);
+    }
     catch (err) { exitWithError(err); }
   });
 
 cli
-  .command('enroll <id>', 'Alias for `pair <id>`')
+  .command('enroll <id>', 'Alias for `gateway pair <id>`')
   .option('--label <text>', 'Label to record on the peer that redeems the code')
   .option('--ttl-minutes <n>', 'Override token TTL (default: 10)', { default: 10 })
   .option('--base-url <url>', 'Override the instance\'s configured base URL for this pairing')
   .option('--no-qr', 'Suppress the terminal QR code')
   .action((id: string, opts: { label?: string; ttlMinutes?: number | string; baseUrl?: string; qr?: boolean }) => {
-    try { runPair(id, opts); }
+    try {
+      console.log('Note: prefer `shepaw-hub pair` (peer channel). This command is `gateway pair`.');
+      console.log('');
+      runPair(id, opts);
+    }
     catch (err) { exitWithError(err); }
   });
 
@@ -806,7 +859,7 @@ cli
       const store = loadOrCreateEnrollments({ path: paths.enrollmentsPath });
       if (store.tokens.length === 0) {
         console.log(`No outstanding pairing codes for "${id}".`);
-        console.log(`Mint one: shepaw-hub pair ${id}`);
+        console.log(`Mint one: shepaw-hub gateway pair ${id}`);
         return;
       }
       console.log(`Outstanding pairing codes for "${id}" (${store.tokens.length}):`);
@@ -859,7 +912,7 @@ cli
       if (peers.peers.length === 0) {
         console.log(`No authorized peers for "${id}". File: ${paths.peersPath}`);
         console.log(`Add one: shepaw-hub peers add ${id} <pubkey> --label "my phone"`);
-        console.log(`Or pair interactively: shepaw-hub pair ${id}`);
+        console.log('Or pair via Peer: shepaw-hub pair');
         return;
       }
       console.log(`Authorized peers for "${id}" (${peers.peers.length}):`);
@@ -1100,6 +1153,9 @@ cli
     try {
       const res = await startPeerService();
       console.log(`Peer service ${res.alreadyRunning ? 'already running' : 'started'} — pid ${res.pid}, bind ${res.host}:${res.port}/peer/ws`);
+      if (res.relocated) {
+        console.log('Preferred peer port was busy; using the bind above.');
+      }
     } catch (err) {
       exitWithError(err);
     }
@@ -1136,23 +1192,12 @@ cli
   });
 
 cli
-  .command('peer-pair', 'Mint a shepaw://peer pairing code + QR (scan with Shepaw app → Device Pairing)')
+  .command('peer-pair', 'Mint a shepaw://peer pairing code + QR (same as `shepaw-hub pair`)')
   .option('--label <label>', 'Unused placeholder (kept for symmetry with pair)')
-  .action(async () => {
+  .option('--no-qr', 'Suppress the terminal QR code')
+  .action(async (opts: { qr?: boolean }) => {
     try {
-      warnRouterIfNeeded();
-      const res = await mintPairingQr();
-      console.log('');
-      console.log(`  Pairing code:  ${res.code}`);
-      console.log(`  Expires in:    ${Math.round((res.expiresAt - Date.now()) / 1000)}s`);
-      console.log(`  Local:         ${res.localEndpoint}`);
-      if (res.channelEndpoint) console.log(`  Channel:       ${res.channelEndpoint}`);
-      console.log(`  Fingerprint:   ${res.fingerprint}`);
-      console.log('');
-      console.log('  Scan with the Shepaw app (Device Pairing / Scan to Connect):');
-      console.log('');
-      qrcode.generate(res.qrPayload, { small: true }, (qr: string) => console.log(qr));
-      console.log('');
+      await printPeerPairing({ qr: opts.qr !== false });
     } catch (err) {
       exitWithError(err);
     }
@@ -1196,7 +1241,7 @@ cli
   .option('--tls-key <path>', 'PEM private key for HTTPS (or SHEPAW_HUB_TLS_KEY)')
   .option('--no-open', 'Do not automatically open the browser')
   .option('--no-peer', 'Do not auto-start the device peer service')
-  .option('--no-gateway', 'Do not auto-start the tunnel router even if a channel is configured')
+  .option('--gateway', 'Also start the tunnel router if a channel is configured')
   .action(async (opts: {
     port: number | string;
     host: string;
@@ -1254,6 +1299,9 @@ cli
             `Peer service: ${res.alreadyRunning ? 'already running' : 'started'} ` +
               `on ${res.host}:${res.port}/peer/ws (pid ${res.pid})`,
           );
+          if (res.relocated) {
+            console.log('  Preferred peer port was busy; using the bind above.');
+          }
           console.log('  Next: open the dashboard → 添加实例. Pair phones under 扫码配对.');
         } catch (err) {
           console.warn(
@@ -1265,7 +1313,7 @@ cli
         console.log('Peer service: skipped (--no-peer). Start later with: shepaw-hub peer-start');
       }
 
-      if (opts.gateway !== false) {
+      if (opts.gateway) {
         const cfg = loadOrCreateHubConfig();
         if (cfg.gateway?.tunnel !== undefined) {
           try {
@@ -1306,7 +1354,7 @@ cli.help((sections) => {
     [/peers-(list|add|remove)/g, 'peers $1'],
     [/logs-(rotate)/g, 'logs $1'],
     [/enroll-(list|revoke)/g, 'enroll $1'],
-    [/gateway-(set-channel|clear-channel|show|start|stop|status)/g, 'gateway $1'],
+    [/gateway-(pair|set-channel|clear-channel|show|start|stop|status)/g, 'gateway $1'],
     [/peer-(start|stop|status|pair|devices|devices-remove)/g, 'peer $1'],
   ];
   for (const s of sections) {

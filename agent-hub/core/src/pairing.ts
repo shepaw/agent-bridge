@@ -3,7 +3,7 @@
  * managed agent (instance) on this host.
  *
  * Flow (matches shepaw://pair in the Shepaw app):
- *   1. Operator mints a hub enrollment token (Dashboard or `shepaw-hub pair`).
+ *   1. Operator mints a hub enrollment token (`shepaw-hub gateway pair`).
  *   2. QR encodes bootstrap agent WS URL + one-time code.
  *   3. App scans, completes Noise handshake on the bootstrap gateway.
  *   4. Gateway fan-out hook adds the device pubkey to every instance's peers file

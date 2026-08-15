@@ -62,8 +62,14 @@ export class PeerServer {
   constructor(opts: PeerServerOptions = {}) {
     this.identity = loadOrCreatePeerIdentity();
     const cfg = loadOrCreateHubConfig().peer;
-    this.host = opts.host ?? cfg?.host ?? DEFAULT_PEER_HOST;
-    this.port = opts.port ?? cfg?.port ?? DEFAULT_PEER_PORT;
+    const envHost = process.env.SHEPAW_PEER_HOST?.trim();
+    const envPortRaw = process.env.SHEPAW_PEER_PORT?.trim();
+    const envPort = envPortRaw ? Number(envPortRaw) : NaN;
+    this.host = opts.host ?? (envHost && envHost.length > 0 ? envHost : undefined) ?? cfg?.host ?? DEFAULT_PEER_HOST;
+    this.port = opts.port
+      ?? (Number.isInteger(envPort) && envPort > 0 ? envPort : undefined)
+      ?? cfg?.port
+      ?? DEFAULT_PEER_PORT;
     this.log = opts.log ?? (() => undefined);
   }
 
@@ -98,12 +104,20 @@ export class PeerServer {
     });
     this.wss = new WebSocketServer({ noServer: true });
     this.httpServer.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket as Duplex, head));
-    await new Promise<void>((resolve) => {
-      this.httpServer!.listen(this.port, this.host, () => {
+    await new Promise<void>((resolve, reject) => {
+      const server = this.httpServer!;
+      const onError = (err: Error): void => {
+        server.off('listening', onListening);
+        reject(err);
+      };
+      const onListening = (): void => {
+        server.off('error', onError);
         this.log(`peer service listening on ${this.host}:${this.port}/peer/ws (fp=${this.fingerprint})`);
         this.log(`store http on ${this.host}:${this.port}/api/v1/* (root=${getPeerLocalStore().root})`);
         resolve();
-      });
+      };
+      server.once('error', onError);
+      server.listen(this.port, this.host, onListening);
     });
     try {
       const { instanceIds } = authorizePeerServiceOnAllInstances();

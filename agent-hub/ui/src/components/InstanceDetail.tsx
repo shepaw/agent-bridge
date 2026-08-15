@@ -19,6 +19,7 @@ import {
 } from '../utils/runtimeStatus.js';
 import type { InstanceDetailTab } from '../utils/instanceRoute.js';
 import { useI18n } from '../i18n/index.js';
+import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
 interface InstanceDetailProps {
   instanceId: string;
@@ -596,6 +597,7 @@ export function InstanceDetail({
                   <h3 style={{ ...panelTitle, margin: 0 }}>{t('detail.devicesTitle')}</h3>
                   <p style={{ ...panelHint, margin: '4px 0 0' }}>{t('detail.devicesHint')}</p>
                 </div>
+                {GATEWAY_PAIRING_UI && (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={actionBtn('#89dceb')} onClick={openQr}>
                     {t('detail.scanConnect')}
@@ -604,9 +606,10 @@ export function InstanceDetail({
                     {t('detail.pairDevice')}
                   </button>
                 </div>
+                )}
               </div>
 
-              {showQr && (
+              {GATEWAY_PAIRING_UI && showQr && (
                 <div style={qrSection}>
                   <div style={qrSectionHeader}>
                     <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 14 }}>{t('detail.qrTitle')}</span>
@@ -817,16 +820,19 @@ export function InstanceDetail({
                         <option value="0.0.0.0">{t('add.bindAll')}</option>
                       </select>
                     </div>
+                    {GATEWAY_PAIRING_UI && (
                     <div style={editField}>
                       <label style={editLbl}>{t('add.baseUrl')}</label>
                       <input style={editInp} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder={`https://... (${t('common.optional')})`} />
                     </div>
+                    )}
                     <div style={{ ...editField, gridColumn: '1 / -1' }}>
                       <label style={editLbl}>Extra Args <span style={{ color: '#6c7086', fontSize: 11 }}>(space-separated)</span></label>
                       <input style={editInp} value={editExtraArgs} onChange={(e) => setEditExtraArgs(e.target.value)} placeholder="--model claude-opus-4-7 --max-turns 20" />
                     </div>
                   </div>
 
+                  {GATEWAY_PAIRING_UI && (
                   <div style={editTunnelSection}>
                     <button
                       type="button"
@@ -883,6 +889,7 @@ export function InstanceDetail({
                       </>
                     )}
                   </div>
+                  )}
 
                   {editErr && <p style={{ color: '#f38ba8', margin: 0, fontSize: 13 }}>{editErr}</p>}
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -1051,7 +1058,7 @@ export function InstanceDetail({
         </main>
       </div>
 
-      {showEnroll && (
+      {GATEWAY_PAIRING_UI && showEnroll && (
         <EnrollModal instanceId={instanceId} onClose={() => setShowEnroll(false)} baseUrl={instance?.baseUrl} />
       )}
 

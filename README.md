@@ -118,7 +118,7 @@ shepaw-hub init
 shepaw-hub doctor                              # optional: check Node / engines / ports
 shepaw-hub instance add --engine claude-code --cwd ~/code/work-api --host 0.0.0.0
 shepaw-hub start <instance-id>
-shepaw-hub pair <instance-id> --label "My iPhone"   # prints QR + short code
+shepaw-hub pair                                # prints shepaw://peer QR + short code
 shepaw-hub test <instance-id> --rpc                 # verify HTTP + Noise path
 ```
 

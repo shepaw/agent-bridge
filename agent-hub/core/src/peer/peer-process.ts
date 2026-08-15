@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isAlive, type StopResult } from '../spawn.js';
-import { loadOrCreateHubConfig, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
+import { loadOrCreateHubConfig, setHubPeer, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
 import { authorizePeerServiceOnAllInstances } from './peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import {
@@ -24,6 +24,7 @@ import {
   type PairingFileEntry,
 } from './peer-pairing.js';
 import { peerLogFile, peerLogsDir, peerStatePath } from '../paths.js';
+import { allocateListenPort } from '../ports.js';
 
 interface PeerState {
   pid: number;
@@ -53,52 +54,74 @@ export function isPeerServiceRunning(): boolean {
   return state !== undefined && state.pid > 0 && isAlive(state.pid);
 }
 
-/** Start the peer service (detached). Idempotent. */
+/** Start the peer service (detached). Idempotent. Relocates if the preferred port is busy. */
 export async function startPeerService(
   cfg = loadOrCreateHubConfig(),
-): Promise<{ pid: number; alreadyRunning: boolean; port: number; host: string }> {
+): Promise<{ pid: number; alreadyRunning: boolean; port: number; host: string; relocated: boolean }> {
   const prior = readPeerState();
   const host = cfg.peer?.host ?? DEFAULT_PEER_HOST;
-  const port = cfg.peer?.port ?? DEFAULT_PEER_PORT;
+  let preferred = cfg.peer?.port ?? DEFAULT_PEER_PORT;
   if (prior !== undefined && prior.pid > 0 && isAlive(prior.pid)) {
     try {
       authorizePeerServiceOnAllInstances(cfg);
     } catch {
       /* best-effort for already-running daemon — peers file may be stale */
     }
-    return { pid: prior.pid, alreadyRunning: true, port: prior.port, host: prior.host };
+    return {
+      pid: prior.pid,
+      alreadyRunning: true,
+      port: prior.port,
+      host: prior.host,
+      relocated: false,
+    };
   }
 
   const daemonPath = resolveDaemonPath();
   mkdirSync(peerLogsDir(), { recursive: true, mode: 0o700 });
   const logFd = openSync(peerLogFile(), 'a');
+  const configuredPort = preferred;
+  let lastExitError: Error | undefined;
 
   try {
-    const child = nodeSpawn(process.execPath, [daemonPath], {
-      detached: true,
-      windowsHide: true,
-      stdio: ['ignore', logFd, logFd],
-      env: { ...process.env },
-    });
-    child.unref();
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const alloc = await allocateListenPort(preferred, { host });
+      const port = alloc.port;
+      const relocated = port !== configuredPort;
+      if (relocated) {
+        setHubPeer(cfg, { host, port });
+      }
 
-    await sleep(300);
-    if (!isAlive(child.pid!)) {
-      throw new Error(
-        `Peer service exited immediately. Check logs:\n  ${peerLogFile()}\n` +
-          `Common causes: port ${port} already in use.`,
-      );
-    }
+      const child = nodeSpawn(process.execPath, [daemonPath], {
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', logFd, logFd],
+        env: {
+          ...process.env,
+          SHEPAW_PEER_HOST: host,
+          SHEPAW_PEER_PORT: String(port),
+        },
+      });
+      child.unref();
 
-    writePeerState({ pid: child.pid!, port, host, startedAt: new Date().toISOString() });
-    try {
-      authorizePeerServiceOnAllInstances(cfg);
-    } catch (err) {
-      throw new Error(
-        `Peer service started but failed to authorize on agent instances: ${err instanceof Error ? err.message : String(err)}`,
+      await sleep(300);
+      if (isAlive(child.pid!)) {
+        writePeerState({ pid: child.pid!, port, host, startedAt: new Date().toISOString() });
+        try {
+          authorizePeerServiceOnAllInstances(cfg);
+        } catch (err) {
+          throw new Error(
+            `Peer service started but failed to authorize on agent instances: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        return { pid: child.pid!, alreadyRunning: false, port, host, relocated };
+      }
+
+      lastExitError = new Error(
+        `Peer service exited immediately. Check logs:\n  ${peerLogFile()}`,
       );
+      preferred = Math.min(port + 1, 65535);
     }
-    return { pid: child.pid!, alreadyRunning: false, port, host };
+    throw lastExitError ?? new Error(`Peer service failed to start. Check logs:\n  ${peerLogFile()}`);
   } finally {
     try { closeSync(logFd); } catch { /* ignore */ }
   }

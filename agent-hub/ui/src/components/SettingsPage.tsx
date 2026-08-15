@@ -8,7 +8,7 @@ import { useI18n } from '../i18n/index.js';
  * Settings content panels (nav lives in App shell).
  *   - 全局: dashboard auth token
  *   - 引擎: opened from Create Instance「管理引擎」(not a left-nav item)
- *   - 扫码配对: peer service + shepaw://peer QR + optional channel
+ *   - 扫码配对: peer service + shepaw://peer QR
  */
 
 export function SettingsPage({

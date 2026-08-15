@@ -162,7 +162,7 @@ export interface InstanceConfig {
   /**
    * Optional: base URL to print in enrollment QRs. Typically a Shepaw
    * Channel Service URL when the instance is exposed via tunnel; empty on
-   * LAN-only setups (in which case `shepaw-hub pair` still works but prints
+   * LAN-only setups (in which case `shepaw-hub gateway pair` still works but prints
    * a URL based on host:port).
    */
   readonly baseUrl: string;
@@ -353,6 +353,20 @@ export function setHubGateway(
     routerPort: patch.routerPort ?? existing?.routerPort ?? DEFAULT_ROUTER_PORT,
   };
   const next: HubConfig = { ...config, gateway };
+  persist(next.path, next.instances, hubPersistMeta(next));
+  return next;
+}
+
+/** Persist the peer service bind (host/port) after auto-relocation. */
+export function setHubPeer(
+  config: HubConfig,
+  patch: { host?: string; port?: number },
+): HubConfig {
+  const peer = {
+    host: patch.host ?? config.peer?.host ?? DEFAULT_PEER_HOST,
+    port: patch.port ?? config.peer?.port ?? DEFAULT_PEER_PORT,
+  };
+  const next: HubConfig = { ...config, peer };
   persist(next.path, next.instances, hubPersistMeta(next));
   return next;
 }

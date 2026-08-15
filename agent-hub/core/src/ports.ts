@@ -73,7 +73,7 @@ export async function nextFreePort(opts: FindPortOptions = {}): Promise<number> 
  * Uses `exclusive: true` so the bind fails on any existing listener, even
  * one with SO_REUSEADDR set — that matches the gateway's behavior.
  */
-export function probeBindable(port: number): Promise<boolean> {
+export function probeBindable(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const server = createServer();
     const cleanup = (): void => {
@@ -100,11 +100,35 @@ export function probeBindable(port: number): Promise<boolean> {
       resolve(true);
     });
 
-    server.listen({ port, host: '127.0.0.1', exclusive: true });
+    server.listen({ port, host, exclusive: true });
   });
 }
 
 export class NoFreePortError extends Error {
   override readonly name = 'NoFreePortError';
   constructor(message: string) { super(message); }
+}
+
+/**
+ * Bind `preferred` if free; otherwise the next free port in
+ * `(preferred, preferred+range]`. Used by the peer daemon so a busy default
+ * port (e.g. another Shepaw process on 18793) relocates instead of failing.
+ */
+export async function allocateListenPort(
+  preferred: number,
+  opts?: { range?: number; host?: string; probe?: (port: number) => Promise<boolean> },
+): Promise<{ port: number; relocated: boolean }> {
+  if (!Number.isInteger(preferred) || preferred < 1 || preferred > 65535) {
+    throw new Error(`Invalid preferred port: ${preferred}`);
+  }
+  const host = opts?.host ?? '127.0.0.1';
+  const probe = opts?.probe ?? ((port) => probeBindable(port, host));
+  if (await probe(preferred)) return { port: preferred, relocated: false };
+  const range = opts?.range ?? 200;
+  const port = await nextFreePort({
+    start: Math.min(preferred + 1, 65535),
+    end: Math.min(preferred + range, 65535),
+    probe,
+  });
+  return { port, relocated: true };
 }

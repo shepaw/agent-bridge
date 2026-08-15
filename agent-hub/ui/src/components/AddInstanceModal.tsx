@@ -7,6 +7,7 @@ import { filterAndSortEngines } from '../utils/enginePicker.js';
 import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
+import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'codex',
@@ -384,6 +385,8 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                 <option value="0.0.0.0">{t('add.bindAll')}</option>
               </select>
 
+              {GATEWAY_PAIRING_UI && (
+                <>
               <label style={lbl}>{t('add.baseUrl')} <span style={{ color: '#6c7086', fontSize: 11 }}> ({t('common.optional')})</span></label>
               <input style={inp} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="wss://example.com" />
 
@@ -432,6 +435,8 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
                   onChange={(e) => setTunnelSecret(e.target.value)}
                   placeholder={hubMeta?.lastTunnelSecretHint ? t('add.secretPlaceholderOverride') : t('add.secretPlaceholder')}
                 />
+              )}
+                </>
               )}
             </div>
           )}

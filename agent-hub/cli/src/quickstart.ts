@@ -1,12 +1,12 @@
 /**
  * `shepaw-hub quickstart` — interactive onboarding that collapses
- * init → engine pick → instance add → start → pair into one flow.
+ * init → engine pick → instance add → start → peer pair into one flow.
  *
  * Non-interactive / scripted use:
  *   shepaw-hub quickstart --engine claude-code --cwd ~/code --yes
  *
- * Defaults favor same-Wi-Fi pairing: bind host `0.0.0.0`, QR URL derived
- * from the machine's LAN address (via createHubPairing / resolvePublicHost).
+ * Pairing uses the device Peer service (`shepaw://peer`). One scan in the
+ * Shepaw app authorizes every local agent on this machine.
  */
 
 import { basename, resolve as resolvePath } from 'node:path';
@@ -18,16 +18,17 @@ import qrcode from 'qrcode-terminal';
 import {
   addInstance,
   allocateInstanceId,
-  createHubPairing,
   ensureInstanceDir,
   isEngineDisabled,
   isKnownEngine,
   listEngineInfos,
   loadOrCreateHubConfig,
+  mintPairingQr,
   nextFreePort,
   resolveEngineAvailability,
   resolvePublicHost,
   startInstance,
+  startPeerService,
   tryAuthorizePeerServiceOnInstance,
   type HubConfig,
 } from '@shepaw/agent-hub-core';
@@ -166,7 +167,7 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
       label = await ask(rl, 'Display label', defaultLabel);
     }
 
-    // 6. Bind host — LAN by default so the phone can reach the gateway.
+    // 6. Bind host — default LAN so local tools can still reach the agent.
     const host = opts.host ?? '0.0.0.0';
     const publicHost = resolvePublicHost(host);
 
@@ -175,9 +176,10 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     console.log(`  engine:  ${engine}`);
     console.log(`  cwd:     ${cwd}`);
     console.log(`  label:   ${label}`);
-    console.log(`  bind:    ${host} (next free port from 8090; phone sees ${publicHost})`);
+    console.log(`  bind:    ${host} (next free port from 8090; reachable as ${publicHost})`);
+    console.log('  pair:    start Peer and print a shepaw://peer QR');
     if (rl) {
-      const go = (await ask(rl, 'Create instance, start it, and print a pairing QR? (Y/n)', 'Y')).toLowerCase();
+      const go = (await ask(rl, 'Create instance, start Peer, and print a pairing QR? (Y/n)', 'Y')).toLowerCase();
       if (go === 'n' || go === 'no') {
         console.log('Aborted.');
         return;
@@ -208,8 +210,8 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     console.log(`\nRegistered instance ${id}`);
     console.log(`  ${registered.label} · ${registered.engine} · ${registered.host}:${registered.port}`);
 
-    // 8. Start.
-    console.log('\nStarting gateway…');
+    // 8. Start the agent instance.
+    console.log('\nStarting instance…');
     const started = await startInstance(registered);
     if (started.alreadyRunning) {
       console.log(`Already running (pid ${started.pid}).`);
@@ -217,22 +219,29 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
       console.log(`Started (pid ${started.pid}).`);
     }
 
-    // 9. Pair — hub-wide so one scan authorizes this (and any future) agent.
+    // 9. Peer pairing — one scan authorizes this (and any future) local agent.
+    console.log('\nStarting Peer…');
+    const peer = await startPeerService();
+    if (peer.relocated) {
+      console.log(`Preferred peer port was busy; listening on ${peer.host}:${peer.port} instead.`);
+    } else {
+      console.log(`Peer ${peer.alreadyRunning ? 'already running' : 'started'} on ${peer.host}:${peer.port}/peer/ws.`);
+    }
+
     console.log('\nMinting pairing QR…');
-    const pairing = createHubPairing({
-      label: `quickstart:${label}`,
-      bootstrapInstanceId: id,
-    });
+    const pairing = await mintPairingQr();
 
     console.log('');
     console.log('╭──────────────────────────────────────────────╮');
-    console.log(`│  Pairing code:  ${pairing.display.padEnd(28, ' ')} │`);
+    console.log(`│  Pairing code:  ${pairing.code.padEnd(28, ' ')} │`);
     console.log('╰──────────────────────────────────────────────╯');
     console.log('');
-    console.log(`  Valid until:  ${new Date(pairing.expiresAt).toLocaleString()}`);
-    console.log(`  Pair URL:     ${pairing.pairUrl}`);
+    console.log(`  Expires in:    ${Math.round((pairing.expiresAt - Date.now()) / 1000)}s`);
+    console.log(`  Local:         ${pairing.localEndpoint}`);
+    console.log(`  Fingerprint:   ${pairing.fingerprint}`);
     console.log('');
-    console.log('  In the Shepaw app: Add agent → scan the QR (or type the code).');
+    console.log('  In the Shepaw app: Device Pairing / Scan to Connect.');
+    console.log('  One scan authorizes every local agent on this machine.');
     console.log('  Keep this machine on the same Wi-Fi as your phone.');
     console.log('');
 
@@ -246,8 +255,7 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     console.log('Useful next commands:');
     console.log(`  shepaw-hub status ${id}`);
     console.log(`  shepaw-hub logs ${id} -f`);
-    console.log(`  shepaw-hub test ${id} --rpc     # verify HTTP + Noise`);
-    console.log(`  shepaw-hub pair ${id}           # mint another code later`);
+    console.log(`  shepaw-hub pair                 # mint another Peer QR`);
     console.log(`  shepaw-hub doctor               # diagnose setup issues`);
     console.log('');
   } finally {
