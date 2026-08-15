@@ -5,7 +5,6 @@ import type { GatewayInfo, PairedPeer, PeerPairingResult, PeerServiceStatus } fr
 import { useI18n } from '../i18n/index.js';
 import { ChannelSettingsPanel } from './GatewaySettingsModal.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
-import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
 /**
  * Scan-to-pair panel: Peer is started by `shepaw-hub web` (and again here
@@ -30,12 +29,9 @@ export function PeerPairingPanel() {
     const peerRes = await api.peer.get();
     setStatus(peerRes.status);
     setDevices(peerRes.devices);
-    if (GATEWAY_PAIRING_UI) {
-      const gw = await api.gateway.get();
-      setGateway(gw);
-      return { peerStatus: peerRes.status, gateway: gw };
-    }
-    return { peerStatus: peerRes.status, gateway: null as GatewayInfo | null };
+    const gw = await api.gateway.get();
+    setGateway(gw);
+    return { peerStatus: peerRes.status, gateway: gw };
   };
 
   // On open: ensure Peer is running, then mint QR so the app can scan immediately.
@@ -53,7 +49,7 @@ export function PeerPairingPanel() {
           ({ peerStatus, gateway: gw } = await load());
         }
         if (cancelled) return;
-        if (GATEWAY_PAIRING_UI && gw?.channel && !gw.status.running) {
+        if (gw?.channel && !gw.status.running) {
           try {
             await api.gateway.start();
             if (cancelled) return;
@@ -90,7 +86,7 @@ export function PeerPairingPanel() {
 
   // Already configured — keep the section open so operators can manage it.
   useEffect(() => {
-    if (GATEWAY_PAIRING_UI && gateway?.channel) setChannelExpanded(true);
+    if (gateway?.channel) setChannelExpanded(true);
   }, [gateway?.channel]);
 
   const start = async () => {
@@ -159,7 +155,7 @@ export function PeerPairingPanel() {
         <p style={priorityHint}>
           {t('peer.hint')}
         </p>
-        {GATEWAY_PAIRING_UI && gateway?.channel && !gateway.status.running && (
+        {gateway?.channel && !gateway.status.running && (
           <p style={warn}>
             {t('peer.channelWarn')}
           </p>
@@ -184,7 +180,7 @@ export function PeerPairingPanel() {
         </div>
         <p style={hint}>
           {t('peer.scanHint')}
-          {GATEWAY_PAIRING_UI && gateway?.channel ? t('peer.qrBoth') : t('peer.qrLanOnly')}
+          {gateway?.channel ? t('peer.qrBoth') : t('peer.qrLanOnly')}
         </p>
 
         {booting && !pairing ? (
@@ -202,7 +198,7 @@ export function PeerPairingPanel() {
             </p>
             <p style={{ color: '#6c7086', fontSize: 12, marginTop: 8 }}>
               {t('peer.lan', { endpoint: pairing.localEndpoint })}
-              {GATEWAY_PAIRING_UI && pairing.channelEndpoint && (
+              {pairing.channelEndpoint && (
                 <>
                   <br />
                   {t('peer.channel', { endpoint: pairing.channelEndpoint })}
@@ -238,7 +234,6 @@ export function PeerPairingPanel() {
         )}
       </div>
 
-      {GATEWAY_PAIRING_UI && (
       <div style={section}>
         <button
           type="button"
@@ -262,7 +257,6 @@ export function PeerPairingPanel() {
         )}
         {channelExpanded && <ChannelSettingsPanel />}
       </div>
-      )}
 
       <div style={section}>
         <h4 style={sectionTitle}>{t('peer.devicesTitle', { count: devices.length })}</h4>

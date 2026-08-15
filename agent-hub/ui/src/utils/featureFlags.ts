@@ -1,8 +1,8 @@
 /**
  * Product flags for surfaces we keep implementing but hide from operators.
  *
- * Gateway / ACP enroll (shepaw://pair + Channel) still works via CLI
- * (`shepaw-hub gateway pair`) and the APIs. The dashboard and app onboarding
- * default to Peer (`shepaw://peer`) until WAN / store issues are sorted.
+ * Hides ACP/gateway enroll (`shepaw://pair` QR and per-instance tunnel
+ * fields). Shared Channel for Peer remote access stays on the Pair device
+ * tab. CLI: `shepaw-hub gateway pair`.
  */
 export const GATEWAY_PAIRING_UI = false;
