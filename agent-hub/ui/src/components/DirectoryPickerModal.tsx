@@ -131,18 +131,12 @@ export function DirectoryPickerModal({
             <p style={{ color: '#6c7086', fontSize: 13, margin: 12 }}>{t('picker.empty')}</p>
           )}
           {!loading && !err && result && result.entries.map((entry) => {
-            const isSelected = selected === entry.path;
             return (
               <div
                 key={entry.path}
                 role="option"
-                aria-selected={isSelected}
-                style={{
-                  ...row,
-                  ...(isSelected ? rowSelected : {}),
-                }}
-                onClick={() => setSelected(entry.path)}
-                onDoubleClick={() => enter(entry)}
+                style={row}
+                onClick={() => enter(entry)}
               >
                 <span style={folderIcon}>▸</span>
                 <span style={rowName}>{entry.name}</span>

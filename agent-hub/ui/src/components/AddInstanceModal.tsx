@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { api } from '../api/client.js';
 import type { EngineInfo, HubMeta } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 import { rememberCwd } from '../utils/cwdHistory.js';
+import { filterAndSortEngines } from '../utils/enginePicker.js';
 import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
@@ -76,6 +77,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [seedPaths, setSeedPaths] = useState<string[]>([]);
+  const [engineQuery, setEngineQuery] = useState('');
 
   // Keep draft in sync while editing; reopen restores these values.
   useEffect(() => {
@@ -112,6 +114,10 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const selectedUnavailable = selectedEngine?.available === false;
   const hasAvailableEngine = engineOptions.some((e) => e.available !== false);
   const sessionModes = selectedEngine?.sessionModes ?? [];
+  const visibleEngines = useMemo(
+    () => filterAndSortEngines(engineOptions, engineQuery),
+    [engineOptions, engineQuery],
+  );
 
   useEffect(() => {
     const modes = selectedEngine?.sessionModes ?? [];
@@ -238,7 +244,20 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
           </div>
           {engineOptions.length > 0 ? (
             <div style={engineList} role="listbox" aria-label={t('add.engineAria')}>
-              {engineOptions.map((e) => {
+              <input
+                style={engineFilter}
+                type="search"
+                value={engineQuery}
+                onChange={(e) => setEngineQuery(e.target.value)}
+                placeholder={t('add.engineFilter')}
+                aria-label={t('add.engineFilter')}
+              />
+              {visibleEngines.length === 0 && (
+                <p style={{ color: '#6c7086', fontSize: 12, margin: '6px 4px' }}>
+                  {t('add.engineNoMatch')}
+                </p>
+              )}
+              {visibleEngines.map((e) => {
                 const unavailable = e.available === false;
                 const selected = engine === e.id;
                 const title = e.builtin ? e.displayName : `${e.displayName} (${t('common.custom')})`;
@@ -525,6 +544,11 @@ const engineList: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 6,
   maxHeight: 220, overflowY: 'auto',
   background: '#11111b', border: '1px solid #45475a', borderRadius: 6, padding: 6,
+};
+const engineFilter: React.CSSProperties = {
+  background: '#181825', border: '1px solid #45475a', borderRadius: 5,
+  color: '#cdd6f4', padding: '6px 10px', fontSize: 13, outline: 'none',
+  position: 'sticky', top: 0, zIndex: 1,
 };
 const engineRow: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,

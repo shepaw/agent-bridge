@@ -4,6 +4,9 @@
  */
 
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { Router, type Request, type Response } from 'express';
 import {
   ALL_SPACES,
@@ -54,9 +57,9 @@ function httpStatusForError(code: string): number {
     code === 'peer_offline' ||
     code === 'master_offline' ||
     code === 'not_paired' ||
-    code === 'remote_only'
+    code === 'exists'
   ) {
-    return 400;
+    return code === 'exists' ? 409 : 400;
   }
   return 500;
 }
@@ -692,5 +695,185 @@ storeRouter.delete('/entry', (req: Request, res: Response) => {
     res.json({ ok: true, uri, ...result });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+function entryBasename(path: string): string {
+  const parts = path.replace(/\/+$/, '').split('/').filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function resolveDestLocation(
+  store: ReturnType<typeof getPeerLocalStore>,
+  from: { space: string; device: string; path: string },
+  toUri: string,
+): { space: string; device: string; path: string } | { error: string; message: string } {
+  const to = parseStoreUri(toUri);
+  if (!to) return { error: 'bad_uri', message: 'invalid destination store:// URI' };
+  const destEndsWithSlash = toUri.trim().endsWith('/');
+  let destPath = to.path;
+  if (!destPath || destEndsWithSlash) {
+    destPath = destPath
+      ? `${destPath.replace(/\/+$/, '')}/${entryBasename(from.path)}`
+      : entryBasename(from.path);
+  } else {
+    try {
+      const abs = store.absPath(to.device, to.space, destPath);
+      if (existsSync(abs) && statSync(abs).isDirectory()) {
+        destPath = `${destPath}/${entryBasename(from.path)}`;
+      }
+    } catch {
+      /* treat as file path */
+    }
+  }
+  if (!destPath) return { error: 'bad_path', message: 'destination path required' };
+  return { space: to.space, device: to.device, path: destPath };
+}
+
+function requireLocalFileUri(
+  raw: unknown,
+  self: string,
+): { space: string; device: string; path: string } | { error: string; message: string } {
+  const uri = requireUri(raw);
+  if (!uri) return { error: 'bad_uri', message: 'uri required' };
+  const parsed = parseStoreUri(uri);
+  if (!parsed) return { error: 'bad_uri', message: 'invalid store:// URI' };
+  if (parsed.device !== self) {
+    return { error: 'acl_denied', message: '只能操作本机储物袋' };
+  }
+  if (!parsed.path) return { error: 'bad_path', message: 'path required' };
+  return parsed;
+}
+
+storeRouter.post('/copy', (req: Request, res: Response) => {
+  try {
+    const body = req.body as { fromUri?: string; toUri?: string };
+    const self = hubStoreDeviceId();
+    const from = requireLocalFileUri(body.fromUri, self);
+    if ('error' in from) {
+      res.status(httpStatusForError(from.error)).json({ error: from.message, code: from.error });
+      return;
+    }
+    const toUri = requireUri(body.toUri);
+    if (!toUri) {
+      res.status(400).json({ error: 'toUri required', code: 'bad_uri' });
+      return;
+    }
+    const store = getPeerLocalStore();
+    const dest = resolveDestLocation(store, from, toUri);
+    if ('error' in dest) {
+      res.status(httpStatusForError(dest.error)).json({ error: dest.message, code: dest.error });
+      return;
+    }
+    if (dest.device !== self) {
+      res.status(403).json({ error: '只能写入本机储物袋', code: 'acl_denied' });
+      return;
+    }
+    store.copy(
+      { deviceId: from.device, space: from.space, path: from.path },
+      { deviceId: dest.device, space: dest.space, path: dest.path },
+    );
+    res.json({ ok: true, uri: buildUri(dest.space, dest.device, dest.path) });
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? 'internal';
+    const status = httpStatusForError(code);
+    res.status(status).json({
+      error: err instanceof Error ? err.message : String(err),
+      code,
+    });
+  }
+});
+
+storeRouter.post('/move', (req: Request, res: Response) => {
+  try {
+    const body = req.body as { fromUri?: string; toUri?: string };
+    const self = hubStoreDeviceId();
+    const from = requireLocalFileUri(body.fromUri, self);
+    if ('error' in from) {
+      res.status(httpStatusForError(from.error)).json({ error: from.message, code: from.error });
+      return;
+    }
+    const toUri = requireUri(body.toUri);
+    if (!toUri) {
+      res.status(400).json({ error: 'toUri required', code: 'bad_uri' });
+      return;
+    }
+    const store = getPeerLocalStore();
+    const dest = resolveDestLocation(store, from, toUri);
+    if ('error' in dest) {
+      res.status(httpStatusForError(dest.error)).json({ error: dest.message, code: dest.error });
+      return;
+    }
+    if (dest.device !== self) {
+      res.status(403).json({ error: '只能写入本机储物袋', code: 'acl_denied' });
+      return;
+    }
+    store.move(
+      { deviceId: from.device, space: from.space, path: from.path },
+      { deviceId: dest.device, space: dest.space, path: dest.path },
+    );
+    res.json({ ok: true, uri: buildUri(dest.space, dest.device, dest.path) });
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? 'internal';
+    const status = httpStatusForError(code);
+    res.status(status).json({
+      error: err instanceof Error ? err.message : String(err),
+      code,
+    });
+  }
+});
+
+function revealInOs(absPath: string, isDir: boolean): void {
+  if (process.platform === 'darwin') {
+    const args = isDir ? [absPath] : ['-R', absPath];
+    spawn('open', args, { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  if (process.platform === 'win32') {
+    const args = isDir ? [absPath] : [`/select,${absPath}`];
+    spawn('explorer', args, { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  spawn('xdg-open', [isDir ? absPath : dirname(absPath)], { detached: true, stdio: 'ignore' }).unref();
+}
+
+/** Open a local store path in the OS file manager. This machine only. */
+storeRouter.post('/reveal', (req: Request, res: Response) => {
+  try {
+    const body = req.body as { uri?: string };
+    const self = hubStoreDeviceId();
+    const uri = requireUri(body.uri);
+    if (!uri) {
+      res.status(400).json({ error: 'uri required', code: 'bad_uri' });
+      return;
+    }
+    const parsed = parseStoreUri(uri);
+    if (!parsed) {
+      res.status(400).json({ error: 'invalid store:// URI', code: 'bad_uri' });
+      return;
+    }
+    if (parsed.device !== self) {
+      res.status(403).json({
+        error: '只能在本机打开目录',
+        code: 'acl_denied',
+      });
+      return;
+    }
+    const store = getPeerLocalStore();
+    const abs = store.absPath(parsed.device, parsed.space, parsed.path || undefined);
+    if (!existsSync(abs)) {
+      res.status(404).json({ error: 'path not found', code: 'not_found' });
+      return;
+    }
+    const st = statSync(abs);
+    const openPath = realpathSync(abs);
+    revealInOs(openPath, st.isDirectory());
+    res.json({ ok: true, uri, path: openPath, kind: st.isDirectory() ? 'dir' : 'file' });
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? 'internal';
+    res.status(httpStatusForError(code)).json({
+      error: err instanceof Error ? err.message : String(err),
+      code,
+    });
   }
 });

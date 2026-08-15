@@ -8,6 +8,7 @@ import type {
 } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 import type { MessageKey } from '../i18n/en.js';
+import { StoreDestModal, type StoreDestKind } from './StoreDestModal.js';
 
 export interface StoreBrowserPanelProps {
   initialUri?: string | null;
@@ -137,6 +138,12 @@ function isDirEntry(entry: StoreEntry): boolean {
   return entry.kind === 'dir' || (!entry.kind && !entry.sha256 && entry.size === 0);
 }
 
+function copyFileName(name: string): string {
+  const i = name.lastIndexOf('.');
+  if (i <= 0) return `${name} copy`;
+  return `${name.slice(0, i)} copy${name.slice(i)}`;
+}
+
 export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanelProps) {
   const { t } = useI18n();
   const [roots, setRoots] = useState<StoreRootsResult | null>(null);
@@ -157,9 +164,19 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
   const [newContent, setNewContent] = useState('');
   const [showNew, setShowNew] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [canBack, setCanBack] = useState(false);
+  const [canForward, setCanForward] = useState(false);
+  const [destPrompt, setDestPrompt] = useState<{
+    kind: StoreDestKind;
+    fromUri: string;
+    defaultValue: string;
+  } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; entry: StoreEntry } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialApplied = useRef(false);
   const previewUrlRef = useRef<string | null>(null);
+  const histRef = useRef<(string | null)[]>([null]);
+  const histIndexRef = useRef(0);
 
   const clearPreview = useCallback(() => {
     setSelected(null);
@@ -172,11 +189,40 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     setPreviewUrl(null);
   }, []);
 
-  const navigate = useCallback((next: string | null) => {
+  const syncHistButtons = useCallback(() => {
+    setCanBack(histIndexRef.current > 0);
+    setCanForward(histIndexRef.current < histRef.current.length - 1);
+  }, []);
+
+  const applyLocation = useCallback((next: string | null) => {
     setUri(next);
     clearPreview();
     onUriChange?.(next);
   }, [onUriChange, clearPreview]);
+
+  const navigate = useCallback((next: string | null) => {
+    const cur = histRef.current[histIndexRef.current] ?? null;
+    if (cur !== next) {
+      histRef.current = [...histRef.current.slice(0, histIndexRef.current + 1), next];
+      histIndexRef.current = histRef.current.length - 1;
+    }
+    syncHistButtons();
+    applyLocation(next);
+  }, [applyLocation, syncHistButtons]);
+
+  const goBack = useCallback(() => {
+    if (histIndexRef.current <= 0) return;
+    histIndexRef.current -= 1;
+    syncHistButtons();
+    applyLocation(histRef.current[histIndexRef.current] ?? null);
+  }, [applyLocation, syncHistButtons]);
+
+  const goForward = useCallback(() => {
+    if (histIndexRef.current >= histRef.current.length - 1) return;
+    histIndexRef.current += 1;
+    syncHistButtons();
+    applyLocation(histRef.current[histIndexRef.current] ?? null);
+  }, [applyLocation, syncHistButtons]);
 
   const applyUriSelection = useCallback((target: string, rootsData: StoreRootsResult) => {
     const parsed = parseCurrent(target);
@@ -287,6 +333,10 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         if (!initialApplied.current) {
           initialApplied.current = true;
           if (initialUri) {
+            histRef.current = [null, initialUri];
+            histIndexRef.current = 1;
+            setCanBack(true);
+            setCanForward(false);
             applyUriSelection(initialUri, data);
             setUri(initialUri);
             onUriChange?.(initialUri);
@@ -417,20 +467,18 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     }
   };
 
-  const openEntry = async (entry: StoreEntry, mode: 'select' | 'open' = 'open') => {
+  const openEntry = async (entry: StoreEntry) => {
     if (!uri) return;
     const parsed = parseCurrent(uri);
     if (!parsed) return;
     const nextUri = entryUri(parsed.space, parsed.device, entry.path);
     const dir = isDirEntry(entry);
     if (dir) {
-      if (mode === 'open') navigate(nextUri.endsWith('/') ? nextUri : `${nextUri}/`);
+      navigate(nextUri.endsWith('/') ? nextUri : `${nextUri}/`);
       return;
     }
     setSelected(entry);
-    if (mode === 'open' || mode === 'select') {
-      await previewFile(nextUri, entryName(entry.path));
-    }
+    await previewFile(nextUri, entryName(entry.path));
   };
 
   const openRecent = async (item: StoreRecentEntry) => {
@@ -441,9 +489,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     parts.pop();
     const parentPath = parts.join('/');
     const folderUri = entryUri(parsed.space, parsed.device, parentPath);
-    setUri(folderUri);
-    onUriChange?.(folderUri);
-    clearPreview();
+    navigate(folderUri);
     setLoading(true);
     try {
       const data = await api.store.list(folderUri, 1);
@@ -570,6 +616,98 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     } catch {
       /* ignore */
     }
+  };
+
+  const currentParsed = uri ? parseCurrent(uri) : null;
+  const isLocalDevice = Boolean(
+    roots && (
+      currentParsed
+        ? currentParsed.device === roots.local.deviceId
+        : side.kind !== 'peer'
+    ),
+  );
+
+  const uriForEntry = (entry: StoreEntry): string | null => {
+    const parsed = currentParsed;
+    if (!parsed) return null;
+    return entryUri(parsed.space, parsed.device, entry.path);
+  };
+
+  const sharePath = (target: string) => {
+    void copyUri(target);
+  };
+
+  const openInOs = async (target: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.store.reveal(target);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runDestOp = async (kind: StoreDestKind, fromUri: string, dest: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      if (kind === 'saveAs') {
+        if (!uri || !currentParsed) return;
+        const base = currentParsed.path ? `${currentParsed.path}/` : '';
+        const destUri = entryUri(currentParsed.space, currentParsed.device, `${base}${dest.replace(/^\/+/, '')}`);
+        await api.store.copy(fromUri, destUri);
+      } else if (kind === 'copy') {
+        await api.store.copy(fromUri, dest);
+      } else {
+        await api.store.move(fromUri, dest);
+      }
+      setDestPrompt(null);
+      if (uri) await loadList(uri);
+      if (roots) void loadRecent(side, roots);
+      if (kind === 'move') clearPreview();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const promptOp = (kind: StoreDestKind, entry: StoreEntry) => {
+    const from = uriForEntry(entry);
+    if (!from || !uri) return;
+    const name = entryName(entry.path);
+    if (kind === 'saveAs') {
+      setDestPrompt({ kind, fromUri: from, defaultValue: copyFileName(name) });
+      return;
+    }
+    setDestPrompt({ kind, fromUri: from, defaultValue: uri.endsWith('/') ? uri : `${uri}/` });
+  };
+
+  const deleteEntry = async (entry: StoreEntry) => {
+    if (!uri || !writable) return;
+    const target = uriForEntry(entry);
+    if (!target) return;
+    if (!confirm(t('store.deleteConfirm', { target }))) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.store.remove(target);
+      if (selected?.path === entry.path) clearPreview();
+      await loadList(uri);
+      if (roots) void loadRecent(side, roots);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadEntry = async (entry: StoreEntry) => {
+    const target = uriForEntry(entry);
+    if (!target) return;
+    await downloadUri(target, entryName(entry.path));
   };
 
   const sideTitle = side.kind === 'local'

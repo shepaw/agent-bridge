@@ -400,6 +400,15 @@ export const api = {
     remove: (uri: string): Promise<{ ok: boolean }> =>
       request(`/store/entry?uri=${encodeURIComponent(uri)}`, { method: 'DELETE' }),
 
+    copy: (fromUri: string, toUri: string): Promise<{ ok: boolean; uri: string }> =>
+      request('/store/copy', { method: 'POST', body: JSON.stringify({ fromUri, toUri }) }),
+
+    move: (fromUri: string, toUri: string): Promise<{ ok: boolean; uri: string }> =>
+      request('/store/move', { method: 'POST', body: JSON.stringify({ fromUri, toUri }) }),
+
+    reveal: (uri: string): Promise<{ ok: boolean; path: string; kind: 'dir' | 'file' }> =>
+      request('/store/reveal', { method: 'POST', body: JSON.stringify({ uri }) }),
+
     /** Raw download URL (same-origin; auth via Bearer header not possible for <a download>). */
     rawUrl: (uri: string): string =>
       `${BASE}/store/read?uri=${encodeURIComponent(uri)}&raw=1`,

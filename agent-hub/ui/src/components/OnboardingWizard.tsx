@@ -12,6 +12,7 @@ import { api } from '../api/client.js';
 import type { EngineInfo, EnrollToken, Instance } from '../api/types.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { useI18n } from '../i18n/index.js';
+import { filterAndSortEngines } from '../utils/enginePicker.js';
 
 type Step = 'engine' | 'cwd' | 'launch' | 'pair';
 
@@ -44,6 +45,7 @@ export function OnboardingWizard({
   const [statusLine, setStatusLine] = useState('');
   const [created, setCreated] = useState<Instance | null>(null);
   const [token, setToken] = useState<EnrollToken | null>(null);
+  const [engineQuery, setEngineQuery] = useState('');
 
   useEffect(() => {
     setEnginesLoading(true);
@@ -78,6 +80,10 @@ export function OnboardingWizard({
   const selected = engines.find((e) => e.id === engine);
   const selectedUnavailable = selected?.available === false;
   const hasAvailable = engines.some((e) => e.available !== false);
+  const visibleEngines = useMemo(
+    () => filterAndSortEngines(engines, engineQuery),
+    [engines, engineQuery],
+  );
 
   const stepIndex = useMemo(() => {
     const order: Step[] = ['engine', 'cwd', 'launch', 'pair'];
@@ -189,7 +195,20 @@ export function OnboardingWizard({
                 </div>
               )}
               <div style={engineList} role="listbox" aria-label="Engine">
-                {engines.map((e) => {
+                <input
+                  style={engineFilter}
+                  type="search"
+                  value={engineQuery}
+                  onChange={(e) => setEngineQuery(e.target.value)}
+                  placeholder={t('add.engineFilter')}
+                  aria-label={t('add.engineFilter')}
+                />
+                {visibleEngines.length === 0 && !enginesLoading && engines.length > 0 && (
+                  <p style={{ color: '#6c7086', fontSize: 12, margin: '6px 4px' }}>
+                    {t('add.engineNoMatch')}
+                  </p>
+                )}
+                {visibleEngines.map((e) => {
                   const unavailable = e.available === false;
                   const isSelected = engine === e.id;
                   return (
@@ -497,6 +516,18 @@ const engineList: React.CSSProperties = {
   gap: 6,
   maxHeight: 280,
   overflowY: 'auto',
+};
+const engineFilter: React.CSSProperties = {
+  background: '#11111b',
+  border: '1px solid #45475a',
+  borderRadius: 5,
+  color: '#cdd6f4',
+  padding: '6px 10px',
+  fontSize: 13,
+  outline: 'none',
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
 };
 const engineItem: React.CSSProperties = {
   display: 'flex',
