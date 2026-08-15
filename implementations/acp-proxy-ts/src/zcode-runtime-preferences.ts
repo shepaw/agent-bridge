@@ -4,18 +4,30 @@
  * only drains those server→client requests during a prompt turn, so create
  * waits 15s and surfaces `zcode create failed: timeout`.
  *
- * The stdio proxy answers this one method with headless defaults so create
- * can finish. Schema from zcode.cjs (`rKt`): nativeSearchEnhancementsEnabled
- * is required; the rest have defaults.
+ * Plan / OAuth providers (`builtin:bigmodel-start-plan`) also send
+ * `interaction/requestProviderRuntimeHeaders` before each model call. The
+ * adapter treats unknown methods as `bridge unsupported`, which becomes
+ * `model_request_failed`. Desktop applies OAuth headers as a side effect;
+ * headless already overlays the selected provider JWT as ANTHROPIC_API_KEY,
+ * so acknowledging `headersApplied: true` is enough.
+ *
+ * Schema from zcode.cjs: `rKt` (runtime preferences), `SKt` (runtime headers).
  */
 
 export const ZCODE_RUNTIME_PREFERENCES_METHOD = 'session/requestRuntimePreferences';
+
+export const ZCODE_PROVIDER_RUNTIME_HEADERS_METHOD =
+  'interaction/requestProviderRuntimeHeaders';
 
 export const DEFAULT_ZCODE_RUNTIME_PREFERENCES = {
   nativeSearchEnhancementsEnabled: false,
   memoryEnabled: false,
   askUserQuestionAutoResolutionEnabled: true,
   modelContextBudgetStrategy: 'preflight-v1',
+} as const;
+
+export const DEFAULT_ZCODE_PROVIDER_RUNTIME_HEADERS = {
+  headersApplied: true,
 } as const;
 
 export function replyForZcodeServerRequest(line: string): string | null {
@@ -27,10 +39,18 @@ export function replyForZcodeServerRequest(line: string): string | null {
   } catch {
     return null;
   }
-  if (msg.method !== ZCODE_RUNTIME_PREFERENCES_METHOD) return null;
   if (msg.id === undefined || msg.id === null) return null;
-  return JSON.stringify({
-    id: msg.id,
-    result: { ...DEFAULT_ZCODE_RUNTIME_PREFERENCES },
-  });
+  if (msg.method === ZCODE_RUNTIME_PREFERENCES_METHOD) {
+    return JSON.stringify({
+      id: msg.id,
+      result: { ...DEFAULT_ZCODE_RUNTIME_PREFERENCES },
+    });
+  }
+  if (msg.method === ZCODE_PROVIDER_RUNTIME_HEADERS_METHOD) {
+    return JSON.stringify({
+      id: msg.id,
+      result: { ...DEFAULT_ZCODE_PROVIDER_RUNTIME_HEADERS },
+    });
+  }
+  return null;
 }

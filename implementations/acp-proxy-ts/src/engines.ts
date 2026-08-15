@@ -568,7 +568,7 @@ export function sanitizeZcodeAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   return next;
 }
 
-/** Path to the stdio shim that answers ZCode `session/requestRuntimePreferences`. */
+/** Path to the stdio shim that answers ZCode server→client requests. */
 export function resolveZcodeAppServerProxy(): string | null {
   const dir = dirname(fileURLToPath(import.meta.url));
   for (const name of ['zcode-app-server-proxy.js', 'zcode-app-server-proxy.ts']) {

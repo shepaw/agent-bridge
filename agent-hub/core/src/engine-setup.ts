@@ -989,7 +989,7 @@ function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
       {
         title: '安装 ZCode 桌面版并登录',
         description:
-          `从 https://zcode.z.ai 安装 ZCode，完成 Connect Z.ai / BigModel / API Key。凭据写入 ~/.zcode/v2/config.json，Hub / CLI 会直接复用，不必再填一遍 Key。` +
+          `从 https://zcode.z.ai 安装 ZCode，完成 Connect Z.ai / BigModel。Hub 优先使用桌面配置里带 API Key 的 provider（例如 coding-plan）；纯 OAuth / start-plan 需要桌面验证码，headless 无法完成。` +
           (bundled !== null ? ` 内置 CLI 通常位于 ${bundled}。` : ''),
       },
       {
@@ -1000,7 +1000,7 @@ function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
       {
         title: '安装 Node.js 22+',
         description:
-          'zcode-acp-server 需要 Node.js ≥ 22（node:sqlite）。Hub 会通过 npx 拉取适配器，并注入 ZCODE_NODE 指向 Hub 自己的 Node。新版 ZCode 在创建会话时会询问 runtime preferences，Gateway 会自动应答。',
+          'zcode-acp-server 需要 Node.js ≥ 22（node:sqlite）。Hub 会通过 npx 拉取适配器，并注入 ZCODE_NODE 指向 Hub 自己的 Node。新版 ZCode 在创建会话与 Coding Plan 发请求时会询问 runtime preferences / provider headers，Gateway 会自动应答。',
         command: 'node --version && npx --version',
       },
       {
