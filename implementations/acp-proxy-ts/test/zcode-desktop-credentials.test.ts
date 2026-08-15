@@ -58,12 +58,11 @@ describe('pickZcodeDesktopCredentials', () => {
     expect(picked?.providerId).toBe('builtin:bigmodel');
     expect(picked?.ANTHROPIC_API_KEY).toBe('coding-key');
     expect(picked?.planEndpoint).toBe(false);
-    expect(picked?.ZCODE_MODEL).toBe('builtin:bigmodel/GLM-5.3');
-    expect(picked?.modelVariant).toBe('low');
-    expect(picked?.modelCatalog[0]).toMatchObject({
-      modelId: 'GLM-5.3',
-      reasoning: { enabled: true, defaultLevel: 'low' },
-    });
+    expect(picked?.ZCODE_MODEL).toBe('builtin:bigmodel/GLM-5.2');
+    expect(picked?.modelId).toBe('GLM-5.2');
+    expect(picked?.modelVariant).toBeUndefined();
+    expect(picked?.models).toEqual(['GLM-5.3', 'GLM-5.2']);
+    expect(picked?.modelCatalog.map((entry) => entry.modelId)).toEqual(['GLM-5.3', 'GLM-5.2']);
     expect(picked?.ZCODE_BASE_URL).toBe('https://open.bigmodel.cn/api/anthropic');
   });
 

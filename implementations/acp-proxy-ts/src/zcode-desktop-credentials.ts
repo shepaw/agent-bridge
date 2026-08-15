@@ -80,10 +80,25 @@ function firstModelId(provider: ZcodeProviderConfig): string {
   return ids[0] ?? 'GLM-5.2';
 }
 
+/** GLM-5.3 is gated on Coding Plan / start-plan; a plain API key returns 1220. */
+export function isZcodeApiKeyGatedModel(modelId: string): boolean {
+  return /glm-5\.3/i.test(modelId);
+}
+
+function usableModelIds(provider: ZcodeProviderConfig, apiKeyPath: boolean): string[] {
+  const ids = Object.keys(provider.models ?? {});
+  if (!apiKeyPath) return ids;
+  const allowed = ids.filter((id) => !isZcodeApiKeyGatedModel(id));
+  return allowed.length > 0 ? allowed : ids;
+}
+
 /** Always-thinking models (GLM-5.3) need an explicit low/high/max variant. */
-function pickHeadlessModel(provider: ZcodeProviderConfig): { modelId: string; variant?: string } {
+function pickHeadlessModel(
+  provider: ZcodeProviderConfig,
+  apiKeyPath: boolean,
+): { modelId: string; variant?: string } {
   const models = provider.models ?? {};
-  const ids = Object.keys(models);
+  const ids = usableModelIds(provider, apiKeyPath);
   const modelId = ids[0] ?? firstModelId(provider);
   const variant = headlessThoughtVariant(models[modelId]);
   return variant !== undefined ? { modelId, variant } : { modelId };
@@ -142,13 +157,14 @@ function fromProvider(
     family?.enabled === true;
   const runtimeId = useFamily ? familyId : id;
   const runtime = useFamily && family !== undefined ? family : provider;
-  const pickedModel = pickHeadlessModel(runtime);
+  const apiKeyPath = !isZcodePlanProvider(id, keyUrl);
+  const pickedModel = pickHeadlessModel(runtime, apiKeyPath);
   const modelId = pickedModel.modelId;
   const baseURL = (runtime.options?.baseURL ?? keyUrl).trim();
   const models = Object.keys(runtime.models ?? {});
   const catalog =
     models.length > 0
-      ? models.map((id) => catalogEntry(id, runtime.models?.[id]))
+      ? models.map((mid) => catalogEntry(mid, runtime.models?.[mid]))
       : [catalogEntry(modelId, runtime.models?.[modelId])];
   return {
     providerId: runtimeId,

@@ -15,28 +15,40 @@ import {
 } from '../src/zcode-stdio-interceptor.js';
 import type { ZcodeDesktopCredentials } from '../src/zcode-desktop-credentials.js';
 
+const glm53CatalogEntry = {
+  modelId: 'GLM-5.3',
+  reasoning: {
+    enabled: true,
+    defaultLevel: 'low',
+    levels: [
+      { value: 'low', label: 'low' },
+      { value: 'high', label: 'high' },
+      { value: 'max', label: 'max' },
+    ],
+  },
+} as const;
+
 const codingPlanCreds: ZcodeDesktopCredentials = {
   providerId: 'builtin:bigmodel-coding-plan',
   kind: 'anthropic',
   modelId: 'GLM-5.3',
   modelVariant: 'low',
   models: ['GLM-5.3'],
-  modelCatalog: [
-    {
-      modelId: 'GLM-5.3',
-      reasoning: {
-        enabled: true,
-        defaultLevel: 'low',
-        levels: [
-          { value: 'low', label: 'low' },
-          { value: 'high', label: 'high' },
-          { value: 'max', label: 'max' },
-        ],
-      },
-    },
-  ],
+  modelCatalog: [glm53CatalogEntry],
   planEndpoint: false,
   ZCODE_MODEL: 'builtin:bigmodel-coding-plan/GLM-5.3',
+  ZCODE_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
+  ANTHROPIC_API_KEY: 'coding-key',
+};
+
+const apiKeyCreds: ZcodeDesktopCredentials = {
+  providerId: 'builtin:bigmodel',
+  kind: 'anthropic',
+  modelId: 'GLM-5.2',
+  models: ['GLM-5.3', 'GLM-5.2', 'GLM-5-Turbo'],
+  modelCatalog: [glm53CatalogEntry, { modelId: 'GLM-5.2' }, { modelId: 'GLM-5-Turbo' }],
+  planEndpoint: false,
+  ZCODE_MODEL: 'builtin:bigmodel/GLM-5.2',
   ZCODE_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
   ANTHROPIC_API_KEY: 'coding-key',
 };
@@ -140,6 +152,63 @@ describe('ZcodeStdioInterceptor', () => {
       variant: 'low',
     });
     expect(parsed.params.runtimeModel.thoughtLevel).toBe('low');
+  });
+
+  it('keeps the app-selected model and overlays the API key on inbound switch', () => {
+    const bridge = new ZcodeStdioInterceptor(apiKeyCreds);
+    const line = bridge.inbound(
+      JSON.stringify({
+        id: 9,
+        method: ZCODE_UPDATE_RUNTIME_MODEL_METHOD,
+        params: {
+          sessionId: 'sess_1',
+          applyModelSelection: true,
+          runtimeModel: {
+            revision: 'bridge-switch',
+            model: { providerId: 'builtin:bigmodel', modelId: 'GLM-5-Turbo' },
+            provider: { providerId: 'builtin:bigmodel', kind: 'anthropic' },
+          },
+        },
+      }),
+    );
+    const parsed = JSON.parse(line) as {
+      params: {
+        runtimeModel: {
+          model: { modelId: string };
+          provider: { apiKey: unknown; models: readonly { modelId: string }[] };
+        };
+      };
+    };
+    expect(parsed.params.runtimeModel.model.modelId).toBe('GLM-5-Turbo');
+    expect(parsed.params.runtimeModel.provider.apiKey).toEqual({
+      source: 'env',
+      name: 'ANTHROPIC_API_KEY',
+    });
+    expect(parsed.params.runtimeModel.provider.models.map((entry) => entry.modelId)).toEqual([
+      'GLM-5.3',
+      'GLM-5.2',
+      'GLM-5-Turbo',
+    ]);
+
+    const resumed = JSON.parse(
+      bridge.inbound(
+        JSON.stringify({
+          id: 10,
+          method: 'session/resume',
+          params: { sessionId: 'sess_1', runtimeModel: { revision: 'stale' } },
+        }),
+      ),
+    ) as { params: { runtimeModel: { model: { modelId: string } } } };
+    expect(resumed.params.runtimeModel.model.modelId).toBe('GLM-5-Turbo');
+
+    bridge.inbound(JSON.stringify({ id: 11, method: 'session/create', params: { mode: 'yolo' } }));
+    const held = bridge.outbound(
+      JSON.stringify({ id: 11, result: { session: { sessionId: 'sess_2' } } }),
+    );
+    const injected = JSON.parse(held.toChild!) as {
+      params: { runtimeModel: { model: { modelId: string } } };
+    };
+    expect(injected.params.runtimeModel.model.modelId).toBe('GLM-5-Turbo');
   });
 });
 

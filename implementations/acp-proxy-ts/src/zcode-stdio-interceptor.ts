@@ -1,10 +1,9 @@
 /**
  * NDJSON interceptor between zcode-acp-server and zcode.cjs.
  *
- * Answers server→client requests the adapter does not implement, and overlays
- * a headless-friendly runtimeModel so Coding Plan OAuth/captcha is not used
- * when a regular API-key provider exists. GLM-5.3 rejects disabled thinking
- * (provider code 1210), so we also force thoughtLevel=low after create/resume.
+ * Answers server→client requests the adapter does not implement, overlays a
+ * headless-friendly runtimeModel (API key, catalog), and remembers the model
+ * the Shepaw app selected so create/resume do not pin GLM-5.2 forever.
  */
 
 import { replyForZcodeServerRequest } from './zcode-runtime-preferences.js';
@@ -23,17 +22,27 @@ interface JsonRpcMsg {
   error?: unknown;
 }
 
+function variantForModel(creds: ZcodeDesktopCredentials, modelId: string): string | undefined {
+  if (modelId === creds.modelId) return creds.modelVariant;
+  const entry = creds.modelCatalog.find((item) => item.modelId === modelId);
+  const levels = entry?.reasoning?.levels.map((level) => level.value) ?? [];
+  if (levels.includes('low')) return 'low';
+  return entry?.reasoning?.defaultLevel;
+}
+
 export function buildZcodeRuntimeModel(
   creds: ZcodeDesktopCredentials,
-  now: number = Date.now(),
+  opts: { modelId?: string; now?: number } = {},
 ): Record<string, unknown> {
+  const modelId = opts.modelId ?? creds.modelId;
+  const variant = variantForModel(creds, modelId);
   return {
     revision: 'shepaw-hub',
-    generatedAt: now,
+    generatedAt: opts.now ?? Date.now(),
     model: {
       providerId: creds.providerId,
-      modelId: creds.modelId,
-      ...(creds.modelVariant !== undefined ? { variant: creds.modelVariant } : {}),
+      modelId,
+      ...(variant !== undefined ? { variant } : {}),
     },
     provider: {
       providerId: creds.providerId,
@@ -45,9 +54,9 @@ export function buildZcodeRuntimeModel(
       models:
         creds.modelCatalog.length > 0
           ? creds.modelCatalog
-          : creds.models.map((modelId) => ({ modelId })),
+          : creds.models.map((id) => ({ modelId: id })),
     },
-    thoughtLevel: creds.modelVariant ?? ZCODE_HEADLESS_THOUGHT_LEVEL,
+    ...(variant !== undefined ? { thoughtLevel: variant } : {}),
   };
 }
 
@@ -74,6 +83,24 @@ function sessionIdFromCreateResult(result: unknown): string | null {
   return null;
 }
 
+function modelIdFromParams(params: unknown): string | undefined {
+  if (params === null || typeof params !== 'object') return undefined;
+  const rec = params as {
+    modelId?: unknown;
+    model?: unknown;
+    runtimeModel?: { model?: { modelId?: unknown } };
+  };
+  const nested =
+    rec.runtimeModel?.model?.modelId ??
+    (rec.model !== null && typeof rec.model === 'object'
+      ? (rec.model as { modelId?: unknown }).modelId
+      : rec.model);
+  for (const value of [nested, rec.modelId]) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return undefined;
+}
+
 function rpcRequest(id: string, method: string, params: Record<string, unknown>): string {
   // zcode.cjs Zod schemas are `.strict()` and reject a `jsonrpc` envelope key.
   return JSON.stringify({ id, method, params });
@@ -88,6 +115,7 @@ export interface InterceptorOutbound {
 export class ZcodeStdioInterceptor {
   private readonly createIds = new Set<string | number>();
   private readonly resumeSessionById = new Map<string | number, string>();
+  private selectedModelId: string | undefined;
   private heldLine: string | null = null;
   private followUps: string[] = [];
   private currentFollowUpId: string | null = null;
@@ -112,6 +140,14 @@ export class ZcodeStdioInterceptor {
     }
     if (
       this.creds !== null &&
+      (msg.method === ZCODE_UPDATE_RUNTIME_MODEL_METHOD || msg.method === ZCODE_SET_MODEL_METHOD)
+    ) {
+      const selected = modelIdFromParams(msg.params);
+      if (selected !== undefined) this.selectedModelId = selected;
+      return this.enrichModelConfig(msg, selected ?? this.selectedModelId);
+    }
+    if (
+      this.creds !== null &&
       (msg.method === 'session/resume' || msg.method === 'session/load') &&
       msg.params !== null &&
       typeof msg.params === 'object'
@@ -120,7 +156,7 @@ export class ZcodeStdioInterceptor {
         ...msg,
         params: {
           ...(msg.params as Record<string, unknown>),
-          runtimeModel: buildZcodeRuntimeModel(this.creds),
+          runtimeModel: this.runtimeModel(),
         },
       });
     }
@@ -172,10 +208,51 @@ export class ZcodeStdioInterceptor {
     return this.heldLine !== null;
   }
 
+  private runtimeModel(): Record<string, unknown> {
+    return buildZcodeRuntimeModel(this.creds!, { modelId: this.selectedModelId });
+  }
+
+  private enrichModelConfig(msg: JsonRpcMsg, modelId: string | undefined): string {
+    const overlay = this.runtimeModel();
+    const params =
+      msg.params !== null && typeof msg.params === 'object'
+        ? { ...(msg.params as Record<string, unknown>) }
+        : {};
+    const existing =
+      params.runtimeModel !== null && typeof params.runtimeModel === 'object'
+        ? (params.runtimeModel as Record<string, unknown>)
+        : {};
+    const existingModel =
+      existing.model !== null && typeof existing.model === 'object'
+        ? (existing.model as Record<string, unknown>)
+        : {};
+    params.runtimeModel = {
+      ...overlay,
+      ...existing,
+      model: {
+        ...(overlay.model as Record<string, unknown>),
+        ...existingModel,
+        ...(modelId !== undefined ? { modelId } : {}),
+      },
+      provider: overlay.provider,
+    };
+    if (params.model !== null && typeof params.model === 'object') {
+      params.model = {
+        ...(params.model as Record<string, unknown>),
+        providerId: this.creds!.providerId,
+        ...(modelId !== undefined ? { modelId } : {}),
+      };
+    }
+    const rest = { ...msg };
+    delete (rest as { jsonrpc?: unknown }).jsonrpc;
+    return JSON.stringify({ ...rest, params });
+  }
+
   private beginFollowUps(heldLine: string, sessionId: string): InterceptorOutbound {
     this.heldLine = heldLine;
-    const runtimeModel = buildZcodeRuntimeModel(this.creds!);
+    const runtimeModel = this.runtimeModel();
     const model = (runtimeModel.model ?? {}) as Record<string, unknown>;
+    const variant = variantForModel(this.creds!, String(model.modelId ?? this.creds!.modelId));
     this.followUps = [
       rpcRequest(`shepaw-rm-${++this.seq}`, ZCODE_UPDATE_RUNTIME_MODEL_METHOD, {
         sessionId,
@@ -185,12 +262,17 @@ export class ZcodeStdioInterceptor {
       rpcRequest(`shepaw-sm-${++this.seq}`, ZCODE_SET_MODEL_METHOD, {
         sessionId,
         model,
+        runtimeModel,
         persistAsWorkspaceLastUsed: false,
       }),
-      rpcRequest(`shepaw-tl-${++this.seq}`, ZCODE_SET_THOUGHT_LEVEL_METHOD, {
-        sessionId,
-        thoughtLevel: ZCODE_HEADLESS_THOUGHT_LEVEL,
-      }),
+      ...(variant !== undefined
+        ? [
+            rpcRequest(`shepaw-tl-${++this.seq}`, ZCODE_SET_THOUGHT_LEVEL_METHOD, {
+              sessionId,
+              thoughtLevel: variant,
+            }),
+          ]
+        : []),
     ];
     return { holdCreate: true, toChild: this.takeFollowUp() };
   }
