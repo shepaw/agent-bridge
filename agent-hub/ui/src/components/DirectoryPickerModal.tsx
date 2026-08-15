@@ -276,11 +276,6 @@ const row: React.CSSProperties = {
   fontSize: 13,
 };
 
-const rowSelected: React.CSSProperties = {
-  background: '#313244',
-  outline: '1px solid #89b4fa66',
-};
-
 const folderIcon: React.CSSProperties = {
   flexShrink: 0,
   fontSize: 14,

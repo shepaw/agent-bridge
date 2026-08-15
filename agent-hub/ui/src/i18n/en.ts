@@ -507,7 +507,6 @@ export const en = {
   'store.destUri': 'Destination (store://…)',
   'store.destName': 'New file name',
   'store.destPlaceholder': 'store://files/…/name.txt',
-  'store.localOnly': 'Only available on this machine',
   'store.newText': 'New text file',
   'store.filename': 'File name, e.g. notes.txt',
   'store.content': 'File contents',

@@ -22,6 +22,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from 'node:fs';
 import { dirname, join, normalize, relative, sep } from 'node:path';
 import { peerStoreRoot } from '../paths.js';
@@ -148,7 +149,7 @@ export class PeerLocalStore {
     const out: StoreEntryJson[] = [];
     const maxDepth = typeof depth === 'number' && depth > 0 ? depth : 0;
 
-    const fileEntry = (abs: string, childRel: string, st: ReturnType<typeof statSync>): StoreEntryJson => {
+    const fileEntry = (abs: string, childRel: string, st: Stats): StoreEntryJson => {
       if (!computeHash) {
         return {
           path: childRel,

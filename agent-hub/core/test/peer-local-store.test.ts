@@ -182,4 +182,62 @@ describe('PeerLocalStore', () => {
       expect.objectContaining({ path: 'agent-x', kind: 'dir' }),
     ]);
   });
+
+  it('copy then move a file', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const content = Buffer.from('payload');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'a.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    store.writeChunk(device, begin.upload_id, 0, content);
+    store.commit(device, 'files', [begin.upload_id]);
+
+    store.copy(
+      { deviceId: device, space: 'files', path: 'a.txt' },
+      { deviceId: device, space: 'files', path: 'b.txt' },
+    );
+    expect(store.read(device, 'files', 'b.txt').data.toString()).toBe('payload');
+
+    store.move(
+      { deviceId: device, space: 'files', path: 'b.txt' },
+      { deviceId: device, space: 'artifacts', path: 'c.txt' },
+    );
+    expect(() => store.read(device, 'files', 'b.txt')).toThrow();
+    expect(store.read(device, 'files', 'a.txt').data.toString()).toBe('payload');
+    expect(store.read(device, 'artifacts', 'c.txt').data.toString()).toBe('payload');
+  });
+
+  it('copy refuses existing destination', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const content = Buffer.from('x');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const write = (path: string) => {
+      const begin = store.writeBegin({
+        deviceId: device,
+        space: 'files',
+        path,
+        size: content.length,
+        sha256: sha,
+      });
+      store.writeChunk(device, begin.upload_id, 0, content);
+      store.commit(device, 'files', [begin.upload_id]);
+    };
+    write('a.txt');
+    write('b.txt');
+    expect(() =>
+      store.copy(
+        { deviceId: device, space: 'files', path: 'a.txt' },
+        { deviceId: device, space: 'files', path: 'b.txt' },
+      ),
+    ).toThrow(/exists/);
+  });
 });

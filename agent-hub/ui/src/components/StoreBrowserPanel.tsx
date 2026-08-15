@@ -151,7 +151,6 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
   const [uri, setUri] = useState<string | null>(null);
   const [entries, setEntries] = useState<StoreEntry[]>([]);
   const [recent, setRecent] = useState<StoreRecentEntry[]>([]);
-  const [parent, setParent] = useState<string | null>(null);
   const [writable, setWritable] = useState(true);
   const [selected, setSelected] = useState<StoreEntry | null>(null);
   const [previewKind, setPreviewKind] = useState<PreviewKind>('empty');
@@ -301,7 +300,6 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     try {
       if (!target) {
         setEntries([]);
-        setParent(null);
         return;
       }
       const data = await api.store.list(target, 1);
@@ -313,12 +311,10 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         return entryName(a.path).localeCompare(entryName(b.path), undefined, { sensitivity: 'base' });
       });
       setEntries(sorted);
-      setParent(data.parent);
       setWritable(data.writable !== false);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setEntries([]);
-      setParent(null);
     } finally {
       setLoading(false);
     }
@@ -500,7 +496,6 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         return entryName(a.path).localeCompare(entryName(b.path), undefined, { sensitivity: 'base' });
       });
       setEntries(sorted);
-      setParent(data.parent);
       setWritable(data.writable !== false);
       const fileEntry = sorted.find((e) => e.path === parsed.path);
       if (fileEntry) {
@@ -676,13 +671,19 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
 
   const promptOp = (kind: StoreDestKind, entry: StoreEntry) => {
     const from = uriForEntry(entry);
-    if (!from || !uri) return;
+    if (!from || !uri || !currentParsed) return;
     const name = entryName(entry.path);
     if (kind === 'saveAs') {
       setDestPrompt({ kind, fromUri: from, defaultValue: copyFileName(name) });
       return;
     }
-    setDestPrompt({ kind, fromUri: from, defaultValue: uri.endsWith('/') ? uri : `${uri}/` });
+    const destName = kind === 'copy' ? copyFileName(name) : name;
+    const destPath = currentParsed.path ? `${currentParsed.path}/${destName}` : destName;
+    setDestPrompt({
+      kind,
+      fromUri: from,
+      defaultValue: entryUri(currentParsed.space, currentParsed.device, destPath),
+    });
   };
 
   const deleteEntry = async (entry: StoreEntry) => {
@@ -722,6 +723,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
   );
 
   return (
+    <>
     <div style={shell}>
       <aside style={sideNav}>
         <button type="button" style={sideItem(side.kind === 'local')} onClick={selectLocal}>
@@ -866,6 +868,26 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         {uri && (
           <div style={browserPane}>
             <div style={crumbRow}>
+              <button
+                type="button"
+                style={histBtn}
+                disabled={!canBack}
+                onClick={goBack}
+                title={t('store.navBack')}
+                aria-label={t('store.navBack')}
+              >
+                ←
+              </button>
+              <button
+                type="button"
+                style={histBtn}
+                disabled={!canForward}
+                onClick={goForward}
+                title={t('store.navForward')}
+                aria-label={t('store.navForward')}
+              >
+                →
+              </button>
               {breadcrumb.map((c, i) => (
                 <span key={`${c.label}-${i}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   {i > 0 && <span style={{ color: '#585b70' }}>/</span>}
@@ -879,15 +901,14 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                   </button>
                 </span>
               ))}
-              <button type="button" style={navBtn} disabled={!parent && breadcrumb.length <= 1} onClick={() => navigate(parent ?? null)}>
-                {t('picker.up')}
-              </button>
-              <button type="button" style={navBtn} disabled={loading || busy} onClick={() => void loadList(uri)}>
-                {t('common.refresh')}
-              </button>
-              <button type="button" style={navBtn} onClick={() => void copyUri(uri)}>
-                {copied ? t('common.copied') : t('store.copyUri')}
-              </button>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+                <button type="button" style={navBtn} disabled={loading || busy} onClick={() => void loadList(uri)}>
+                  {t('common.refresh')}
+                </button>
+                <button type="button" style={navBtn} onClick={() => void copyUri(uri)}>
+                  {copied ? t('common.copied') : t('store.copyUri')}
+                </button>
+              </span>
             </div>
 
             <div style={toolbar}>
@@ -911,15 +932,53 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                   />
                 </>
               )}
+              {isLocalDevice && uri && (
+                <button
+                  type="button"
+                  style={secondaryBtn}
+                  disabled={busy}
+                  title={t('store.openInOsHint')}
+                  onClick={() => {
+                    const target = selected ? uriForEntry(selected) ?? uri : uri;
+                    void openInOs(target);
+                  }}
+                >
+                  {t('store.openInOs')}
+                </button>
+              )}
+              {uri && (
+                <button
+                  type="button"
+                  style={secondaryBtn}
+                  disabled={busy}
+                  onClick={() => {
+                    const target = selected ? uriForEntry(selected) ?? uri : uri;
+                    sharePath(target);
+                  }}
+                >
+                  {copied ? t('common.copied') : t('store.sharePath')}
+                </button>
+              )}
               {selected && !isDirEntry(selected) && (
                 <>
                   <button type="button" style={secondaryBtn} disabled={busy} onClick={() => void downloadSelected()}>
                     {t('common.download')}
                   </button>
                   {writable && (
-                    <button type="button" style={dangerBtn} disabled={busy} onClick={() => void deleteSelected()}>
-                      {t('common.delete')}
-                    </button>
+                    <>
+                      <button type="button" style={secondaryBtn} disabled={busy} onClick={() => promptOp('saveAs', selected)}>
+                        {t('store.saveAs')}
+                      </button>
+                      <button type="button" style={secondaryBtn} disabled={busy} onClick={() => promptOp('copy', selected)}>
+                        {t('common.copy')}
+                      </button>
+                      <button type="button" style={secondaryBtn} disabled={busy} onClick={() => promptOp('move', selected)}>
+                        {t('store.move')}
+                      </button>
+                      <button type="button" style={dangerBtn} disabled={busy} onClick={() => void deleteSelected()}>
+                        {t('common.delete')}
+                      </button>
+                    </>
                   )}
                 </>
               )}
@@ -948,7 +1007,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
               </div>
             )}
 
-            <div style={showPreviewPane ? browserSplit : browserFull}>
+            <div style={showPreviewPane ? browserSplit : browserFull} onClick={() => setCtxMenu(null)}>
               <div style={listBox}>
                 <div style={listHeader}>
                   <span style={{ ...colName, paddingLeft: 28 }}>{t('store.colName')}</span>
@@ -967,8 +1026,17 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
                       role="option"
                       aria-selected={active}
                       style={{ ...fileRow, ...(active ? fileRowActive : {}) }}
-                      onClick={() => void openEntry(entry, 'select')}
-                      onDoubleClick={() => void openEntry(entry, 'open')}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCtxMenu(null);
+                        void openEntry(entry);
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSelected(entry);
+                        setCtxMenu({ x: e.clientX, y: e.clientY, entry });
+                      }}
                     >
                       <span style={fileIconStyle}>{fileIcon(name, dir)}</span>
                       <span style={colName}>{name}</span>
@@ -1015,6 +1083,71 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         )}
       </main>
     </div>
+    {ctxMenu && (() => {
+      const entry = ctxMenu.entry;
+      const dir = isDirEntry(entry);
+      const target = uriForEntry(entry);
+      return (
+        <div
+          style={{ ...ctxOverlay }}
+          onClick={() => setCtxMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }}
+        >
+          <div
+            style={{ ...ctxBox, top: ctxMenu.y, left: ctxMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {target && (
+              <button type="button" style={ctxItem} onClick={() => { sharePath(target); setCtxMenu(null); }}>
+                {t('store.sharePath')}
+              </button>
+            )}
+            {isLocalDevice && target && (
+              <button
+                type="button"
+                style={ctxItem}
+                onClick={() => { void openInOs(target); setCtxMenu(null); }}
+              >
+                {t('store.openInOs')}
+              </button>
+            )}
+            {!dir && (
+              <button type="button" style={ctxItem} onClick={() => { void downloadEntry(entry); setCtxMenu(null); }}>
+                {t('common.download')}
+              </button>
+            )}
+            {writable && !dir && (
+              <button type="button" style={ctxItem} onClick={() => { promptOp('saveAs', entry); setCtxMenu(null); }}>
+                {t('store.saveAs')}
+              </button>
+            )}
+            {writable && (
+              <>
+                <button type="button" style={ctxItem} onClick={() => { promptOp('copy', entry); setCtxMenu(null); }}>
+                  {t('common.copy')}
+                </button>
+                <button type="button" style={ctxItem} onClick={() => { promptOp('move', entry); setCtxMenu(null); }}>
+                  {t('store.move')}
+                </button>
+                <button type="button" style={ctxDanger} onClick={() => { void deleteEntry(entry); setCtxMenu(null); }}>
+                  {t('common.delete')}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    })()}
+    {destPrompt && (
+      <StoreDestModal
+        kind={destPrompt.kind}
+        defaultValue={destPrompt.defaultValue}
+        busy={busy}
+        onConfirm={(value) => void runDestOp(destPrompt.kind, destPrompt.fromUri, value)}
+        onClose={() => setDestPrompt(null)}
+      />
+    )}
+    </>
   );
 }
 
@@ -1100,6 +1233,11 @@ const fileIconStyle: React.CSSProperties = { flexShrink: 0, fontSize: 16, width:
 const crumbRow: React.CSSProperties = {
   display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 10, flexShrink: 0,
 };
+const histBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #45475a', color: '#cdd6f4',
+  borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 13, lineHeight: 1,
+  minWidth: 28, flexShrink: 0,
+};
 const crumbBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: '#89b4fa', cursor: 'pointer', fontSize: 12, padding: '2px 4px',
 };
@@ -1175,4 +1313,20 @@ const previewPre: React.CSSProperties = {
 };
 const previewImg: React.CSSProperties = {
   maxWidth: '100%', maxHeight: 'calc(100vh - 280px)', objectFit: 'contain', borderRadius: 4,
+};
+const ctxOverlay: React.CSSProperties = {
+  position: 'fixed', inset: 0, zIndex: 130,
+};
+const ctxBox: React.CSSProperties = {
+  position: 'fixed', minWidth: 180,
+  background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 8,
+  padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+  display: 'flex', flexDirection: 'column',
+};
+const ctxItem: React.CSSProperties = {
+  background: 'transparent', border: 'none', color: '#cdd6f4',
+  textAlign: 'left', padding: '7px 10px', cursor: 'pointer', fontSize: 13, borderRadius: 5,
+};
+const ctxDanger: React.CSSProperties = {
+  ...ctxItem, color: '#f38ba8',
 };

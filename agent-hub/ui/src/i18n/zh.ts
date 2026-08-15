@@ -501,7 +501,6 @@ export const zh: Record<MessageKey, string> = {
   'store.destUri': '目标路径（store://…）',
   'store.destName': '新文件名',
   'store.destPlaceholder': 'store://files/…/name.txt',
-  'store.localOnly': '仅限本设备',
   'store.newText': '新建文本',
   'store.filename': '文件名，如 notes.txt',
   'store.content': '文件内容',
