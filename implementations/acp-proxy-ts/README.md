@@ -139,8 +139,7 @@ Recommended Node is 20 (see repo `.nvmrc` / Docker `node:20`).
 
 ## Supported upstream agents
 
-Built-in `--engine` ids match Hub's catalog (Paseo's 39 providers plus OpenClaw,
-ZCode, and DeepSeek Harness). Common ones:
+Built-in `--engine` ids match Hub's catalog. Common ones:
 
 | `--engine`   | Upstream command |
 |-------------|------------------|

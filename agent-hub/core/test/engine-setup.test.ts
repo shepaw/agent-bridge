@@ -250,7 +250,7 @@ describe('engine-setup', () => {
     }
   });
 
-  it('builds catalog guides for Paseo ACP agents', () => {
+  it('builds catalog guides for newly added ACP agents', () => {
     const gemini = getEngineSetupGuide('gemini', 'darwin');
     expect(gemini.acpCommand).toBe('npx -y @google/gemini-cli@latest --acp');
     expect(gemini.installable).toBe(true);

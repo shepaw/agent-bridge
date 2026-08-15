@@ -1,12 +1,8 @@
 /**
  * Built-in ACP engine catalog.
  *
- * Covers Paseo's 39 providers (native + ACP catalog) plus Shepaw extras
- * (OpenClaw, ZCode, DeepSeek Harness). Spawn commands follow each upstream
- * CLI's ACP stdio entry; npx/uvx packages use `@latest` like existing engines.
- *
- * @see https://paseo.sh/docs/supported-providers
- * @see https://github.com/getpaseo/paseo/blob/main/packages/app/src/data/acp-provider-catalog.ts
+ * Spawn commands follow each upstream CLI's ACP stdio entry; npx/uvx
+ * packages use `@latest` like existing engines.
  */
 
 export interface BuiltinEngineEnvHint {

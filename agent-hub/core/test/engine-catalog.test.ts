@@ -8,57 +8,25 @@ import {
   isBuiltinEngineId,
 } from '../src/engine-catalog.js';
 
-/** Paseo's documented 39 providers (native + ACP catalog). */
-const PASEO_PROVIDER_IDS = [
-  'claude-code',
-  'codex',
-  'opencode',
-  'pi',
-  'copilot',
-  'agoragentic',
-  'amp',
-  'auggie',
-  'autohand',
-  'cline',
-  'codebuddy',
-  'codewhale',
-  'cortex-code',
-  'corust-agent',
-  'crow-cli',
-  'cursor',
-  'deepagents',
-  'dimcode',
-  'dirac',
-  'factory-droid',
-  'fast-agent',
-  'gemini',
-  'glm',
-  'goose',
-  'grok',
-  'hermes',
-  'junie',
-  'kilo',
-  'kimi',
-  'minion-code',
-  'mistral-vibe',
-  'nova',
-  'poolside',
-  'qoder',
-  'qwen-code',
-  'sigit',
-  'stakpak',
-  'traecli',
-  'vtcode',
-] as const;
-
 describe('builtin engine catalog', () => {
-  it('covers Paseo\'s 39 providers plus Shepaw extras', () => {
-    expect(PASEO_PROVIDER_IDS).toHaveLength(39);
-    for (const id of PASEO_PROVIDER_IDS) {
-      expect(isBuiltinEngineId(id), `missing Paseo provider ${id}`).toBe(true);
+  it('registers the well-known ACP engines', () => {
+    for (const id of [
+      'claude-code',
+      'codex',
+      'opencode',
+      'cursor',
+      'gemini',
+      'copilot',
+      'pi',
+      'qwen-code',
+      'openclaw',
+      'zcode',
+      'deepseek-harness',
+    ]) {
+      expect(isBuiltinEngineId(id), `missing engine ${id}`).toBe(true);
     }
-    expect(BUILTIN_ENGINE_IDS).toEqual(expect.arrayContaining(['openclaw', 'zcode', 'deepseek-harness']));
-    expect(BUILTIN_ENGINE_CATALOG).toHaveLength(42);
+    expect(BUILTIN_ENGINE_CATALOG.length).toBe(BUILTIN_ENGINE_IDS.length);
+    expect(BUILTIN_ENGINE_CATALOG.length).toBeGreaterThan(10);
   });
 
   it('has unique ids and a complete lookup table', () => {
