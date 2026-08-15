@@ -62,6 +62,11 @@ import { findBuiltinEngineDefinition } from './engine-catalog.js';
 import { instancePaths, hubRoot } from './paths.js';
 import { decryptEnvVars } from './crypto.js';
 import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
+import {
+  ensureAgentStoreMappings,
+  hubStoreDeviceId,
+  workspaceStoreUri,
+} from './peer/agent-store-mapping.js';
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -165,6 +170,12 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       // Non-fatal: peer service still works for instances where this succeeds.
     }
 
+    try {
+      ensureAgentStoreMappings({ agentId: instance.id, cwd: instance.cwd });
+    } catch {
+      /* mapping is best-effort; dashboard/list still advertise the URI */
+    }
+
     const args = [
       cliPath,
       'serve',
@@ -242,6 +253,17 @@ export async function startInstance(instance: InstanceConfig): Promise<{
         SHEPAW_IDENTITY_PATH: paths.identityPath,
         SHEPAW_PEERS_PATH: paths.peersPath,
         SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
+        ...(() => {
+          try {
+            const deviceId = hubStoreDeviceId();
+            return {
+              SHEPAW_HUB_STORE_DEVICE: deviceId,
+              SHEPAW_WORKSPACE_URI: workspaceStoreUri(deviceId, instance.cwd),
+            };
+          } catch {
+            return {};
+          }
+        })(),
         ...(() => {
           const fanout = hubFanoutEnvPaths(hubCfg);
           return {

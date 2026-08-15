@@ -52,6 +52,15 @@ describe('buildStorePouchCard', () => {
     expect(card).not.toMatch(/用户的袋子|agent 的袋子|你的产物根/);
   });
 
+  it('includes mapped workspace uri when provided', () => {
+    const card = buildStorePouchCard({
+      deviceId: '352821253aefdfba',
+      workspaceUri: 'store://workspaces/352821253aefdfba/Users/foo/proj/',
+    });
+    expect(card).toContain('store://workspaces/352821253aefdfba/Users/foo/proj/');
+    expect(card).toContain('docs/good.md');
+  });
+
   it('does not invent a device id when unknown', () => {
     const card = buildStorePouchCard({});
     expect(card).toContain('禁止编造');

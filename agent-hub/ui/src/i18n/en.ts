@@ -264,6 +264,7 @@ export const en = {
     'Each agent has a private Nexus Pouch space; the working directory is also mapped as workspace. Manage files from the global Nexus Pouch like a drive.',
   'detail.agentSpace': 'Agent private space',
   'detail.enterStore': 'Open Nexus Pouch space',
+  'detail.viewWorkspace': 'View workspace',
   'detail.sessionsTitle': 'Sessions',
   'detail.sessionsHint': 'View and manage ACP sessions and transcripts.',
   'detail.resumeSession': 'Resume session',

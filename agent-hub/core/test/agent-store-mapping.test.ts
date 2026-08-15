@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   encodeWorkspaceStorePath,
   ensureAgentStoreMappings,
+  isRelativeWorkspaceHref,
+  joinStoreUri,
+  resolveWorkspaceFileUri,
   workspaceLinkPath,
   workspaceStoreUri,
   agentPrivateStoreUri,
@@ -63,5 +66,38 @@ describe('agent-store-mapping', () => {
     // Store list through the workspace symlink sees cwd files.
     const entries = store.list(device, 'workspaces', encodeWorkspaceStorePath(cwd));
     expect(entries.some((e) => e.path.endsWith('readme.txt'))).toBe(true);
+  });
+
+  it('resolves relative markdown hrefs against the mapped workspace', () => {
+    const root = 'store://workspaces/aaaaaaaaaaaaaaaa/Users/foo/proj/';
+    expect(isRelativeWorkspaceHref('docs/good.md')).toBe(true);
+    expect(isRelativeWorkspaceHref('https://example.com/a')).toBe(false);
+    expect(isRelativeWorkspaceHref('store://files/aaaaaaaaaaaaaaaa/a.md')).toBe(false);
+    expect(joinStoreUri(root, 'docs/good.md')).toBe(
+      'store://workspaces/aaaaaaaaaaaaaaaa/Users/foo/proj/docs/good.md',
+    );
+    expect(joinStoreUri(root, '../secret')).toBeNull();
+    expect(resolveWorkspaceFileUri(root, 'docs/good.md')).toBe(
+      'store://workspaces/aaaaaaaaaaaaaaaa/Users/foo/proj/docs/good.md',
+    );
+    expect(resolveWorkspaceFileUri(root, 'https://ex.com/x')).toBeNull();
+    expect(resolveWorkspaceFileUri(root, 'store://workspaces/aaaaaaaaaaaaaaaa/other.md')).toBe(
+      'store://workspaces/aaaaaaaaaaaaaaaa/other.md',
+    );
+  });
+
+  it('skips rewriting an already-correct workspace symlink', () => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-map-'));
+    const cwd = join(dir, 'project');
+    mkdirSync(cwd);
+    const storeRoot = join(dir, 'store');
+    const store = new PeerLocalStore(storeRoot);
+    const device = 'cccccccccccccccc';
+    const agentId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    ensureAgentStoreMappings({ agentId, cwd, deviceId: device, store });
+    const link = workspaceLinkPath(storeRoot, device, cwd);
+    const first = readlinkSync(link);
+    ensureAgentStoreMappings({ agentId, cwd, deviceId: device, store });
+    expect(readlinkSync(link)).toBe(first);
   });
 });

@@ -263,6 +263,7 @@ export const zh: Record<MessageKey, string> = {
     '每个 Agent 拥有私有储物袋空间，Working Directory 同时映射为 workspace。可在全局「储物袋」中以网盘方式管理。',
   'detail.agentSpace': 'Agent 私有空间',
   'detail.enterStore': '进入储物空间',
+  'detail.viewWorkspace': '查看工作区',
   'detail.sessionsTitle': '会话',
   'detail.sessionsHint': '查看与管理 ACP 会话及对话记录。',
   'detail.resumeSession': '恢复会话',

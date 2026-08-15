@@ -103,6 +103,11 @@ async function enrichInstance(p: InstanceConfig) {
     | undefined;
   try {
     const deviceId = hubStoreDeviceId();
+    try {
+      ensureAgentStoreMappings({ agentId: p.id, cwd: p.cwd, deviceId });
+    } catch {
+      /* URI still advertised even if symlink fails */
+    }
     store = {
       deviceId,
       workspaceUri: workspaceStoreUri(deviceId, p.cwd),

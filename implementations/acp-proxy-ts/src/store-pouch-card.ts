@@ -26,11 +26,18 @@ export function resolveStoreDeviceIdFromEnv(
   return explicit.length > 0 ? explicit : undefined;
 }
 
-export function buildStorePouchCard(opts: { deviceId?: string } = {}): string {
+export function buildStorePouchCard(opts: {
+  deviceId?: string;
+  workspaceUri?: string;
+} = {}): string {
   const device = opts.deviceId?.trim();
   const deviceLine = device
     ? `本机 device_id：\`${device}\`（URI 形如 \`store://files/${device}/…\`）`
     : '本机 device_id 以 store 工具返回值为准，禁止编造或拼接。';
+  const workspace = opts.workspaceUri?.trim();
+  const workspaceLine = workspace
+    ? `本 Agent 工作区已挂载：\`${workspace}\`。相对路径如 \`docs/good.md\` 即该目录下的文件；聊天里的 markdown 链接默认打开此工作区。`
+    : '';
 
   return [
     '## 本机储物袋',
@@ -38,6 +45,7 @@ export function buildStorePouchCard(opts: { deviceId?: string } = {}): string {
     '储物袋是这台设备上的 store，不是用户/agent 各一只袋子。',
     'URI：`store://<space>/<device_id>/<path>`',
     deviceLine,
+    ...(workspaceLine ? ['', workspaceLine] : []),
     '',
     '分区规约（按空间写入）：',
     '- `files` — 沉淀区（安装包、要长期留在设备上的文件）',

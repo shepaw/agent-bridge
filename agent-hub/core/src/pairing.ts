@@ -29,6 +29,7 @@ import { loadOrCreateHubConfig } from './config.js';
 import { hubEnrollmentsPath, instancePaths } from './paths.js';
 import { ensureInstanceDir, isAlive, readState } from './spawn.js';
 import { resolvePublicHost } from './network.js';
+import { hubStoreDeviceId, workspaceStoreUri } from './peer/agent-store-mapping.js';
 
 export interface HubAgentCatalogEntry {
   instanceId: string;
@@ -43,6 +44,8 @@ export interface HubAgentCatalogEntry {
   host: string;
   port: number;
   running: boolean;
+  /** Mapped store://workspaces URI for this instance's working directory. */
+  workspaceUri?: string;
 }
 
 export interface HubPairingResult {
@@ -154,6 +157,12 @@ function pickBootstrapInstance(cfg: HubConfig, preferredId?: string): InstanceCo
 /** List every managed agent with connection metadata for the Shepaw app. */
 export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): HubAgentCatalogEntry[] {
   const gatewayBase = gatewayChannelWsBase(cfg);
+  let workspaceDeviceId: string | undefined;
+  try {
+    workspaceDeviceId = hubStoreDeviceId();
+  } catch {
+    workspaceDeviceId = undefined;
+  }
   return cfg.instances.map((instance) => {
     const paths = instancePaths(instance.id);
     ensureInstanceDir(instance.id);
@@ -169,6 +178,9 @@ export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): H
       host: instance.host,
       port: instance.port,
       running: isInstanceRunning(instance.id),
+      ...(workspaceDeviceId !== undefined
+        ? { workspaceUri: workspaceStoreUri(workspaceDeviceId, instance.cwd) }
+        : {}),
     };
   });
 }

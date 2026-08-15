@@ -258,6 +258,7 @@ export interface HubAgentCatalogEntry {
   host: string;
   port: number;
   running: boolean;
+  workspaceUri?: string;
 }
 
 /** Result of POST /api/pair/enroll — one QR for all agents on this host. */

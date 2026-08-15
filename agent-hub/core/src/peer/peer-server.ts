@@ -43,6 +43,7 @@ import { upsertPairedPeer, loadPairedPeers, type PairedPeer } from './peer-store
 import { drivePeerConnection } from './peer-connection.js';
 import { handleStoreHttp } from './peer-store-http.js';
 import { getPeerLocalStore } from './peer-local-store.js';
+import { ensureAllAgentStoreMappings } from './agent-store-mapping.js';
 
 export interface PeerServerOptions {
   host?: string;
@@ -74,6 +75,13 @@ export class PeerServer {
   async start(): Promise<void> {
     // Ensure store root exists so mirror backup / agent tools have a home.
     getPeerLocalStore();
+    try {
+      ensureAllAgentStoreMappings(loadOrCreateHubConfig().instances);
+    } catch (err) {
+      this.log(
+        `workspace mapping failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     this.httpServer = createServer((req, res) => {
       void handleStoreHttp(req, res).then((handled) => {
         if (!handled) {

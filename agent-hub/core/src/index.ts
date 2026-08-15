@@ -82,9 +82,13 @@ export type { StoreEntryJson } from './peer/peer-local-store.js';
 export {
   agentPrivateStoreUri,
   ensureAgentStoreMappings,
+  ensureAllAgentStoreMappings,
   encodeWorkspaceStorePath,
   hubStoreDeviceId,
+  isRelativeWorkspaceHref,
+  joinStoreUri,
   remapAgentWorkspace,
+  resolveWorkspaceFileUri,
   workspaceStoreUri,
   AGENTS_SPACE,
   WORKSPACES_SPACE,

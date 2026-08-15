@@ -187,6 +187,7 @@ export class AcpProxyAgent extends ACPAgentServer {
         blocks,
         buildStorePouchCard({
           deviceId: resolveStoreDeviceIdFromEnv(process.env),
+          workspaceUri: (process.env.SHEPAW_WORKSPACE_URI ?? '').trim() || undefined,
         }),
       );
       this.pouchCardSessions.add(shepawSessionId);

@@ -18,6 +18,7 @@ import {
   peerServiceStatus,
   agentPrivateStoreUri,
   workspaceStoreUri,
+  ensureAgentStoreMappings,
 } from '@shepaw/agent-hub-core';
 
 export const storeRouter = Router();
@@ -218,6 +219,22 @@ storeRouter.get('/roots', (_req: Request, res: Response) => {
   try {
     const deviceId = hubStoreDeviceId();
     const store = getPeerLocalStore();
+    try {
+      for (const instance of loadOrCreateHubConfig().instances) {
+        try {
+          ensureAgentStoreMappings({
+            agentId: instance.id,
+            cwd: instance.cwd,
+            deviceId,
+            store,
+          });
+        } catch {
+          /* continue mapping remaining instances */
+        }
+      }
+    } catch {
+      /* advertise URIs even if some symlinks fail */
+    }
     const peerStatus = peerServiceStatus();
     const peers = loadPairedPeers().map((p) => ({
       id: p.id,

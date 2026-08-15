@@ -238,5 +238,7 @@ describe('peer pairing handshake', () => {
     expect(typeof agents[0]!.avatar_data).toBe('string');
     expect((agents[0]!.avatar_data as string).length).toBeGreaterThan(20);
     expect(agents[0]!.avatar_ext).toBe('svg');
+    expect(typeof agents[0]!.workspace_uri).toBe('string');
+    expect(String(agents[0]!.workspace_uri)).toMatch(/^store:\/\/workspaces\//);
   });
 });

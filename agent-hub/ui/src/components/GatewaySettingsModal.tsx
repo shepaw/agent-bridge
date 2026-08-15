@@ -213,7 +213,6 @@ const statusRow: React.CSSProperties = {
   marginBottom: 12,
 };
 const channelHint: React.CSSProperties = { color: '#6c7086', fontSize: 12, margin: '0 0 12px' };
-const code: React.CSSProperties = { background: '#181825', border: '1px solid #313244', borderRadius: 4, padding: '0 4px' };
 const labelStyle: React.CSSProperties = { display: 'block', color: '#a6adc8', fontSize: 13, margin: '10px 0 6px' };
 const input: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', padding: '8px 10px',

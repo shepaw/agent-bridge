@@ -414,13 +414,24 @@ export function InstanceDetail({
           <code style={badge}>{instance.id}</code>
           <code style={{ ...badge, background: '#313244' }}>{instance.engine}</code>
         </div>
-        <button
-          style={actionBtn(instance.status.running ? '#c0392b' : '#27ae60')}
-          disabled={busy}
-          onClick={() => void toggle()}
-        >
-          {busy ? t('common.ellipsis') : instance.status.running ? t('common.stop') : t('common.start')}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {instance.store && onOpenStore && (
+            <button
+              type="button"
+              style={actionBtn('#89b4fa')}
+              onClick={() => onOpenStore(instance.store!.workspaceUri)}
+            >
+              {t('detail.viewWorkspace')}
+            </button>
+          )}
+          <button
+            style={actionBtn(instance.status.running ? '#c0392b' : '#27ae60')}
+            disabled={busy}
+            onClick={() => void toggle()}
+          >
+            {busy ? t('common.ellipsis') : instance.status.running ? t('common.stop') : t('common.start')}
+          </button>
+        </div>
       </div>
 
       {err && <p style={{ color: '#f38ba8', margin: '8px 0' }}>{err}</p>}
@@ -533,10 +544,10 @@ export function InstanceDetail({
                         {onOpenStore && (
                           <button
                             type="button"
-                            style={storeBtn}
+                            style={storePrimaryBtn}
                             onClick={() => onOpenStore(instance.store!.workspaceUri)}
                           >
-                            {t('common.open')}
+                            {t('detail.viewWorkspace')}
                           </button>
                         )}
                       </div>
@@ -564,6 +575,8 @@ export function InstanceDetail({
                 selectedSessionId={selectedSessionId}
                 onSelectSession={handleSessionSelect}
                 onManageMappings={openManageMappings}
+                workspaceUri={instance.store?.workspaceUri}
+                onOpenStore={onOpenStore}
               />
             </section>
           )}

@@ -14,6 +14,7 @@ import {
 } from '../engine-avatars.js';
 import { instancePaths } from '../paths.js';
 import { isAlive, readState } from '../spawn.js';
+import { hubStoreDeviceId, workspaceStoreUri } from './agent-store-mapping.js';
 
 export interface AgentListEntry {
   readonly id: string;
@@ -30,6 +31,8 @@ export interface AgentListEntry {
   /** Base64 image bytes so peers can render without bundling engine assets. */
   readonly avatar_data?: string;
   readonly avatar_ext?: string;
+  /** Mapped store workspace so paired apps can open cwd files remotely. */
+  readonly workspace_uri?: string;
 }
 
 function isInstanceRunning(instanceId: string): boolean {
@@ -42,8 +45,18 @@ export { isInstanceRunning };
 /** List managed instances as `agent_list_resp` entries. */
 export function listAgents(): AgentListEntry[] {
   const cfg = loadOrCreateHubConfig();
+  let workspaceDeviceId: string | undefined;
+  try {
+    workspaceDeviceId = hubStoreDeviceId();
+  } catch {
+    workspaceDeviceId = undefined;
+  }
   return cfg.instances.map((i) => {
     const payload = loadEngineAvatarPayload(i.engine);
+    const workspaceUri =
+      workspaceDeviceId !== undefined
+        ? workspaceStoreUri(workspaceDeviceId, i.cwd)
+        : undefined;
     return {
       id: i.id,
       name: i.label || i.id,
@@ -59,6 +72,7 @@ export function listAgents(): AgentListEntry[] {
       ...(payload
         ? { avatar_data: payload.avatar_data, avatar_ext: payload.avatar_ext }
         : {}),
+      ...(workspaceUri !== undefined ? { workspace_uri: workspaceUri } : {}),
     };
   });
 }

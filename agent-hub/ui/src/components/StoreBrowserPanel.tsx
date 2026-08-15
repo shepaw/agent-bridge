@@ -182,9 +182,16 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     const parsed = parseCurrent(target);
     if (!parsed) return;
     if (parsed.device === rootsData.local.deviceId) {
-      const agent = rootsData.agents.find((a) =>
-        parsed.space === 'agents' && parsed.path.split('/')[0] === a.instanceId,
-      );
+      const agent = rootsData.agents.find((a) => {
+        if (parsed.space === 'agents' && parsed.path.split('/')[0] === a.instanceId) {
+          return true;
+        }
+        if (parsed.space === 'workspaces' && a.workspaceUri) {
+          const root = a.workspaceUri.replace(/\/+$/, '');
+          return target.replace(/\/+$/, '') === root || target.startsWith(`${root}/`);
+        }
+        return false;
+      });
       if (agent) setSide({ kind: 'agent', instanceId: agent.instanceId });
       else setSide({ kind: 'local' });
     } else {

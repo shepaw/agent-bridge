@@ -10,7 +10,7 @@
  *   <store>/<device-id>/agents/<agent-uuid>/              → private dir
  */
 
-import { existsSync, lstatSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import { getPeerLocalStore, type PeerLocalStore } from './peer-local-store.js';
@@ -42,6 +42,55 @@ export function workspaceStoreUri(deviceId: string, absCwd: string): string {
 
 export function agentPrivateStoreUri(deviceId: string, agentUuid: string): string {
   return `store://${AGENTS_SPACE}/${deviceId}/${agentUuid}/`;
+}
+
+const ABSOLUTE_HREF = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i;
+
+/** True when [href] is a cwd-relative path (not store://, http, mailto, …). */
+export function isRelativeWorkspaceHref(href: string): boolean {
+  const trimmed = href.trim();
+  if (!trimmed || trimmed.startsWith('store://')) return false;
+  return !ABSOLUTE_HREF.test(trimmed);
+}
+
+/** Join a workspace root URI with a relative path. Rejects `..` traversal. */
+export function joinStoreUri(rootUri: string, relPath: string): string | null {
+  const root = rootUri.trim().replace(/\/+$/, '');
+  if (!root.startsWith('store://')) return null;
+  const rel = relPath
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/^\/+/, '');
+  if (!rel) return root;
+  const parts: string[] = [];
+  for (const seg of rel.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') return null;
+    parts.push(seg);
+  }
+  if (parts.length === 0) return root;
+  return `${root}/${parts.join('/')}`;
+}
+
+/**
+ * Resolve a markdown href against one or more mapped workspace roots.
+ * Absolute/`store://` hrefs are returned as-is (store) or skipped (http…).
+ */
+export function resolveWorkspaceFileUri(
+  workspaceRootUri: string | readonly string[],
+  href: string,
+): string | null {
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('store://')) return trimmed;
+  if (!isRelativeWorkspaceHref(trimmed)) return null;
+  const roots = typeof workspaceRootUri === 'string' ? [workspaceRootUri] : workspaceRootUri;
+  for (const root of roots) {
+    const joined = joinStoreUri(root, trimmed);
+    if (joined) return joined;
+  }
+  return null;
 }
 
 export function hubStoreDeviceId(): string {
@@ -106,13 +155,39 @@ export function remapAgentWorkspace(opts: {
   });
 }
 
+/** Ensure every instance has a workspace symlink (idempotent if already correct). */
+export function ensureAllAgentStoreMappings(
+  instances: ReadonlyArray<{ id: string; cwd: string }>,
+  opts?: { deviceId?: string; store?: PeerLocalStore },
+): void {
+  for (const instance of instances) {
+    try {
+      ensureAgentStoreMappings({
+        agentId: instance.id,
+        cwd: instance.cwd,
+        deviceId: opts?.deviceId,
+        store: opts?.store,
+      });
+    } catch (err) {
+      console.warn(
+        `[shepaw-hub] Warning: failed to map workspace for "${instance.id}": ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
+}
+
 function ensureWorkspaceSymlink(linkPath: string, targetCwd: string): void {
   const target = resolve(targetCwd);
   if (existsSync(linkPath) || isBrokenSymlink(linkPath)) {
     try {
       const st = lstatSync(linkPath);
       if (st.isSymbolicLink()) {
-        // Already a symlink — replace so cwd updates take effect.
+        try {
+          if (resolve(readlinkSync(linkPath)) === target) return;
+        } catch {
+          /* replace below */
+        }
         rmSync(linkPath, { force: true });
       } else {
         // Real directory/file already there — leave it (manual override).

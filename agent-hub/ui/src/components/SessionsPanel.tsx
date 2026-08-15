@@ -10,6 +10,8 @@ interface SessionsPanelProps {
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string | null) => void;
   onManageMappings?: () => void;
+  workspaceUri?: string;
+  onOpenStore?: (uri: string) => void;
 }
 
 export function SessionsPanel({
@@ -18,6 +20,8 @@ export function SessionsPanel({
   selectedSessionId,
   onSelectSession,
   onManageMappings,
+  workspaceUri,
+  onOpenStore,
 }: SessionsPanelProps) {
   const { t } = useI18n();
   const {
@@ -93,6 +97,8 @@ export function SessionsPanel({
               messages={messages}
               loading={historyLoading}
               error={historyError}
+              workspaceUri={workspaceUri}
+              onOpenStore={onOpenStore}
             />
           </div>
         </div>
