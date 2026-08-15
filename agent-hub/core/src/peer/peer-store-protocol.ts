@@ -154,6 +154,7 @@ function dispatchLocal(
         prefix,
         limit,
         Number.isFinite(depth) ? depth : undefined,
+        frame.hash !== false,
       );
       return { entries, next_cursor: null };
     }
@@ -208,6 +209,11 @@ function dispatchLocal(
         typeof frame.device === 'string' ? frame.device : callerDeviceId;
       return { applied_seq: store.appliedSeq(target) };
     }
+    case 'share.announce':
+      // App notifies us of its outbound shares; hub store is the source of
+      // workspaces, so inbound announce is ignored (ack so the app does not
+      // log a protocol error).
+      return { ok: true };
     default:
       throw Object.assign(new Error(`bad_op: ${op}`), { code: 'bad_op' });
   }

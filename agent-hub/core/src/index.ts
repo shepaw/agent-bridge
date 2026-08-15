@@ -78,7 +78,7 @@ export {
   SHARED_SPACES,
   MAX_CHUNK,
 } from './peer/peer-local-store.js';
-export type { StoreEntryJson } from './peer/peer-local-store.js';
+export type { StoreEntryJson, StoreLocation } from './peer/peer-local-store.js';
 export {
   agentPrivateStoreUri,
   ensureAgentStoreMappings,

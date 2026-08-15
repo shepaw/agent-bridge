@@ -127,6 +127,36 @@ describe('PeerLocalStore', () => {
     expect(one[0]!.path).toBe(`${agentA}/note.txt`);
   });
 
+  it('meta reports directories (including symlink targets) as kind=dir', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'ffffffffffffffff';
+    mkdirSync(join(dir, device, 'workspaces', 'Users', 'foo'), { recursive: true });
+    const meta = store.meta(device, 'workspaces', 'Users/foo');
+    expect(meta.kind).toBe('dir');
+  });
+
+  it('list skips hashing when computeHash is false', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = '0123456789abcdef';
+    const content = Buffer.from('skip-hash');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'a.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    store.writeChunk(device, begin.upload_id, 0, content);
+    store.commit(device, 'files', [begin.upload_id]);
+    const hashed = store.list(device, 'files', undefined, 1000, 1, true);
+    expect(hashed[0]!.sha256).toBe(sha);
+    const skipped = store.list(device, 'files', undefined, 1000, 1, false);
+    expect(skipped[0]!.sha256).toBe('');
+  });
+
   it('list depth via inbound frame', () => {
     dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
     const store = new PeerLocalStore(dir);

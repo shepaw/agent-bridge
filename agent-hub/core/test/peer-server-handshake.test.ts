@@ -119,11 +119,6 @@ async function reconnectOverWs(
   expect(hsFrame.t).toBe('hs');
   session.readHandshake2(hsFrame.payload);
 
-  ws.send(encodeFrame({
-    t: 'data',
-    payload: session.encrypt(Buffer.from(JSON.stringify({ type: 'agent_list_req' }), 'utf-8')),
-  }));
-
   const listMsg = await new Promise<Record<string, unknown>>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('agent_list timeout')), 5_000);
     const onMsg = (data: WebSocket.RawData): void => {
@@ -142,6 +137,10 @@ async function reconnectOverWs(
     };
     ws.on('message', onMsg);
     ws.once('error', (err) => { clearTimeout(timer); reject(err); });
+    ws.send(encodeFrame({
+      t: 'data',
+      payload: session.encrypt(Buffer.from(JSON.stringify({ type: 'agent_list_req' }), 'utf-8')),
+    }));
   });
   ws.close();
   return listMsg;

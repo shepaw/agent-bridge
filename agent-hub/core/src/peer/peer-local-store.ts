@@ -12,10 +12,13 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -45,6 +48,12 @@ export interface StoreEntryJson {
   mtime: number;
   /** Present when listing with finite `depth` (dirs included). */
   kind?: 'file' | 'dir';
+}
+
+export interface StoreLocation {
+  deviceId: string;
+  space: string;
+  path: string;
 }
 
 interface StagingMeta {
@@ -129,6 +138,7 @@ export class PeerLocalStore {
     prefix?: string,
     limit = 1000,
     depth?: number,
+    computeHash = true,
   ): StoreEntryJson[] {
     if (!ALL_SPACES.has(space)) {
       throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
@@ -137,6 +147,26 @@ export class PeerLocalStore {
     if (!existsSync(base)) return [];
     const out: StoreEntryJson[] = [];
     const maxDepth = typeof depth === 'number' && depth > 0 ? depth : 0;
+
+    const fileEntry = (abs: string, childRel: string, st: ReturnType<typeof statSync>): StoreEntryJson => {
+      if (!computeHash) {
+        return {
+          path: childRel,
+          size: st.size,
+          sha256: '',
+          mtime: st.mtimeMs,
+          kind: 'file',
+        };
+      }
+      const bytes = readFileSync(abs);
+      return {
+        path: childRel,
+        size: st.size,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        mtime: st.mtimeMs,
+        kind: 'file',
+      };
+    };
 
     if (maxDepth > 0) {
       const startRel = (prefix ?? '').replace(/^\/+|\/+$/g, '');
@@ -172,14 +202,7 @@ export class PeerLocalStore {
             });
             if (remaining > 1) walkShallow(abs, childRel, remaining - 1);
           } else if (st.isFile()) {
-            const bytes = readFileSync(abs);
-            out.push({
-              path: childRel,
-              size: st.size,
-              sha256: createHash('sha256').update(bytes).digest('hex'),
-              mtime: st.mtimeMs,
-              kind: 'file',
-            });
+            out.push(fileEntry(abs, childRel, st));
           }
         }
       };
@@ -203,13 +226,7 @@ export class PeerLocalStore {
           walk(abs, childRel);
         } else if (st.isFile()) {
           if (prefix && !childRel.startsWith(prefix)) continue;
-          const bytes = readFileSync(abs);
-          out.push({
-            path: childRel,
-            size: st.size,
-            sha256: createHash('sha256').update(bytes).digest('hex'),
-            mtime: st.mtimeMs,
-          });
+          out.push(fileEntry(abs, childRel, st));
           if (out.length >= limit) return;
         }
       }
@@ -223,11 +240,22 @@ export class PeerLocalStore {
       throw Object.assign(new Error('bad_path'), { code: 'bad_path' });
     }
     const abs = resolveUnder(this.root, deviceId, space, ...path.split('/'));
-    if (!existsSync(abs) || !statSync(abs).isFile()) {
+    if (!existsSync(abs)) {
+      throw Object.assign(new Error('not_found'), { code: 'not_found' });
+    }
+    const st = statSync(abs);
+    if (st.isDirectory()) {
+      return {
+        kind: 'dir',
+        size: 0,
+        sha256: '',
+        mtime: st.mtimeMs,
+      };
+    }
+    if (!st.isFile()) {
       throw Object.assign(new Error('not_found'), { code: 'not_found' });
     }
     const bytes = readFileSync(abs);
-    const st = statSync(abs);
     return {
       kind: 'file',
       size: st.size,
@@ -369,9 +397,68 @@ export class PeerLocalStore {
     if (!existsSync(abs)) {
       throw Object.assign(new Error('not_found'), { code: 'not_found' });
     }
-    rmSync(abs, { force: true });
+    rmSync(abs, { recursive: true, force: true });
     if (typeof uptoSeq === 'number') this.setAppliedSeq(deviceId, uptoSeq);
     return { applied_seq: this.appliedSeq(deviceId) };
+  }
+
+  /**
+   * Absolute path under the store root. Does not follow the final symlink.
+   * Empty `path` resolves to the space directory.
+   */
+  absPath(deviceId: string, space: string, path?: string): string {
+    if (!ALL_SPACES.has(space)) {
+      throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
+    }
+    if (!path) return resolveUnder(this.root, deviceId, space);
+    if (!isSafeRelPath(path)) {
+      throw Object.assign(new Error('bad_path'), { code: 'bad_path' });
+    }
+    return resolveUnder(this.root, deviceId, space, ...path.split('/'));
+  }
+
+  copy(from: StoreLocation, to: StoreLocation): void {
+    const src = this.absPath(from.deviceId, from.space, from.path);
+    const dest = this.absPath(to.deviceId, to.space, to.path);
+    if (!existsSync(src)) {
+      throw Object.assign(new Error('not_found'), { code: 'not_found' });
+    }
+    if (src === dest) {
+      throw Object.assign(new Error('source and destination are the same'), { code: 'bad_path' });
+    }
+    if (existsSync(dest)) {
+      throw Object.assign(new Error('destination exists'), { code: 'exists' });
+    }
+    ensureDir(dirname(dest));
+    const st = statSync(src);
+    if (st.isDirectory()) {
+      cpSync(src, dest, { recursive: true, force: false });
+    } else if (st.isFile()) {
+      copyFileSync(src, dest);
+    } else {
+      throw Object.assign(new Error('not_found'), { code: 'not_found' });
+    }
+  }
+
+  move(from: StoreLocation, to: StoreLocation): void {
+    const src = this.absPath(from.deviceId, from.space, from.path);
+    const dest = this.absPath(to.deviceId, to.space, to.path);
+    if (!existsSync(src)) {
+      throw Object.assign(new Error('not_found'), { code: 'not_found' });
+    }
+    if (src === dest) {
+      throw Object.assign(new Error('source and destination are the same'), { code: 'bad_path' });
+    }
+    if (existsSync(dest)) {
+      throw Object.assign(new Error('destination exists'), { code: 'exists' });
+    }
+    ensureDir(dirname(dest));
+    try {
+      renameSync(src, dest);
+    } catch {
+      this.copy(from, to);
+      rmSync(src, { recursive: true, force: true });
+    }
   }
 }
 
