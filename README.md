@@ -1,6 +1,6 @@
 # agent-bridge
 
-SDKs and reference implementations for building agents that plug into the
+TypeScript SDK and reference implementations for building agents that plug into the
 [Shepaw](https://shepaw.com) mobile app.
 
 ## Layout
@@ -8,7 +8,6 @@ SDKs and reference implementations for building agents that plug into the
 ```
 agent-bridge/
 ├── sdks/
-│   ├── shepaw-acp-sdk-python/        # Python SDK (pip install shepaw-acp-sdk)
 │   └── shepaw-acp-sdk-typescript/    # TypeScript SDK (npm i shepaw-acp-sdk)
 │
 ├── implementations/
@@ -35,11 +34,9 @@ The recommended gateway (`shepaw-acp-proxy`) bridges them:
 Shepaw app → Shepaw ACP v2.1 → AcpProxyAgent → @agentclientprotocol/sdk → upstream agent subprocess
 ```
 
-Both SDKs are designed to speak the **same Shepaw wire protocol** — JSON field
-names stay `snake_case` in both, method names match exactly, and Tunnel /
-Channel-Service framing is byte-for-byte identical, so a Python agent and a
-TypeScript agent are interchangeable from the Shepaw app's point of view
-(once the Python SDK is ported to v2.1 — see below).
+The TypeScript SDK speaks Shepaw ACP v2.1 — JSON field names stay
+`snake_case`, method names match the app, and Tunnel / Channel-Service
+framing is byte-for-byte identical across agents.
 
 > **Note on protocol v2.1 (April 2026):** the TypeScript SDK and the
 > Shepaw Flutter app speak a Noise-IK-encrypted wire protocol with a
@@ -49,8 +46,7 @@ TypeScript agent are interchangeable from the Shepaw app's point of view
 > `<gateway> peers add <pubkey>` with the pubkey shown in the app's
 > "Add agent" screen. Pairing URLs include a `#fp=<fingerprint>` fragment.
 > v2.1 is a **hard cutover** from v2 (prologue changed); both sides
-> must be on v2.1. The Python SDK here is still v1 and is not
-> interoperable with v2.1 apps until ported. See [`SECURITY.md`](SECURITY.md)
+> must be on v2.1. See [`SECURITY.md`](SECURITY.md)
 > for the full threat model and pairing walkthrough.
 
 ## Quick start
@@ -127,26 +123,7 @@ from the browser. See [`agent-hub/README.md`](agent-hub/README.md) for the
 full command reference. For step-by-step deployment (Peer pairing, Channel,
 production checklist), see [`docs/deployment.md`](docs/deployment.md).
 
-### Build a custom agent (Python)
-
-> **v2.1 note:** the Python SDK is still protocol v1 and cannot pair with
-> current Shepaw apps until ported — see the protocol note above.
-
-```sh
-pip install shepaw-acp-sdk
-```
-
-```py
-from shepaw_acp_sdk import ACPAgentServer, TaskContext
-
-class MyAgent(ACPAgentServer):
-    async def on_chat(self, ctx: TaskContext, message: str, **kwargs):
-        await ctx.send_text(f"You said: {message}")
-
-MyAgent(name="My Agent", token="secret").run(port=8080)
-```
-
-### Build a custom agent (TypeScript)
+### Build a custom agent
 
 ```sh
 npm install shepaw-acp-sdk
@@ -192,9 +169,6 @@ npm install && npm run build
 node implementations/acp-proxy-ts/dist/cli.js serve --engine claude-code --cwd ~/your-project
 ```
 
-Python packages are independent — `cd` into each and use `pytest` /
-`pip install -e .` as you normally would.
-
 ## License
 
-Apache-2.0 (TypeScript) / MIT (Python). See each package's `LICENSE`.
+Apache-2.0. See each package's `LICENSE`.

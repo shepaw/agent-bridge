@@ -18,16 +18,13 @@ traffic so you can eyeball the wire format.
 Start any agent on port 8081 with token `mytoken123` (or edit the scripts):
 
 ```sh
-# Option A: Python echo agent from the SDK
-python -m shepaw_acp_sdk.examples.echo_agent --port 8081 --token mytoken123
-
-# Option B: TypeScript echo agent
+# Option A: TypeScript echo agent
 cd ../../sdks/shepaw-acp-sdk-typescript
 PORT=8081 npx tsx examples/echo-agent.ts  # note: default token is "my-secret"
 
-# Option C: the Claude Code gateway
-cd ../../implementations/claude-code-ts && npm run build
-node dist/cli.js serve --port 8081 --token mytoken123 --cwd ~/any-project
+# Option B: the ACP proxy gateway
+cd ../../implementations/acp-proxy-ts && npm run build
+node dist/cli.js serve --engine claude-code --port 8081 --cwd ~/any-project
 ```
 
 Then in another shell:

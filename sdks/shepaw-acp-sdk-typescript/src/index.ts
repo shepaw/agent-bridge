@@ -1,8 +1,6 @@
 /**
  * Shepaw ACP SDK — build ACP agents for the Shepaw app (TypeScript).
  *
- * Wire-compatible with the Python `shepaw_acp_sdk` package.
- *
  * Quick start:
  * ```ts
  * import { ACPAgentServer, TaskContext } from 'shepaw-acp-sdk';

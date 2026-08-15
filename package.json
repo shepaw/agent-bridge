@@ -2,7 +2,7 @@
   "name": "agent-bridge",
   "private": true,
   "version": "0.0.0",
-  "description": "Shepaw agent-bridge monorepo: ACP SDKs (Python + TypeScript) and agent implementations",
+  "description": "Shepaw agent-bridge monorepo: ACP TypeScript SDK and agent implementations",
   "workspaces": [
     "sdks/shepaw-acp-sdk-typescript",
     "implementations/acp-proxy-ts",

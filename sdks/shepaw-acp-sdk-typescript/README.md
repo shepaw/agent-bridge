@@ -1,7 +1,6 @@
 # shepaw-acp-sdk
 
 TypeScript SDK for building [Shepaw](https://shepaw.com) ACP agents.
-Wire-compatible with the Python [`shepaw_acp_sdk`](https://pypi.org/project/shepaw-acp-sdk/).
 
 ## Install
 
@@ -181,13 +180,12 @@ as native radio / checkbox groups with per-option descriptions. The
 older `sendSingleSelect` / `sendMultiSelect` helpers still exist and
 transparently emit a single-field form, so pre-v0.1 code keeps working.
 
-## Wire compatibility
+## Wire protocol
 
-This SDK reproduces the on-the-wire protocol of the Python `shepaw_acp_sdk`
-**at v1 level** — same methods, notifications, and snake_case field names.
-The Python SDK is still v1 (plaintext) and will not interoperate with
-v2.1 agents or Shepaw apps until ported to Noise IK + allowlist
-authorization. Until then, use TypeScript on both sides.
+This SDK speaks Shepaw ACP v2.1 — Noise-IK-encrypted WebSocket JSON-RPC
+with snake_case field names, a per-device public-key allowlist, and
+pairing via QR / single-use code. See the repo [`SECURITY.md`](../../SECURITY.md)
+for the threat model and pairing walkthrough.
 
 ## Not included in v0
 
