@@ -13,7 +13,8 @@ import { parseShellCommand } from './command-line.js';
 import { cursorRunModeSpawnArgs, qwenApprovalModeSpawnArgs, requestedSessionMode } from './session-mode.js';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 export type BuiltinEngineId =
@@ -531,6 +532,64 @@ export function resolveCodexCliBinary(): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Claude / OpenRouter keys that Hub often has in its own process env.
+ * `zcode-acp-server` treats a non-empty `ANTHROPIC_API_KEY` as an override of
+ * `~/.zcode/v2/config.json`; leaking OpenRouter's token + base URL makes
+ * `session/create` hang until the adapter's 15s timeout.
+ */
+export const ZCODE_FOREIGN_ANTHROPIC_KEYS = [
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+] as const;
+
+/**
+ * Strip inherited Claude env and point `ZCODE_NODE` at this process's Node
+ * when it can load `node:sqlite` (Node ≥ 22). Desktop API-key login in
+ * `~/.zcode/v2/config.json` then applies unchanged.
+ */
+export function sanitizeZcodeAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env };
+  for (const key of ZCODE_FOREIGN_ANTHROPIC_KEYS) {
+    delete next[key];
+  }
+  if (!(next.ANTHROPIC_API_KEY ?? '').trim()) {
+    delete next.ANTHROPIC_API_KEY;
+  }
+  if (!(next.ZCODE_NODE ?? '').trim()) {
+    const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+    if (major >= 22) {
+      next.ZCODE_NODE = process.execPath;
+    }
+  }
+  return next;
+}
+
+/** Path to the stdio shim that answers ZCode `session/requestRuntimePreferences`. */
+export function resolveZcodeAppServerProxy(): string | null {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const name of ['zcode-app-server-proxy.js', 'zcode-app-server-proxy.ts']) {
+    const full = join(dir, name);
+    if (existsSync(full)) return full;
+  }
+  return null;
+}
+
+/**
+ * Point `ZCODE_BIN` at our stdio proxy and stash the real `zcode.cjs` in
+ * `ZCODE_REAL_BIN`. zcode-acp-server launches `[node, ZCODE_BIN, app-server, --stdio]`.
+ */
+export function applyZcodeStdioBridge(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const proxy = resolveZcodeAppServerProxy();
+  if (proxy === null) return env;
+  const current = env.ZCODE_BIN?.trim() ?? '';
+  if (current === proxy) return env;
+  const real = current.length > 0 ? current : resolveZcodeCliBinary();
+  if (real === null) return env;
+  return { ...env, ZCODE_REAL_BIN: real, ZCODE_BIN: proxy };
 }
 
 /**

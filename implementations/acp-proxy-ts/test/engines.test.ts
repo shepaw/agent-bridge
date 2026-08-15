@@ -12,6 +12,7 @@ import {
   listBuiltinEngineIds,
   listEngineIds,
   resolveEngineSpec,
+  sanitizeZcodeAgentEnv,
   spawnCommand,
 } from '../src/engines.js';
 import { mapSessionUpdate } from '../src/session-mapper.js';
@@ -38,6 +39,35 @@ describe('engines', () => {
     const spec = getBuiltinEngineSpec('zcode');
     expect(spec.command).toBe('npx');
     expect(spec.args).toEqual(['-y', 'zcode-acp-server@latest']);
+  });
+
+  it('sanitizeZcodeAgentEnv drops inherited Claude/OpenRouter keys', () => {
+    const next = sanitizeZcodeAgentEnv({
+      ANTHROPIC_AUTH_TOKEN: 'sk-or-v1-test',
+      ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+      ANTHROPIC_API_KEY: '',
+      ANTHROPIC_MODEL: 'claude-sonnet',
+      ZCODE_BIN: '/tmp/zcode.cjs',
+      PATH: '/usr/bin',
+    });
+    expect(next.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(next.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(next.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(next.ANTHROPIC_MODEL).toBeUndefined();
+    expect(next.ZCODE_BIN).toBe('/tmp/zcode.cjs');
+    const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+    if (major >= 22) {
+      expect(next.ZCODE_NODE).toBe(process.execPath);
+    }
+  });
+
+  it('sanitizeZcodeAgentEnv keeps an explicit non-empty ANTHROPIC_API_KEY override', () => {
+    const next = sanitizeZcodeAgentEnv({
+      ANTHROPIC_API_KEY: 'sk-zcode-explicit',
+      ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+    });
+    expect(next.ANTHROPIC_API_KEY).toBe('sk-zcode-explicit');
+    expect(next.ANTHROPIC_BASE_URL).toBeUndefined();
   });
 
   it('resolves deepseek-harness to the official ACP demo bin', () => {

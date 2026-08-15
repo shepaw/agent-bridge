@@ -925,6 +925,39 @@ export function checkZcodeInstallStatus(opts: EngineProbeOptions = {}): EngineIn
   );
 }
 
+/**
+ * Claude / OpenRouter keys inherited from the Hub process. zcode-acp-server
+ * treats a non-empty ANTHROPIC_API_KEY as an override of ~/.zcode/v2/config.json.
+ */
+const ZCODE_INHERITED_ANTHROPIC_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+] as const;
+
+/**
+ * Keep only Anthropic keys the operator set on the zcode engine/instance, and
+ * point ZCODE_NODE at Hub's Node so `zcode.cjs` is not launched with an
+ * unrelated PATH node (this machine has /usr/local/bin/node v16).
+ */
+export function sanitizeZcodeHubEnv(
+  env: NodeJS.ProcessEnv,
+  owned: Record<string, string | undefined>,
+): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env };
+  for (const key of ZCODE_INHERITED_ANTHROPIC_KEYS) {
+    const ownedVal = owned[key];
+    if (ownedVal === undefined || ownedVal.length === 0) {
+      delete next[key];
+    }
+  }
+  if (!(next.ZCODE_NODE ?? '').trim()) {
+    next.ZCODE_NODE = process.execPath;
+  }
+  return next;
+}
+
 function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
   const bundled = zcodeBundledRuntimePath(platform);
   return {
@@ -956,13 +989,18 @@ function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
       {
         title: '安装 ZCode 桌面版并登录',
         description:
-          `从 https://zcode.z.ai 安装 ZCode，完成 Connect Z.ai / BigModel / API Key。凭据写入 ~/.zcode/v2/config.json。` +
+          `从 https://zcode.z.ai 安装 ZCode，完成 Connect Z.ai / BigModel / API Key。凭据写入 ~/.zcode/v2/config.json，Hub / CLI 会直接复用，不必再填一遍 Key。` +
           (bundled !== null ? ` 内置 CLI 通常位于 ${bundled}。` : ''),
+      },
+      {
+        title: '不要把 Claude/OpenRouter 的 ANTHROPIC_* 带进 ZCode 实例',
+        description:
+          'Hub 进程里若存在 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL（例如 OpenRouter），会覆盖 ~/.zcode 里的 API Key，表现为 session/create timeout。ZCode 实例只需桌面登录；可选覆盖请用 ZCODE_MODEL / ZCODE_BASE_URL。',
       },
       {
         title: '安装 Node.js 22+',
         description:
-          'zcode-acp-server 需要 Node.js ≥ 22（node:sqlite）。Hub 会通过 npx 拉取适配器。',
+          'zcode-acp-server 需要 Node.js ≥ 22（node:sqlite）。Hub 会通过 npx 拉取适配器，并注入 ZCODE_NODE 指向 Hub 自己的 Node。新版 ZCode 在创建会话时会询问 runtime preferences，Gateway 会自动应答。',
         command: 'node --version && npx --version',
       },
       {

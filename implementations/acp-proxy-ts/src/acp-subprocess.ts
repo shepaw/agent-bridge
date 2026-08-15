@@ -15,7 +15,13 @@ import { TaskCancelledError } from 'shepaw-acp-sdk';
 import type { ModelsListResult, ModelsSetCurrentResult, ModesListResult, ModesSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
-import { resolveCodexCliBinary, resolveZcodeCliBinary, spawnCommand } from './engines.js';
+import {
+  applyZcodeStdioBridge,
+  resolveCodexCliBinary,
+  resolveZcodeCliBinary,
+  sanitizeZcodeAgentEnv,
+  spawnCommand,
+} from './engines.js';
 import { loadUpstreamSessionTranscript } from './session-history.js';
 import {
   buildSetModelResult,
@@ -120,6 +126,10 @@ export function formatAcpError(err: unknown): string {
     parts.push(cause);
   }
   return parts.join(' — ');
+}
+
+function isZcodeCreateTimeout(err: unknown): boolean {
+  return /zcode create failed:\s*timeout/i.test(formatAcpError(err));
 }
 
 function isSignalTermination(code: number | null, signal: NodeJS.Signals | null): boolean {
@@ -434,7 +444,7 @@ export class AcpSubprocess {
   }
 
   private async doStart(): Promise<void> {
-    const mergedEnv: NodeJS.ProcessEnv = {
+    let mergedEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.extraEnv,
     };
@@ -450,14 +460,17 @@ export class AcpSubprocess {
         log('CODEX_PATH unset; using local Codex CLI: %s', codexBin);
       }
     }
-    if (
-      this.spec.id === 'zcode' &&
-      (mergedEnv.ZCODE_BIN === undefined || mergedEnv.ZCODE_BIN.length === 0)
-    ) {
-      const zcodeBin = resolveZcodeCliBinary();
-      if (zcodeBin !== null) {
-        mergedEnv.ZCODE_BIN = zcodeBin;
-        log('ZCODE_BIN unset; using local ZCode runtime: %s', zcodeBin);
+    if (this.spec.id === 'zcode') {
+      if (mergedEnv.ZCODE_BIN === undefined || mergedEnv.ZCODE_BIN.length === 0) {
+        const zcodeBin = resolveZcodeCliBinary();
+        if (zcodeBin !== null) {
+          mergedEnv.ZCODE_BIN = zcodeBin;
+          log('ZCODE_BIN unset; using local ZCode runtime: %s', zcodeBin);
+        }
+      }
+      mergedEnv = applyZcodeStdioBridge(mergedEnv);
+      if (mergedEnv.ZCODE_REAL_BIN !== undefined && mergedEnv.ZCODE_REAL_BIN.length > 0) {
+        log('zcode stdio bridge: real=%s proxy=%s', mergedEnv.ZCODE_REAL_BIN, mergedEnv.ZCODE_BIN);
       }
     }
     if (this.spec.id === 'deepseek-harness') {
@@ -486,7 +499,7 @@ export class AcpSubprocess {
     const child = spawn(command, args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: augmentAgentEnv(mergedEnv),
+      env: augmentAgentEnv(mergedEnv, this.spec.id),
     });
 
     child.on('error', (err) => {
@@ -521,7 +534,7 @@ export class AcpSubprocess {
           ' — install Codex CLI (`npm i -g @openai/codex`) or set CODEX_PATH; run `codex login` if needed';
       } else if (this.spec.id === 'zcode') {
         hint =
-          ' — install ZCode (https://zcode.z.ai) or set ZCODE_BIN; sign in so ~/.zcode/v2/config.json exists';
+          ' — install ZCode (https://zcode.z.ai) or set ZCODE_BIN; sign in with API key in the desktop app (~/.zcode/v2/config.json). Do not inherit Claude/OpenRouter ANTHROPIC_* env vars';
       } else if (this.spec.id === 'deepseek-harness') {
         hint =
           ' — set DEEPSEEK_API_KEY; put cordis.yml in the instance cwd (see Hub engine setup)';
@@ -607,6 +620,23 @@ export class AcpSubprocess {
         supportsSessionResume(initResult),
         supportsSessionLoad(initResult),
       );
+
+      // zcode-acp-server lazily spawns `zcode app-server` on the first
+      // session/new, then waits only 15s for session/create. Kick session/list
+      // now so the user's first chat isn't racing that cold start.
+      if (this.spec.id === 'zcode') {
+        try {
+          await this.connection.agent.request(acp.methods.agent.session.list, {
+            cwd: this.cwd,
+          });
+          log('zcode backend warmed via session/list');
+        } catch (warmErr) {
+          log(
+            'zcode backend warm-up failed: %s',
+            warmErr instanceof Error ? warmErr.message : String(warmErr),
+          );
+        }
+      }
     } catch (err) {
       const base = err instanceof Error ? err : new Error(String(err));
       // Don't re-tag signal deaths / already-hinted exits as auth failures.
@@ -1183,14 +1213,27 @@ export class AcpSubprocess {
 
   private async startSessionWithMcp(): Promise<acp.ActiveSession> {
     const servers = this.mcpServers();
-    let builder = this.connection!.agent.buildSession(this.cwd);
-    for (const server of servers) {
-      builder = builder.withMcpServer(server);
-    }
     if (servers.length > 0) {
       log('injecting %d MCP server(s) into session/new (store)', servers.length);
     }
-    return builder.start();
+    const startOnce = (): Promise<acp.ActiveSession> => {
+      let builder = this.connection!.agent.buildSession(this.cwd);
+      for (const server of servers) {
+        builder = builder.withMcpServer(server);
+      }
+      return builder.start();
+    };
+    try {
+      return await startOnce();
+    } catch (err) {
+      if (this.spec.id !== 'zcode' || !isZcodeCreateTimeout(err)) {
+        throw err;
+      }
+      // Adapter timeout is 15s and includes lazy app-server spawn. Retry once
+      // now that the backend is (usually) already running.
+      log('zcode session/new timed out; retrying once after backend spawn');
+      return startOnce();
+    }
   }
 
   private async doTryRestoreSession(
@@ -1565,7 +1608,7 @@ function summarizeStderr(text: string): string {
   return oneLine.length <= 240 ? oneLine : `${oneLine.slice(0, 240)}…`;
 }
 
-function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function augmentAgentEnv(env: NodeJS.ProcessEnv, engineId?: string): NodeJS.ProcessEnv {
   const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
   const current = env[pathKey] ?? env.PATH ?? '';
   const sep = process.platform === 'win32' ? ';' : ':';
@@ -1598,20 +1641,24 @@ function augmentAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     };
   }
 
-  // Claude Code reads ANTHROPIC_API_KEY. An *empty* API_KEY in the env blocks
-  // Claude's normal CLI login (~/.claude) and yields opaque ACP "Internal error".
-  // Hub often stores OpenRouter-style keys only under ANTHROPIC_AUTH_TOKEN — copy
-  // when present; otherwise drop the empty key so keychain/CLI auth can work.
-  const apiKey = next.ANTHROPIC_API_KEY;
-  const authToken = next.ANTHROPIC_AUTH_TOKEN;
-  if (apiKey === undefined || apiKey.length === 0) {
-    if (typeof authToken === 'string' && authToken.length > 0) {
-      next = { ...next, ANTHROPIC_API_KEY: authToken };
-      log('ANTHROPIC_API_KEY empty; using ANTHROPIC_AUTH_TOKEN for upstream Claude ACP');
-    } else if (apiKey !== undefined) {
-      const { ANTHROPIC_API_KEY: _drop, ...rest } = next;
-      next = rest;
-      log('ANTHROPIC_API_KEY was empty string; unset so Claude CLI login can apply');
+  if (engineId === 'zcode') {
+    next = sanitizeZcodeAgentEnv(next);
+  } else {
+    // Claude Code reads ANTHROPIC_API_KEY. An *empty* API_KEY in the env blocks
+    // Claude's normal CLI login (~/.claude) and yields opaque ACP "Internal error".
+    // Hub often stores OpenRouter-style keys only under ANTHROPIC_AUTH_TOKEN — copy
+    // when present; otherwise drop the empty key so keychain/CLI auth can work.
+    const apiKey = next.ANTHROPIC_API_KEY;
+    const authToken = next.ANTHROPIC_AUTH_TOKEN;
+    if (apiKey === undefined || apiKey.length === 0) {
+      if (typeof authToken === 'string' && authToken.length > 0) {
+        next = { ...next, ANTHROPIC_API_KEY: authToken };
+        log('ANTHROPIC_API_KEY empty; using ANTHROPIC_AUTH_TOKEN for upstream Claude ACP');
+      } else if (apiKey !== undefined) {
+        const { ANTHROPIC_API_KEY: _drop, ...rest } = next;
+        next = rest;
+        log('ANTHROPIC_API_KEY was empty string; unset so Claude CLI login can apply');
+      }
     }
   }
 

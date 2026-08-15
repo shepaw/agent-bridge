@@ -228,6 +228,7 @@ export {
   zcodeCliSearchPaths,
   resolveZcodeCliBinary,
   checkZcodeInstallStatus,
+  sanitizeZcodeHubEnv,
   getEngineSetupGuide,
   resolveBinaryPath,
   resolveEngineAvailability,

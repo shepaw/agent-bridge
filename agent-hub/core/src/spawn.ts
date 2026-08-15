@@ -53,6 +53,7 @@ import {
   resolveCursorCliBinary,
   resolveEngineAvailability,
   resolveZcodeCliBinary,
+  sanitizeZcodeHubEnv,
   SPAWN_PATH_PREFIXES,
 } from './engine-setup.js';
 import { loadOrCreateHubConfig, isEngineDisabled, resolveEngineEnvVars } from './config.js';
@@ -222,6 +223,68 @@ export async function startInstance(instance: InstanceConfig): Promise<{
         : undefined;
 
     const catalogEnv = findBuiltinEngineDefinition(instance.engine)?.spawnEnv ?? {};
+    const ownedEngineEnv = { ...engineEnv, ...instanceEnv };
+
+    let childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      // Catalog defaults (e.g. Auggie / Droid / VT Code ACP flags). Engine
+      // and instance env below override these.
+      ...catalogEnv,
+      // Engine-default credentials (engineOverrides[engine].envVars). These
+      // are the base layer: a instance can override individual keys via its
+      // own envVars below. Decrypted at spawn time; never on disk plaintext.
+      ...engineEnv,
+      // Per-instance credentials (ANTHROPIC_API_KEY, CODEBUDDY_API_KEY, etc.).
+      // Decrypted from hub.json's envVars at spawn time; never appear in
+      // argv or hub.json in plaintext. Instance values override engine defaults.
+      ...instanceEnv,
+      ...(codexPath !== undefined && codexPath.length > 0 ? { CODEX_PATH: codexPath } : {}),
+      ...(zcodeBin !== undefined && zcodeBin.length > 0 ? { ZCODE_BIN: zcodeBin } : {}),
+      // Redirect SDK file-resolution to this instance's isolated dir.
+      // These three vars are the entire integration surface between hub
+      // and the unmodified gateway binaries.
+      SHEPAW_IDENTITY_PATH: paths.identityPath,
+      SHEPAW_PEERS_PATH: paths.peersPath,
+      SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
+      ...(() => {
+        try {
+          const deviceId = hubStoreDeviceId();
+          return {
+            SHEPAW_HUB_STORE_DEVICE: deviceId,
+            SHEPAW_WORKSPACE_URI: workspaceStoreUri(deviceId, instance.cwd),
+          };
+        } catch {
+          return {};
+        }
+      })(),
+      ...(() => {
+        const fanout = hubFanoutEnvPaths(hubCfg);
+        return {
+          SHEPAW_HUB_FANOUT_PEER_PATHS: fanout.peerPaths,
+          SHEPAW_HUB_FANOUT_ENROLLMENT_PATHS: fanout.enrollmentPaths,
+        };
+      })(),
+      // LEGACY per-instance tunnel. The recommended model runs one shared
+      // channel at the gateway level (see `HubConfig.gateway.tunnel` and the
+      // tunnel router); in that setup instances bind loopback-only and this
+      // block never fires because `instance.tunnel` is unset. Retained so
+      // pre-refactor instances that still carry their own channel keep
+      // working. Credentials go through env vars (not argv) so they never
+      // appear in `ps aux`.
+      ...(instance.tunnel !== undefined
+        ? {
+            PAW_ACP_TUNNEL_SERVER_URL: instance.tunnel.serverUrl,
+            PAW_ACP_TUNNEL_CHANNEL_ID: instance.tunnel.channelId,
+            PAW_ACP_TUNNEL_SECRET: instance.tunnel.secret,
+          }
+        : {}),
+      ...(instance.sessionMode !== undefined && instance.sessionMode.length > 0
+        ? { PAW_ACP_SESSION_MODE: instance.sessionMode }
+        : {}),
+    };
+    if (instance.engine === 'zcode') {
+      childEnv = sanitizeZcodeHubEnv(childEnv, ownedEngineEnv);
+    }
 
     const child = nodeSpawn(process.execPath, args, {
       // Detached so the child survives the hub CLI exiting. On Windows this
@@ -232,63 +295,7 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       detached: true,
       windowsHide: true,
       stdio: ['ignore', logFd, logFd],
-      env: augmentSpawnPath({
-        ...process.env,
-        // Catalog defaults (e.g. Auggie / Droid / VT Code ACP flags). Engine
-        // and instance env below override these.
-        ...catalogEnv,
-        // Engine-default credentials (engineOverrides[engine].envVars). These
-        // are the base layer: a instance can override individual keys via its
-        // own envVars below. Decrypted at spawn time; never on disk plaintext.
-        ...engineEnv,
-        // Per-instance credentials (ANTHROPIC_API_KEY, CODEBUDDY_API_KEY, etc.).
-        // Decrypted from hub.json's envVars at spawn time; never appear in
-        // argv or hub.json in plaintext. Instance values override engine defaults.
-        ...instanceEnv,
-        ...(codexPath !== undefined && codexPath.length > 0 ? { CODEX_PATH: codexPath } : {}),
-        ...(zcodeBin !== undefined && zcodeBin.length > 0 ? { ZCODE_BIN: zcodeBin } : {}),
-        // Redirect SDK file-resolution to this instance's isolated dir.
-        // These three vars are the entire integration surface between hub
-        // and the unmodified gateway binaries.
-        SHEPAW_IDENTITY_PATH: paths.identityPath,
-        SHEPAW_PEERS_PATH: paths.peersPath,
-        SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
-        ...(() => {
-          try {
-            const deviceId = hubStoreDeviceId();
-            return {
-              SHEPAW_HUB_STORE_DEVICE: deviceId,
-              SHEPAW_WORKSPACE_URI: workspaceStoreUri(deviceId, instance.cwd),
-            };
-          } catch {
-            return {};
-          }
-        })(),
-        ...(() => {
-          const fanout = hubFanoutEnvPaths(hubCfg);
-          return {
-            SHEPAW_HUB_FANOUT_PEER_PATHS: fanout.peerPaths,
-            SHEPAW_HUB_FANOUT_ENROLLMENT_PATHS: fanout.enrollmentPaths,
-          };
-        })(),
-        // LEGACY per-instance tunnel. The recommended model runs one shared
-        // channel at the gateway level (see `HubConfig.gateway.tunnel` and the
-        // tunnel router); in that setup instances bind loopback-only and this
-        // block never fires because `instance.tunnel` is unset. Retained so
-        // pre-refactor instances that still carry their own channel keep
-        // working. Credentials go through env vars (not argv) so they never
-        // appear in `ps aux`.
-        ...(instance.tunnel !== undefined
-          ? {
-              PAW_ACP_TUNNEL_SERVER_URL: instance.tunnel.serverUrl,
-              PAW_ACP_TUNNEL_CHANNEL_ID: instance.tunnel.channelId,
-              PAW_ACP_TUNNEL_SECRET: instance.tunnel.secret,
-            }
-          : {}),
-        ...(instance.sessionMode !== undefined && instance.sessionMode.length > 0
-          ? { PAW_ACP_SESSION_MODE: instance.sessionMode }
-          : {}),
-      }),
+      env: augmentSpawnPath(childEnv),
     });
 
     // unref() tells Node's event loop not to wait for this child. The hub

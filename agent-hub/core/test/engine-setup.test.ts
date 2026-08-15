@@ -21,6 +21,7 @@ import {
   resolveCursorCliBinary,
   resolveEngineAvailability,
   resolveZcodeCliBinary,
+  sanitizeZcodeHubEnv,
   probeCursorApiKey,
   probeCursorCliLogin,
 } from '../src/engine-setup.js';
@@ -115,6 +116,37 @@ describe('engine-setup', () => {
     expect(guide.checkPaths?.some((p) => p.includes('ZCode.app'))).toBe(true);
     const keys = (guide.requiredEnvVars ?? []).map((v) => v.key);
     expect(keys).toEqual(expect.arrayContaining(['ZCODE_BIN', 'ZCODE_MODEL', 'ZCODE_BASE_URL']));
+    expect(guide.steps.some((s) => /ANTHROPIC_/i.test(s.description))).toBe(true);
+  });
+
+  it('sanitizeZcodeHubEnv strips inherited Anthropic keys unless owned', () => {
+    const stripped = sanitizeZcodeHubEnv(
+      {
+        ANTHROPIC_AUTH_TOKEN: 'sk-or-v1-hub',
+        ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+        ANTHROPIC_API_KEY: '',
+        ZCODE_BIN: '/tmp/zcode.cjs',
+      },
+      {},
+    );
+    expect(stripped.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(stripped.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(stripped.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(stripped.ZCODE_BIN).toBe('/tmp/zcode.cjs');
+    expect(stripped.ZCODE_NODE).toBe(process.execPath);
+
+    const kept = sanitizeZcodeHubEnv(
+      {
+        ANTHROPIC_API_KEY: 'sk-zcode',
+        ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
+      },
+      {
+        ANTHROPIC_API_KEY: 'sk-zcode',
+        ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
+      },
+    );
+    expect(kept.ANTHROPIC_API_KEY).toBe('sk-zcode');
+    expect(kept.ANTHROPIC_BASE_URL).toBe('https://open.bigmodel.cn/api/anthropic');
   });
 
   it('returns deepseek-harness guide with ACP demo command and API key', () => {
