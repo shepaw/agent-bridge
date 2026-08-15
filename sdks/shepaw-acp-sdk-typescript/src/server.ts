@@ -1493,6 +1493,7 @@ export class ACPAgentServer {
       attachments: params.attachments,
       system_prompt: typeof params.system_prompt === 'string' ? params.system_prompt : this.systemPrompt,
       group_context: params.group_context,
+      tools: params.tools,
       ui_component_version:
         typeof params.ui_component_version === 'string' ? params.ui_component_version : undefined,
       user_id: typeof params.user_id === 'string' ? params.user_id : '',
@@ -1643,6 +1644,7 @@ export class ACPAgentServer {
       request_id?: string;
       group_id?: string;
       history?: ConversationMessage[];
+      caller_pubkey?: string;
     };
     try {
       payload = openJson(mail.ciphertext, this.identity.staticPrivateKey);
@@ -1656,7 +1658,37 @@ export class ACPAgentServer {
     const peer = this.peers.peers.find((p) => p.fingerprint === mail.caller_fp.toLowerCase());
     if (peer === undefined) {
       // eslint-disable-next-line no-console
-      console.warn(`[Mailbox] unknown caller_fp ${mail.caller_fp}, dropping`);
+      console.warn(`[Mailbox] unknown caller_fp ${mail.caller_fp}, rejecting`);
+      const callerPub = decodeMailboxCallerPub(payload.caller_pubkey);
+      if (callerPub !== undefined) {
+        try {
+          const ciphertext = sealJson(
+            {
+              kind: 'chat',
+              error: 'unauthorized',
+              content: 'caller is not an authorized peer',
+              is_final: true,
+              ts: Date.now(),
+            },
+            callerPub,
+          );
+          await this.mailboxClient.depositReply({
+            callerFp: mail.caller_fp,
+            replyTo: mail.message_id,
+            sessionId: mail.session_id,
+            requestId: mail.request_id || mail.message_id,
+            groupId: mail.group_id,
+            kind: 'chat',
+            messageId: `${mail.message_id}:error:unauthorized`,
+            ciphertext,
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[Mailbox] sealed unauthorized reply failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       await this.mailboxClient.ackInbound([mail.id]);
       return;
     }
@@ -1709,7 +1741,8 @@ export class ACPAgentServer {
         messages: this.convMgr.getMessages(sessionId),
         attachments: undefined,
         system_prompt: this.systemPrompt,
-        group_context: undefined,
+        group_context: groupId ? { group_id: groupId } : undefined,
+        tools: undefined,
         ui_component_version: undefined,
         user_id: mail.caller_fp,
         message_id: mail.message_id,
@@ -2307,4 +2340,15 @@ export class ACPAgentServer {
     void jsonrpcNotification;
     void createDeferred;
   }
+}
+
+function decodeMailboxCallerPub(raw: unknown): Uint8Array | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  try {
+    const buf = Buffer.from(raw, 'base64');
+    if (buf.length === 32) return new Uint8Array(buf);
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }

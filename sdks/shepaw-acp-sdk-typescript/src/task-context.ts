@@ -190,7 +190,8 @@ export class TaskContext {
 
   async sendText(content: string): Promise<void> {
     if (this.mailboxStream !== undefined) {
-      this.mailboxStream.texts.push(content);
+      // depositChunk is the sole collector for `texts` — do not push here
+      // or collectedText / depositFinal will duplicate every delta.
       await this.mailboxStream.depositChunk(content);
       return;
     }
@@ -263,8 +264,19 @@ export class TaskContext {
   // For the legacy "wait inside the same turn" behaviour, see the
   // `waitForResponse` method below (deprecated).
 
+  private get isSealedTransport(): boolean {
+    return this.mailboxStream !== undefined || this.offlineSink !== undefined;
+  }
+
   async sendActionConfirmation(opts: SendActionConfirmationOpts): Promise<string> {
     const cid = opts.confirmationId ?? `confirm_${randomUUID().slice(0, 8)}`;
+    if (this.isSealedTransport) {
+      const labels = opts.actions.map((a) => a.label || a.value).join(' / ');
+      await this.sendText(
+        `[需要确认] ${opts.prompt}\n选项：${labels}\n（信箱模式无法展示交互卡片，请在下次在线会话中处理）`,
+      );
+      return cid;
+    }
     await this.sendRaw(
       jsonrpcNotification('ui.actionConfirmation', {
         ...(opts.extra ?? {}),
@@ -323,6 +335,12 @@ export class TaskContext {
 
   async sendFileUpload(opts: SendFileUploadOpts): Promise<string> {
     const uid = opts.uploadId ?? `upload_${randomUUID().slice(0, 8)}`;
+    if (this.isSealedTransport) {
+      await this.sendText(
+        `[需要上传文件] ${opts.prompt}\n（信箱模式无法展示上传组件，请在下次在线会话中处理）`,
+      );
+      return uid;
+    }
     await this.sendRaw(
       jsonrpcNotification('ui.fileUpload', {
         ...(opts.extra ?? {}),
@@ -339,6 +357,13 @@ export class TaskContext {
 
   async sendForm(opts: SendFormOpts): Promise<string> {
     const fid = opts.formId ?? `form_${randomUUID().slice(0, 8)}`;
+    if (this.isSealedTransport) {
+      const fields = opts.fields.map((f) => f.label || f.name).join('、');
+      await this.sendText(
+        `[需要填写表单] ${opts.title}${fields.length > 0 ? `：${fields}` : ''}\n（信箱模式无法展示表单，请在下次在线会话中处理）`,
+      );
+      return fid;
+    }
     await this.sendRaw(
       jsonrpcNotification('ui.form', {
         ...(opts.extra ?? {}),
@@ -353,6 +378,10 @@ export class TaskContext {
   }
 
   async sendFileMessage(opts: SendFileMessageOpts): Promise<void> {
+    if (this.isSealedTransport) {
+      await this.sendText(`[文件] ${opts.filename}${opts.url ? ` ${opts.url}` : ''}`);
+      return;
+    }
     const params: Record<string, unknown> = {
       ...(opts.extra ?? {}),
       task_id: this.taskId,
@@ -368,6 +397,7 @@ export class TaskContext {
   }
 
   async sendMessageMetadata(opts: SendMessageMetadataOpts = {}): Promise<void> {
+    if (this.isSealedTransport) return;
     await this.sendRaw(
       jsonrpcNotification('ui.messageMetadata', {
         ...(opts.extra ?? {}),
@@ -390,6 +420,9 @@ export class TaskContext {
     params?: Record<string, unknown>,
     opts: HubRequestOpts = {},
   ): Promise<T> {
+    if (this.mailboxStream !== undefined || this.offlineSink !== undefined) {
+      throw new Error('hubRequest is unavailable in mailbox/offline mode');
+    }
     const reqId = randomUUID();
     const req = jsonrpcRequest(method, params, reqId);
     const deferred = createDeferred<unknown>();
@@ -421,6 +454,9 @@ export class TaskContext {
     componentId: string,
     opts: WaitForResponseOpts = {},
   ): Promise<Record<string, unknown>> {
+    if (this.mailboxStream !== undefined || this.offlineSink !== undefined) {
+      throw new Error('interactive wait is unavailable in mailbox/offline mode');
+    }
     // Register the waiter FIRST, then consume any early reply. Reversing
     // these races with peer loopback submitResponse and drops the verdict.
     const deferred = createDeferred<Record<string, unknown>>();

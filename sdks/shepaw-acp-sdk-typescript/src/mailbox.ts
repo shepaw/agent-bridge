@@ -147,40 +147,63 @@ export function createMailboxStreamSink(opts: {
 }): MailboxStreamSink {
   let seq = 0;
   const texts: string[] = [];
+  let pending = '';
+  let lastFlush = 0;
+  let chain: Promise<void> = Promise.resolve();
+  const FLUSH_MS = 400;
+  const FLUSH_CHARS = 120;
   const { client, callerFp, replyTo, requestId, sessionId, groupId, sealJson, callerPublicKey } =
     opts;
+
+  const flushPending = async (): Promise<void> => {
+    if (!pending) return;
+    const delta = pending;
+    pending = '';
+    lastFlush = Date.now();
+    seq += 1;
+    const ciphertext = sealJson(
+      {
+        kind: 'stream',
+        reply_to: replyTo,
+        request_id: requestId,
+        session_id: sessionId,
+        seq,
+        delta,
+        is_final: false,
+        ts: Date.now(),
+      },
+      callerPublicKey,
+    );
+    await client.depositReply({
+      callerFp,
+      replyTo,
+      sessionId,
+      requestId,
+      groupId,
+      kind: 'stream',
+      messageId: `${requestId}:chunk:${seq}`,
+      ciphertext,
+    });
+  };
+
+  const enqueue = (fn: () => Promise<void>): Promise<void> => {
+    chain = chain.then(fn, fn);
+    return chain;
+  };
 
   return {
     texts,
     async depositChunk(delta: string): Promise<void> {
       if (!delta) return;
       texts.push(delta);
-      seq += 1;
-      const ciphertext = sealJson(
-        {
-          kind: 'stream',
-          reply_to: replyTo,
-          request_id: requestId,
-          session_id: sessionId,
-          seq,
-          delta,
-          is_final: false,
-          ts: Date.now(),
-        },
-        callerPublicKey,
-      );
-      await client.depositReply({
-        callerFp,
-        replyTo,
-        sessionId,
-        requestId,
-        groupId,
-        kind: 'stream',
-        messageId: `${requestId}:chunk:${seq}`,
-        ciphertext,
-      });
+      pending += delta;
+      const now = Date.now();
+      if (pending.length >= FLUSH_CHARS || lastFlush === 0 || now - lastFlush >= FLUSH_MS) {
+        await enqueue(flushPending);
+      }
     },
     async depositFinal(fullText: string): Promise<void> {
+      await enqueue(flushPending);
       const ciphertext = sealJson(
         {
           kind: 'chat',

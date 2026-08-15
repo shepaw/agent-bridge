@@ -137,6 +137,8 @@ export interface ChatKwargs {
   attachments: unknown;
   system_prompt: string;
   group_context: unknown;
+  /** Optional tool defs (e.g. group_dispatch / group_finish) from `agent.chat`. */
+  tools: unknown;
   ui_component_version: string | undefined;
   user_id: string;
   message_id: string;
