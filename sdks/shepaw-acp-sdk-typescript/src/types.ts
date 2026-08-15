@@ -407,6 +407,8 @@ export interface AgentRuntimeStatus {
   /** Connected, authenticated WebSocket clients. */
   connectedClients: number;
   busyLevel: AgentBusyLevel;
+  /** Concurrent chat capacity (`maxConcurrency`); 0 = unlimited. */
+  capacity?: number;
   /** Present when the gateway fronts an ACP subprocess (acp-proxy). */
   acpConnected?: boolean;
   acpSessionCount?: number;

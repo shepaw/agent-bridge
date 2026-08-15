@@ -121,6 +121,18 @@ cli
       });
     }
 
+    const mailboxServerUrl = process.env.PAW_ACP_MAILBOX_SERVER_URL;
+    const mailboxChannelId = process.env.PAW_ACP_MAILBOX_CHANNEL_ID;
+    const mailboxSecret = process.env.PAW_ACP_MAILBOX_SECRET;
+    const mailboxConfig =
+      mailboxServerUrl && mailboxChannelId && mailboxSecret
+        ? {
+            serverUrl: mailboxServerUrl,
+            channelId: mailboxChannelId,
+            secret: mailboxSecret,
+          }
+        : undefined;
+
     const agent = new AcpProxyAgent({
       engine,
       engineSpec: spec,
@@ -131,6 +143,7 @@ cli
       identityPath: opts.identityPath,
       sessionStoreOptions: opts.sessionStorePath ? { path: opts.sessionStorePath } : undefined,
       tunnelConfig,
+      mailboxConfig,
     });
 
     console.log(`\nUpstream ACP agent: ${spec.displayName}`);

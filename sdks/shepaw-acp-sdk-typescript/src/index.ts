@@ -102,6 +102,7 @@ export type {
 export { seal, open, sealJson, openJson, SealBoxError } from './sealbox.js';
 export { MailboxClient, createMailboxStreamSink } from './mailbox.js';
 export type {
+  ChannelMailboxConfig,
   MailboxClientOptions,
   InboundMail,
   MailboxReplyKind,

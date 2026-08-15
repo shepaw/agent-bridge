@@ -277,7 +277,13 @@ export async function startInstance(instance: InstanceConfig): Promise<{
             PAW_ACP_TUNNEL_CHANNEL_ID: instance.tunnel.channelId,
             PAW_ACP_TUNNEL_SECRET: instance.tunnel.secret,
           }
-        : {}),
+        : hubCfg.gateway?.tunnel !== undefined
+          ? {
+              PAW_ACP_MAILBOX_SERVER_URL: hubCfg.gateway.tunnel.serverUrl,
+              PAW_ACP_MAILBOX_CHANNEL_ID: hubCfg.gateway.tunnel.channelId,
+              PAW_ACP_MAILBOX_SECRET: hubCfg.gateway.tunnel.secret,
+            }
+          : {}),
       ...(instance.sessionMode !== undefined && instance.sessionMode.length > 0
         ? { PAW_ACP_SESSION_MODE: instance.sessionMode }
         : {}),

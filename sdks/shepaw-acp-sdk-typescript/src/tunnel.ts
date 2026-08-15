@@ -186,6 +186,13 @@ interface TunnelMessage {
   error?: string;
   /** 1 = text, 2 = binary */
   ws_msg_type?: number;
+  agent_id?: string;
+  /** Inbox control-plane metadata (no ciphertext). */
+  message_id?: string;
+  request_id?: string;
+  session_id?: string;
+  caller_fp?: string;
+  kind?: string;
 }
 
 // ── TunnelClient ────────────────────────────────────────────────────

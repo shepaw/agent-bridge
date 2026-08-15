@@ -8,10 +8,14 @@
 
 import { createHmac, randomBytes } from 'node:crypto';
 
-export interface MailboxClientOptions {
+/** Channel credentials for mailbox / grant-sync without owning a reverse tunnel. */
+export interface ChannelMailboxConfig {
   serverUrl: string;
   channelId: string;
   secret: string;
+}
+
+export interface MailboxClientOptions extends ChannelMailboxConfig {
   agentId: string;
   onLog?: (line: string) => void;
 }
@@ -44,9 +48,13 @@ export class MailboxClient {
     this.log = opts.onLog ?? ((line) => console.log(line));
   }
 
-  async claimPending(limit = 5): Promise<InboundMail[]> {
+  async claimPending(limit = 5, messageId?: string): Promise<InboundMail[]> {
     const auth = this.signQuery();
-    const url = `${this.base}/api/v1/mailbox/${encodeURIComponent(this.agentId)}/pending?limit=${limit}&${auth}`;
+    const extra =
+      messageId !== undefined && messageId.length > 0
+        ? `&message_id=${encodeURIComponent(messageId)}`
+        : '';
+    const url = `${this.base}/api/v1/mailbox/${encodeURIComponent(this.agentId)}/pending?limit=${limit}&${auth}${extra}`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');

@@ -118,6 +118,13 @@ export class GatewayTunnelRouter {
         localHost: this.routerHost,
         localPort: this.routerPort,
         onLog: (line) => this.log(line),
+        onControlMessage: (msg) => {
+          if (msg.type === 'mail_waiting') {
+            const agentId = typeof msg.agent_id === 'string' ? msg.agent_id : '';
+            const messageId = typeof msg.message_id === 'string' ? msg.message_id : '';
+            void this.wakeMailbox(agentId, messageId);
+          }
+        },
       });
       await this.tunnelClient.start();
       this.log(`[Router] Channel tunnel started → ${this.tunnelConfig.serverUrl}`);
@@ -224,6 +231,36 @@ export class GatewayTunnelRouter {
       instanceId = this.agentIdCache!.get(agentId);
     }
     return instanceId;
+  }
+
+  /**
+   * Device tunnel received `mail_waiting` metadata — wake the matching
+   * instance so it can dedup + claim ciphertext from the cloud inbox.
+   */
+  private async wakeMailbox(agentId: string, messageId: string): Promise<void> {
+    const cfg = this.loadConfig();
+    const instances =
+      agentId.length > 0
+        ? (() => {
+            const instanceId = this.agentIdToInstanceId(cfg, agentId);
+            const found = instanceId !== undefined ? cfg.instances.find((p) => p.id === instanceId) : undefined;
+            return found !== undefined ? [found] : [];
+          })()
+        : cfg.instances;
+
+    const q = messageId.length > 0 ? `?message_id=${encodeURIComponent(messageId)}` : '';
+    await Promise.all(
+      instances.map(async (instance) => {
+        const host = WILDCARD_HOSTS.has(instance.host) ? '127.0.0.1' : instance.host;
+        try {
+          await fetch(`http://${host}:${instance.port}/mailbox/wake${q}`, {
+            signal: AbortSignal.timeout(3_000),
+          });
+        } catch {
+          /* instance may be stopped */
+        }
+      }),
+    );
   }
 
   private resolveTarget(rawUrl: string): { target: RouteTarget | undefined; localPath: string } {

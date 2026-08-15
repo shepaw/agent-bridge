@@ -40,6 +40,7 @@ import type { AgentIdentity } from './identity.js';
 import { loadOrCreateIdentity } from './identity.js';
 import { jsonrpcNotification, jsonrpcResponse } from './jsonrpc.js';
 import { MailboxClient, createMailboxStreamSink } from './mailbox.js';
+import type { ChannelMailboxConfig } from './mailbox.js';
 import { GrantSyncClient } from './grant-sync.js';
 import { NoiseHandshakeError, NoiseSession, NoiseTransportError } from './noise.js';
 import type { AuthorizedPeer, AuthorizedPeers } from './peers.js';
@@ -186,6 +187,12 @@ export interface ACPAgentServerOptions {
    */
   tunnelConfig?: ChannelTunnelConfig;
   /**
+   * Channel mailbox / grant-sync credentials without owning a reverse tunnel.
+   * Hub device-level tunnels use this so each instance can drain inbox while
+   * the gateway router holds the single device tunnel.
+   */
+  mailboxConfig?: ChannelMailboxConfig;
+  /**
    * Called after a peer is promoted into the allowlist via enrollment.
    * Hub uses this to fan-out the device to every managed agent.
    */
@@ -294,10 +301,17 @@ export class ACPAgentServer {
   /** Set when the HTTP server starts listening — used for uptime in /status. */
   private startedAtMs = 0;
   private tunnelConfig: ChannelTunnelConfig | undefined;
+  private mailboxConfig: ChannelMailboxConfig | undefined;
   private tunnelClient: TunnelClient | undefined;
   private mailboxClient: MailboxClient | undefined;
   private mailboxTimer: NodeJS.Timeout | undefined;
   private mailboxBusy = false;
+  /** message_id values already processed (skip duplicate mail_waiting). */
+  private readonly processedMailIds = new Set<string>();
+  /** message_id values currently running (dedup concurrent wake + poller). */
+  private readonly inFlightMailIds = new Set<string>();
+  /** mail_waiting hints arrived while a drain was already in flight. */
+  private readonly pendingMailHints = new Set<string>();
   private grantSync: GrantSyncClient | undefined;
   private grantTimer: NodeJS.Timeout | undefined;
   private readonly maxConcurrency: number;
@@ -366,6 +380,7 @@ export class ACPAgentServer {
     this.cleanDirectivesInHistory = opts.cleanDirectivesInHistory ?? true;
     this.convMgr = new ConversationManager({ maxHistory: opts.maxHistory ?? 20 });
     this.tunnelConfig = opts.tunnelConfig;
+    this.mailboxConfig = opts.mailboxConfig;
     this.onPeerEnrolledHook = opts.onPeerEnrolled;
     // 0 = unlimited (legacy); default 5
     this.maxConcurrency = opts.maxConcurrency ?? 5;
@@ -419,6 +434,7 @@ export class ACPAgentServer {
       activeTasks,
       connectedClients: this.wsServer?.clients.size ?? 0,
       busyLevel: deriveBusyLevel(activeTasks),
+      capacity: this.maxConcurrency,
     };
   }
 
@@ -628,15 +644,14 @@ export class ACPAgentServer {
         },
         onControlMessage: (msg) => {
           if (msg.type === 'mail_waiting') {
-            void this.drainMailbox();
+            const messageId = typeof msg.message_id === 'string' ? msg.message_id : undefined;
+            void this.drainMailbox(messageId ? { messageId } : undefined);
           } else if (msg.type === 'access_grant') {
             void this.syncGrants();
           }
         },
       });
       await this.tunnelClient.start();
-      this.startMailboxPoller();
-      this.startGrantSync();
       const publicUrl = this.tunnelConfig.getPublicEndpoint({
         agentId: this.agentId,
         fingerprint: this.identity.fingerprint,
@@ -651,6 +666,8 @@ export class ACPAgentServer {
       // eslint-disable-next-line no-console
       console.log('='.repeat(60));
     }
+    this.startMailboxPoller();
+    this.startGrantSync();
   }
 
   /**
@@ -726,7 +743,8 @@ export class ACPAgentServer {
   }
 
   private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
-    const url = req.url?.split('?')[0];
+    const parsed = new URL(req.url ?? '/', 'http://localhost');
+    const url = parsed.pathname;
     if (url === '/health') {
       // Return agent identity info so clients can detect if the gateway was
       // re-keyed (identity.json deleted/replaced) and know to re-pair rather
@@ -751,6 +769,13 @@ export class ACPAgentServer {
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(body);
+      return;
+    }
+    if (url === '/mailbox/wake') {
+      const messageId = parsed.searchParams.get('message_id') ?? '';
+      void this.drainMailbox(messageId.length > 0 ? { messageId } : undefined);
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, message_id: messageId || undefined }));
       return;
     }
     res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -1545,12 +1570,24 @@ export class ACPAgentServer {
 
   // ── channel mailbox ────────────────────────────────────────────
 
+  private channelMailboxCreds(): ChannelMailboxConfig | undefined {
+    if (this.tunnelConfig !== undefined) {
+      return {
+        serverUrl: this.tunnelConfig.serverUrl,
+        channelId: this.tunnelConfig.channelId,
+        secret: this.tunnelConfig.secret,
+      };
+    }
+    return this.mailboxConfig;
+  }
+
   private startMailboxPoller(): void {
-    if (this.tunnelConfig === undefined) return;
+    const creds = this.channelMailboxCreds();
+    if (creds === undefined) return;
     this.mailboxClient = new MailboxClient({
-      serverUrl: this.tunnelConfig.serverUrl,
-      channelId: this.tunnelConfig.channelId,
-      secret: this.tunnelConfig.secret,
+      serverUrl: creds.serverUrl,
+      channelId: creds.channelId,
+      secret: creds.secret,
       agentId: this.agentId,
     });
     // 定时兜底：即使 mail_waiting 丢了也能消化 backlog
@@ -1568,11 +1605,12 @@ export class ACPAgentServer {
   }
 
   private startGrantSync(): void {
-    if (this.tunnelConfig === undefined) return;
+    const creds = this.channelMailboxCreds();
+    if (creds === undefined) return;
     this.grantSync = new GrantSyncClient({
-      serverUrl: this.tunnelConfig.serverUrl,
-      channelId: this.tunnelConfig.channelId,
-      secret: this.tunnelConfig.secret,
+      serverUrl: creds.serverUrl,
+      channelId: creds.channelId,
+      secret: creds.secret,
       agentId: this.agentId,
       peersPath: this.peers.path,
       onLog: (line) => console.log(line),
@@ -1604,29 +1642,89 @@ export class ACPAgentServer {
   /**
    * Pull sealed inbound messages while we have capacity; run onChat offline;
    * seal reply to caller's static pubkey and deposit.
+   *
+   * When [hint.messageId] is set (mail_waiting metadata), skip if already
+   * processed and claim that specific inbox row instead of the whole queue.
    */
-  private async drainMailbox(): Promise<void> {
+  private async drainMailbox(hint?: { messageId?: string }): Promise<void> {
+    const hintedId = hint?.messageId;
+    if (hintedId !== undefined && hintedId.length > 0) {
+      this.pendingMailHints.add(hintedId);
+    }
     if (this.mailboxBusy || this.mailboxClient === undefined) return;
     if (this.maxConcurrency > 0 && this.activeTasks.size >= this.maxConcurrency) return;
+
+    const takeHint = (): string | undefined => {
+      const first = this.pendingMailHints.values().next().value as string | undefined;
+      if (first !== undefined) this.pendingMailHints.delete(first);
+      return first;
+    };
+    let targetId = takeHint();
+    if (
+      targetId !== undefined &&
+      (this.processedMailIds.has(targetId) || this.inFlightMailIds.has(targetId))
+    ) {
+      targetId = undefined;
+    }
 
     this.mailboxBusy = true;
     try {
       while (this.maxConcurrency <= 0 || this.activeTasks.size < this.maxConcurrency) {
-        const batch = await this.mailboxClient.claimPending(1);
-        if (batch.length === 0) break;
+        const batch =
+          targetId !== undefined && targetId.length > 0
+            ? await this.mailboxClient.claimPending(1, targetId)
+            : await this.mailboxClient.claimPending(1);
+        if (batch.length === 0) {
+          if (targetId !== undefined) {
+            targetId = takeHint();
+            continue;
+          }
+          break;
+        }
         for (const mail of batch) {
           await this.processMailboxItem(mail);
         }
+        targetId = takeHint();
       }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[Mailbox] drain failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.mailboxBusy = false;
+      if (this.pendingMailHints.size > 0) {
+        void this.drainMailbox();
+      }
     }
   }
 
   private async processMailboxItem(mail: {
+    id: string;
+    message_id: string;
+    request_id?: string;
+    session_id: string;
+    group_id?: string;
+    caller_fp: string;
+    ciphertext: string;
+  }): Promise<void> {
+    if (this.mailboxClient === undefined) return;
+
+    if (this.processedMailIds.has(mail.message_id)) {
+      await this.mailboxClient.ackInbound([mail.id]);
+      return;
+    }
+    if (this.inFlightMailIds.has(mail.message_id)) {
+      return;
+    }
+    this.inFlightMailIds.add(mail.message_id);
+
+    try {
+      await this.runMailboxItem(mail);
+    } finally {
+      this.inFlightMailIds.delete(mail.message_id);
+    }
+  }
+
+  private async runMailboxItem(mail: {
     id: string;
     message_id: string;
     request_id?: string;
@@ -1652,6 +1750,7 @@ export class ACPAgentServer {
       // eslint-disable-next-line no-console
       console.warn(`[Mailbox] decrypt failed for ${mail.id}: ${err instanceof Error ? err.message : String(err)}`);
       await this.mailboxClient.ackInbound([mail.id]); // 坏密文丢弃，避免死循环
+      this.processedMailIds.add(mail.message_id);
       return;
     }
 
@@ -1690,12 +1789,14 @@ export class ACPAgentServer {
         }
       }
       await this.mailboxClient.ackInbound([mail.id]);
+      this.processedMailIds.add(mail.message_id);
       return;
     }
 
     const message = typeof payload.message === 'string' ? payload.message : '';
     if (!message) {
       await this.mailboxClient.ackInbound([mail.id]);
+      this.processedMailIds.add(mail.message_id);
       return;
     }
 
@@ -1757,6 +1858,7 @@ export class ACPAgentServer {
         await mailboxStream.depositFinal(replyText);
       }
       await this.mailboxClient.ackInbound([mail.id]);
+      this.processedMailIds.add(mail.message_id);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[Mailbox] process ${mail.id} failed: ${err instanceof Error ? err.message : String(err)}`);

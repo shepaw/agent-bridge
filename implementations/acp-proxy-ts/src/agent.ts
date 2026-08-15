@@ -13,6 +13,7 @@ import {
   SessionStore,
   type AgentRuntimeStatus,
   type ChannelTunnelConfig,
+  type ChannelMailboxConfig,
   type ChatKwargs,
   type CommandsListParams,
   type CommandsListResult,
@@ -71,6 +72,8 @@ export interface AcpProxyAgentOptions {
   cwd?: string;
   sessionStoreOptions?: SessionStoreOptions;
   tunnelConfig?: ChannelTunnelConfig;
+  /** Shared-device channel mailbox (no per-instance reverse tunnel). */
+  mailboxConfig?: ChannelMailboxConfig;
   /** Extra env vars forwarded to the ACP agent subprocess. */
   agentEnv?: Record<string, string | undefined>;
   /** Inject a custom subprocess manager (tests). */
@@ -103,6 +106,7 @@ export class AcpProxyAgent extends ACPAgentServer {
       enrollmentsPath: opts.enrollmentsPath,
       identityPath: opts.identityPath,
       tunnelConfig: opts.tunnelConfig,
+      mailboxConfig: opts.mailboxConfig,
       onPeerEnrolled: opts.onPeerEnrolled ?? createHubFanoutHandler(),
     });
 
