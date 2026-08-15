@@ -30,6 +30,7 @@ export {
   setEngineEnvVar,
   setEngineOverride,
   setHubGateway,
+  setHubPeer,
   setInstanceEnvVar,
   updateCustomEngineInHub,
   updateHubMeta,
@@ -147,7 +148,7 @@ export {
 } from './gateway-process.js';
 export type { GatewayState } from './gateway-process.js';
 
-export { nextFreePort, NoFreePortError, probeBindable } from './ports.js';
+export { allocateListenPort, nextFreePort, NoFreePortError, probeBindable } from './ports.js';
 export type { FindPortOptions } from './ports.js';
 
 export {
