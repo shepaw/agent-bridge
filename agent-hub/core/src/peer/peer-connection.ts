@@ -19,6 +19,7 @@ import {
   currentAgentListPayload,
   handleAgentManage,
 } from './peer-agent-manage.js';
+import { handleFsBrowseReq } from '../fs-browse.js';
 import { PeerAcpClient } from './peer-acp-client.js';
 import type { AcpChatHandlers } from './peer-acp-client.js';
 import {
@@ -1025,6 +1026,9 @@ export async function drivePeerConnection(opts: {
               send(currentAgentListPayload());
             }
           });
+          break;
+        case 'fs_browse_req':
+          void handleFsBrowseReq(obj).then((resp) => send(resp));
           break;
         case 'agent_commands_req':
           void handleAgentCommandsReq(obj);

@@ -120,6 +120,13 @@ export {
 export { decryptEnvVars, encryptEnvVars, encryptValue, decryptValue } from './crypto.js';
 export { isSensitiveEnvVarKey } from './env-var-sensitivity.js';
 
+export {
+  browseDirectory,
+  handleFsBrowseReq,
+  resolveBrowsePath,
+} from './fs-browse.js';
+export type { FsBrowseEntry, FsBrowseResult } from './fs-browse.js';
+
 export { detectLanIPv4, resolvePublicHost } from './network.js';
 
 export {
