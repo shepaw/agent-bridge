@@ -35,6 +35,9 @@ export const ALL_SPACES = new Set([
   'public',
   'attachments',
   'backups',
+  // Canonical cognition space (soul.md / entries); 'memory' is the legacy
+  // alias the app still reads for fallback.
+  'cognition',
   'memory',
   'sessions',
   'workspaces',

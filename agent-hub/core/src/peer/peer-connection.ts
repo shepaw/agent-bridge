@@ -19,6 +19,11 @@ import {
   currentAgentListPayload,
   handleAgentManage,
 } from './peer-agent-manage.js';
+import {
+  handleAgentMemoryReq,
+  handleAgentSoulGet,
+  handleAgentSoulSet,
+} from './peer-agent-cognition.js';
 import { handleFsBrowseReq } from '../fs-browse.js';
 import { PeerAcpClient } from './peer-acp-client.js';
 import type { AcpChatHandlers } from './peer-acp-client.js';
@@ -1050,6 +1055,17 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_modes_set_req':
           void handleAgentModesSetReq(obj);
+          break;
+        // Cognition relays always answer synchronously — a dropped frame
+        // leaves the app loading until its client-side timeout.
+        case 'agent_soul_req':
+          send(handleAgentSoulGet(obj));
+          break;
+        case 'agent_soul_set_req':
+          send(handleAgentSoulSet(obj));
+          break;
+        case 'agent_memory_req':
+          send(handleAgentMemoryReq(peerId, obj));
           break;
         case 'agent_chat':
           void handleAgentChat(obj as Record<string, unknown>);
