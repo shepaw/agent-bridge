@@ -3,7 +3,9 @@ import {
   buildStorePouchCard,
   pouchCardEnabled,
   prependStorePouchCard,
+  resolveHostScopeCardMarkdown,
   resolveStoreDeviceIdFromEnv,
+  SCOPE_CARD_SCHEMA_VERSION,
 } from '../src/store-pouch-card.js';
 
 describe('pouchCardEnabled', () => {
@@ -42,13 +44,26 @@ describe('resolveStoreDeviceIdFromEnv', () => {
   });
 });
 
+describe('resolveHostScopeCardMarkdown', () => {
+  it('returns SHEPAW_SCOPE_CARD when set', () => {
+    expect(
+      resolveHostScopeCardMarkdown({
+        SHEPAW_SCOPE_CARD: '## 当前储物袋作用域\n- host',
+      }),
+    ).toContain('host');
+  });
+});
+
 describe('buildStorePouchCard', () => {
-  it('is device-scoped and space-partitioned', () => {
+  it('is device-scoped and uses cognition space', () => {
     const card = buildStorePouchCard({ deviceId: '352821253aefdfba' });
+    expect(card).toContain('## 当前储物袋作用域');
+    expect(card).toContain(`v${SCOPE_CARD_SCHEMA_VERSION}`);
     expect(card).toContain('store://<space>/<device_id>/<path>');
     expect(card).toContain('352821253aefdfba');
-    expect(card).toContain('`files`');
-    expect(card).toContain('`runtime`');
+    expect(card).toContain('`cognition`');
+    expect(card).toContain('不要');
+    expect(card).not.toMatch(/`memory` — Soul/);
     expect(card).not.toMatch(/用户的袋子|agent 的袋子|你的产物根/);
   });
 
@@ -66,6 +81,15 @@ describe('buildStorePouchCard', () => {
     expect(card).toContain('禁止编造');
     expect(card).not.toMatch(/store:\/\/files\/[0-9a-f]{16}/);
   });
+
+  it('prefers host Scope Card markdown over local template', () => {
+    const card = buildStorePouchCard({
+      deviceId: '352821253aefdfba',
+      hostCardMarkdown: '## 当前储物袋作用域\n- from host',
+    });
+    expect(card).toContain('from host');
+    expect(card).not.toContain('352821253aefdfba');
+  });
 });
 
 describe('prependStorePouchCard', () => {
@@ -76,7 +100,7 @@ describe('prependStorePouchCard', () => {
     );
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toMatchObject({ type: 'text' });
-    expect((blocks[0] as { text: string }).text).toContain('本机储物袋');
+    expect((blocks[0] as { text: string }).text).toContain('当前储物袋作用域');
     expect(blocks[1]).toEqual({ type: 'text', text: '放到储物袋' });
   });
 });

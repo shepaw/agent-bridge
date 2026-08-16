@@ -1,12 +1,18 @@
 /**
- * Device-scoped store pouch card injected into the first ACP prompt of a
- * Shepaw session.
+ * Device / scope pouch card injected into the first ACP prompt of a Shepaw
+ * session.
  *
- * The pouch is the device's `store://<space>/<device_id>/…` tree. Placement
- * is by space partition, not by "user bag" vs "agent bag".
+ * Aligned with shepaw `ScopeCard` schema_version=1
+ * (`.ai_workspace/AGENT_SCOPE_CARD_DESIGN.md`):
+ * - Prefer host-provided markdown via `SHEPAW_SCOPE_CARD` (full override).
+ * - Otherwise build an ACP-mode card (device-scoped, cognition not memory).
+ *
+ * Disable with SHEPAW_STORE_POUCH_CARD=0|false|off.
  */
 
 import { storeBackendConfigured } from './shepaw-cli-shim.js';
+
+export const SCOPE_CARD_SCHEMA_VERSION = 1;
 
 /** Disable with SHEPAW_STORE_POUCH_CARD=0|false|off. */
 export function pouchCardEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -26,38 +32,48 @@ export function resolveStoreDeviceIdFromEnv(
   return explicit.length > 0 ? explicit : undefined;
 }
 
+/**
+ * Host can pass a full Scope Card markdown (stable section). When set, bridge
+ * must not invent a second long pouch manual.
+ */
+export function resolveHostScopeCardMarkdown(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const raw = (env.SHEPAW_SCOPE_CARD ?? '').trim();
+  return raw.length > 0 ? raw : undefined;
+}
+
 export function buildStorePouchCard(opts: {
   deviceId?: string;
   workspaceUri?: string;
+  /** Pre-rendered host Scope Card; wins over local template. */
+  hostCardMarkdown?: string;
 } = {}): string {
+  const host = opts.hostCardMarkdown?.trim();
+  if (host) return host;
+
   const device = opts.deviceId?.trim();
   const deviceLine = device
-    ? `本机 device_id：\`${device}\`（URI 形如 \`store://files/${device}/…\`）`
-    : '本机 device_id 以 store 工具返回值为准，禁止编造或拼接。';
+    ? `- device: \`${device}\``
+    : '- device: 以 store 工具返回值为准，禁止编造或拼接';
   const workspace = opts.workspaceUri?.trim();
   const workspaceLine = workspace
-    ? `本 Agent 工作区已挂载：\`${workspace}\`。相对路径如 \`docs/good.md\` 即该目录下的文件；聊天里的 markdown 链接默认打开此工作区。`
+    ? `- 工作区已挂载：\`${workspace}\`（相对路径如 \`docs/good.md\` 即该目录下文件）`
     : '';
 
   return [
-    '## 本机储物袋',
+    '## 当前储物袋作用域',
     '',
-    '储物袋是这台设备上的 store，不是用户/agent 各一只袋子。',
-    'URI：`store://<space>/<device_id>/<path>`',
+    `- schema: v${SCOPE_CARD_SCHEMA_VERSION} · mode: \`acp\` · owner: device`,
     deviceLine,
-    ...(workspaceLine ? ['', workspaceLine] : []),
+    '- URI：`store://<space>/<device_id>/<path>`',
+    ...(workspaceLine ? [workspaceLine] : []),
     '',
-    '分区规约（按空间写入）：',
-    '- `files` — 沉淀区（安装包、要长期留在设备上的文件）',
-    '- `public` — 公开引用（可不复制 files 字节）',
-    '- `runtime` — 当前会话产物（`store write` 默认落点）',
-    '- `memory` — Soul / 结构化记忆',
-    '- `workspaces` — owner 跨设备工作区',
-    '- `backups` — 仅本端灾备',
-    '',
-    '读写用 `store_*` MCP 或 `shepaw store list|read|write`；原样引用返回的 `store://`。',
-    '不要发明 URI，不要用 OS 路径代替储物袋。',
-    '未指定分区时：长期文件 → `files`；本轮中间产物 → `runtime`。',
+    '- 分区：`files` 沉淀 · `public` 公开引用 · `runtime` 会话产物 · `cognition` Soul/结构化记忆权威 · `workspaces` 工作区 · `backups` 本端灾备',
+    '- 读: `shepaw store read --uri <uri-as-is>` · 列: `shepaw store list --uri <uri> --depth 1`',
+    '- 写产物: `shepaw store write --filename <名> --content "..."`（可选 `--task` / `--desc` / `--space public`）；**不要**传 `agent_id` / `owner`，由系统落到本作用域袋',
+    '- 禁止: 编造 `store://`；用 OS 路径代替储物袋；回写 runtime 镜像当权威',
+    '- 未指定分区时：长期文件 → `files`；本轮中间产物 → `runtime`',
   ].join('\n');
 }
 
