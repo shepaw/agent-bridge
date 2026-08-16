@@ -2,11 +2,12 @@
  * Peer control-plane for managing hub agent instances from a paired app.
  *
  * Frames:
- *   agent_manage_req  { request_id, op, agent_id?, enabled?, additional_directories? }
+ *   agent_manage_req  { request_id, op, agent_id?, enabled?, cwd?, additional_directories? }
  *   agent_manage_resp { request_id, ok, error?, agents? }
  *
- * ops: list | start | stop | set_enabled | set_additional_directories
+ * ops: list | start | stop | set_enabled | set_cwd | set_additional_directories
  *
+ * `set_cwd` sets the instance primary workspace (absolute path on the hub host).
  * `set_additional_directories` takes a full-replacement `additional_directories`
  * string array (absolute paths on the hub host). Empty array clears all extras.
  * When the instance is running it is restarted so the proxy picks up new roots.
@@ -93,6 +94,14 @@ function parseAdditionalDirectories(obj: Record<string, unknown>): string[] {
   return raw.filter((x): x is string => typeof x === 'string');
 }
 
+function parseCwd(obj: Record<string, unknown>): string {
+  const raw = obj.cwd;
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error('cwd is required');
+  }
+  return raw.trim();
+}
+
 export async function handleAgentManage(
   obj: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
@@ -123,6 +132,31 @@ export async function handleAgentManage(
           await stopInstance(instance);
         }
         updateInstance(loadOrCreateHubConfig(), id, { enabled });
+        break;
+      }
+      case 'set_cwd': {
+        const id = requireAgentId(obj);
+        const cwd = parseCwd(obj);
+        const cfg = loadOrCreateHubConfig();
+        const existing = getInstance(cfg, id);
+        const wasRunning = isInstanceRunning(id);
+        if (wasRunning) {
+          await stopInstance(existing);
+        }
+        const next = updateInstance(loadOrCreateHubConfig(), id, { cwd });
+        const updated = getInstance(next, id);
+        try {
+          ensureAgentStoreMappings({
+            agentId: updated.id,
+            cwd: updated.cwd,
+            additionalDirectories: updated.additionalDirectories,
+          });
+        } catch {
+          /* URI still advertised even if symlink fails */
+        }
+        if (wasRunning) {
+          await startInstance(updated);
+        }
         break;
       }
       case 'set_additional_directories': {

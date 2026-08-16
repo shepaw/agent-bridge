@@ -76,6 +76,38 @@ describe('handleAgentManage', () => {
     expect(isInstanceEnabled(loadOrCreateHubConfig().instances[0]!)).toBe(true);
   });
 
+  it('updates primary cwd via set_cwd', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const nextCwd = join(home, 'project');
+    mkdirSync(nextCwd, { recursive: true });
+
+    let cfg = loadOrCreateHubConfig();
+    cfg = addInstance(cfg, {
+      id: 'gamma',
+      label: 'Gamma',
+      engine: 'claude-code',
+      cwd: home,
+      host: '127.0.0.1',
+      port: 18803,
+      baseUrl: '',
+      extraArgs: [],
+      createdAt: new Date().toISOString(),
+    });
+
+    const set = await handleAgentManage({
+      request_id: 'r-cwd',
+      op: 'set_cwd',
+      agent_id: 'gamma',
+      cwd: nextCwd,
+    });
+    expect(set.ok).toBe(true);
+    const after = loadOrCreateHubConfig().instances.find((i) => i.id === 'gamma');
+    expect(after?.cwd).toBe(nextCwd);
+
+    const agents = set.agents as Array<{ id: string; cwd?: string }>;
+    expect(agents.find((a) => a.id === 'gamma')?.cwd).toBe(nextCwd);
+  });
+
   it('replaces additional_directories via set_additional_directories', async () => {
     const { mkdirSync } = await import('node:fs');
     const extraA = join(home, 'extra-a');
