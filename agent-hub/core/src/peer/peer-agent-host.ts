@@ -35,6 +35,10 @@ export interface AgentListEntry {
   readonly workspace_uri?: string;
   /** Primary + additional workspace roots (store://…), ordered. */
   readonly workspace_uris?: readonly string[];
+  /** Absolute primary working directory on the hub host. */
+  readonly cwd?: string;
+  /** Absolute additional workspace roots on the hub host. */
+  readonly additional_directories?: readonly string[];
 }
 
 function isInstanceRunning(instanceId: string): boolean {
@@ -55,13 +59,12 @@ export function listAgents(): AgentListEntry[] {
   }
   return cfg.instances.map((i) => {
     const payload = loadEngineAvatarPayload(i.engine);
+    const extras = i.additionalDirectories ?? [];
     const workspaceUris =
       workspaceDeviceId !== undefined
         ? [
             workspaceStoreUri(workspaceDeviceId, i.cwd),
-            ...(i.additionalDirectories ?? []).map((d) =>
-              workspaceStoreUri(workspaceDeviceId, d),
-            ),
+            ...extras.map((d) => workspaceStoreUri(workspaceDeviceId, d)),
           ]
         : undefined;
     const workspaceUri = workspaceUris?.[0];
@@ -80,6 +83,8 @@ export function listAgents(): AgentListEntry[] {
       ...(payload
         ? { avatar_data: payload.avatar_data, avatar_ext: payload.avatar_ext }
         : {}),
+      cwd: i.cwd,
+      ...(extras.length > 0 ? { additional_directories: extras } : {}),
       ...(workspaceUri !== undefined ? { workspace_uri: workspaceUri } : {}),
       ...(workspaceUris !== undefined && workspaceUris.length > 1
         ? { workspace_uris: workspaceUris }

@@ -75,4 +75,56 @@ describe('handleAgentManage', () => {
     expect(enabled.ok).toBe(true);
     expect(isInstanceEnabled(loadOrCreateHubConfig().instances[0]!)).toBe(true);
   });
+
+  it('replaces additional_directories via set_additional_directories', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const extraA = join(home, 'extra-a');
+    const extraB = join(home, 'extra-b');
+    mkdirSync(extraA, { recursive: true });
+    mkdirSync(extraB, { recursive: true });
+
+    let cfg = loadOrCreateHubConfig();
+    cfg = addInstance(cfg, {
+      id: 'beta',
+      label: 'Beta',
+      engine: 'claude-code',
+      cwd: home,
+      host: '127.0.0.1',
+      port: 18802,
+      baseUrl: '',
+      extraArgs: [],
+      createdAt: new Date().toISOString(),
+    });
+
+    const set = await handleAgentManage({
+      request_id: 'r5',
+      op: 'set_additional_directories',
+      agent_id: 'beta',
+      additional_directories: [extraA, extraB],
+    });
+    expect(set.ok).toBe(true);
+    const afterSet = loadOrCreateHubConfig().instances.find((i) => i.id === 'beta');
+    expect(afterSet?.additionalDirectories).toEqual([extraA, extraB]);
+
+    const agents = set.agents as Array<{
+      id: string;
+      additional_directories?: string[];
+    }>;
+    expect(agents.find((a) => a.id === 'beta')?.additional_directories).toEqual([
+      extraA,
+      extraB,
+    ]);
+
+    const cleared = await handleAgentManage({
+      request_id: 'r6',
+      op: 'set_additional_directories',
+      agent_id: 'beta',
+      additional_directories: [],
+    });
+    expect(cleared.ok).toBe(true);
+    expect(
+      loadOrCreateHubConfig().instances.find((i) => i.id === 'beta')
+        ?.additionalDirectories,
+    ).toBeUndefined();
+  });
 });
