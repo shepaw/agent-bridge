@@ -130,6 +130,7 @@ export {
   hubEnrollmentsPath,
   hubRoot,
   normalizeCwd,
+  normalizeAdditionalDirectories,
   instancePaths,
   peerAttachmentsDir,
   peerStoreRoot,

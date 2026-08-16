@@ -205,6 +205,8 @@ export interface SessionInfo {
   updated_at?: string;
   /** Working directory the session is scoped to, if any. */
   cwd?: string;
+  /** Extra absolute workspace roots for this session, if any. */
+  additional_directories?: string[];
 }
 
 /** `agent.sessions.list` request params (reserved for future filters). */

@@ -70,6 +70,8 @@ export interface AcpProxyAgentOptions {
   identityPath?: string;
   /** Working directory passed to session/new. */
   cwd?: string;
+  /** Extra absolute workspace roots (ACP additionalDirectories). */
+  additionalDirectories?: readonly string[];
   sessionStoreOptions?: SessionStoreOptions;
   tunnelConfig?: ChannelTunnelConfig;
   /** Shared-device channel mailbox (no per-instance reverse tunnel). */
@@ -86,6 +88,7 @@ export interface AcpProxyAgentOptions {
 
 export class AcpProxyAgent extends ACPAgentServer {
   private readonly cwd: string;
+  private readonly additionalDirectories: readonly string[];
   private readonly engineId: string;
   private readonly subprocess: AcpSubprocess;
   private readonly sessionStore: SessionStore;
@@ -111,12 +114,14 @@ export class AcpProxyAgent extends ACPAgentServer {
     });
 
     this.cwd = opts.cwd ?? process.cwd();
+    this.additionalDirectories = opts.additionalDirectories ?? [];
     this.engineId = spec.id;
     this.subprocess =
       opts.subprocess ??
       new AcpSubprocess({
         spec,
         cwd: this.cwd,
+        additionalDirectories: this.additionalDirectories,
         env: opts.agentEnv,
         policy: opts.policy ?? new PermissionPolicy(loadPolicyFromEnv()),
         agentDisplayName: opts.name ?? spec.defaultAgentName,
@@ -257,6 +262,11 @@ export class AcpProxyAgent extends ACPAgentServer {
         title: s.title ?? undefined,
         updated_at: s.updatedAt ?? undefined,
         cwd: s.cwd,
+        ...(Array.isArray(s.additionalDirectories) && s.additionalDirectories.length > 0
+          ? { additional_directories: s.additionalDirectories }
+          : this.additionalDirectories.length > 0
+            ? { additional_directories: [...this.additionalDirectories] }
+            : {}),
       };
     });
     return { sessions };

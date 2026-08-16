@@ -20,6 +20,7 @@ interface AddInstanceDraft {
   engine: string;
   sessionMode: string;
   cwd: string;
+  additionalDirectories: string[];
   host: string;
   baseUrl: string;
   tunnelServer: string;
@@ -33,6 +34,7 @@ const EMPTY_DRAFT: AddInstanceDraft = {
   engine: '',
   sessionMode: '',
   cwd: '',
+  additionalDirectories: [],
   host: '127.0.0.1',
   baseUrl: '',
   tunnelServer: '',
@@ -65,6 +67,9 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const [sessionMode, setSessionMode] = useState(draft.sessionMode);
   const [engineOptions, setEngineOptions] = useState<EngineInfo[]>([]);
   const [cwd, setCwd] = useState(draft.cwd);
+  const [additionalDirectories, setAdditionalDirectories] = useState<string[]>(
+    draft.additionalDirectories,
+  );
   const [host, setHost] = useState(draft.host);
   const [baseUrl, setBaseUrl] = useState(draft.baseUrl);
 
@@ -77,6 +82,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
   const [err, setErr] = useState<string | null>(null);
   const [hubMeta, setHubMeta] = useState<HubMeta | null>(null);
   const [showDirPicker, setShowDirPicker] = useState(false);
+  const [dirPickerTarget, setDirPickerTarget] = useState<'cwd' | number>('cwd');
   const [seedPaths, setSeedPaths] = useState<string[]>([]);
   const [engineQuery, setEngineQuery] = useState('');
 
@@ -87,6 +93,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       engine,
       sessionMode,
       cwd,
+      additionalDirectories,
       host,
       baseUrl,
       tunnelServer,
@@ -94,7 +101,7 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       tunnelSecret,
       showTunnel: showAdvanced,
     };
-  }, [label, engine, sessionMode, cwd, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showAdvanced]);
+  }, [label, engine, sessionMode, cwd, additionalDirectories, host, baseUrl, tunnelServer, tunnelChannelId, tunnelSecret, showAdvanced]);
 
   useEffect(() => {
     api.engines.list()
@@ -195,6 +202,9 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
         label: label.trim() || basename(trimmedCwd),
         engine,
         cwd: trimmedCwd,
+        additionalDirectories: additionalDirectories
+          .map((d) => d.trim())
+          .filter((d) => d.length > 0 && d !== trimmedCwd),
         host,
         baseUrl: resolvedBaseUrl,
         tunnel,
@@ -362,12 +372,66 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
               <button
                 type="button"
                 style={browseBtn}
-                onClick={() => setShowDirPicker(true)}
+                onClick={() => {
+                  setDirPickerTarget('cwd');
+                  setShowDirPicker(true);
+                }}
               >
                 {t('common.browse')}
               </button>
             )}
           />
+
+          <div style={fieldHead}>
+            <label style={{ ...lbl, margin: 0 }}>{t('add.additionalDirs')}</label>
+            <button
+              type="button"
+              style={manageEngineBtn}
+              onClick={() => setAdditionalDirectories((prev) => [...prev, ''])}
+            >
+              {t('add.addDirectory')}
+            </button>
+          </div>
+          <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 4px' }}>
+            {t('add.additionalDirsHint')}
+          </p>
+          {additionalDirectories.map((dir, idx) => (
+            <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <CwdPathInput
+                value={dir}
+                onChange={(path) => {
+                  setAdditionalDirectories((prev) => {
+                    const next = [...prev];
+                    next[idx] = path;
+                    return next;
+                  });
+                }}
+                placeholder={t('add.additionalDirPlaceholder')}
+                seedPaths={seedPaths}
+                trailing={(
+                  <button
+                    type="button"
+                    style={browseBtn}
+                    onClick={() => {
+                      setDirPickerTarget(idx);
+                      setShowDirPicker(true);
+                    }}
+                  >
+                    {t('common.browse')}
+                  </button>
+                )}
+              />
+              <button
+                type="button"
+                style={cancelBtn}
+                onClick={() =>
+                  setAdditionalDirectories((prev) => prev.filter((_, i) => i !== idx))
+                }
+              >
+                {t('common.remove')}
+              </button>
+            </div>
+          ))}
 
           <button
             type="button"
@@ -454,10 +518,22 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
 
       {showDirPicker && (
         <DirectoryPickerModal
-          initialPath={cwd}
+          initialPath={
+            dirPickerTarget === 'cwd'
+              ? cwd
+              : (additionalDirectories[dirPickerTarget] || cwd)
+          }
           onSelect={(path) => {
-            setCwd(path);
-            setLabel((prev) => (prev && prev !== basename(cwd) ? prev : basename(path)));
+            if (dirPickerTarget === 'cwd') {
+              setCwd(path);
+              setLabel((prev) => (prev && prev !== basename(cwd) ? prev : basename(path)));
+            } else {
+              setAdditionalDirectories((prev) => {
+                const next = [...prev];
+                next[dirPickerTarget] = path;
+                return next;
+              });
+            }
             setShowDirPicker(false);
           }}
           onClose={() => setShowDirPicker(false)}

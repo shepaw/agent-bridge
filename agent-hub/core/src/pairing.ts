@@ -46,6 +46,8 @@ export interface HubAgentCatalogEntry {
   running: boolean;
   /** Mapped store://workspaces URI for this instance's working directory. */
   workspaceUri?: string;
+  /** Primary + additional workspace roots when more than one is configured. */
+  workspaceUris?: string[];
 }
 
 export interface HubPairingResult {
@@ -179,7 +181,20 @@ export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): H
       port: instance.port,
       running: isInstanceRunning(instance.id),
       ...(workspaceDeviceId !== undefined
-        ? { workspaceUri: workspaceStoreUri(workspaceDeviceId, instance.cwd) }
+        ? {
+            workspaceUri: workspaceStoreUri(workspaceDeviceId, instance.cwd),
+            ...(instance.additionalDirectories !== undefined
+              && instance.additionalDirectories.length > 0
+              ? {
+                  workspaceUris: [
+                    workspaceStoreUri(workspaceDeviceId, instance.cwd),
+                    ...instance.additionalDirectories.map((d) =>
+                      workspaceStoreUri(workspaceDeviceId, d),
+                    ),
+                  ],
+                }
+              : {}),
+          }
         : {}),
     };
   });

@@ -43,6 +43,8 @@ export interface Instance {
   label: string;
   engine: string;
   cwd: string;
+  /** Extra absolute workspace roots beyond cwd. */
+  additionalDirectories?: string[];
   port: number;
   host: string;
   baseUrl: string;
@@ -59,6 +61,7 @@ export interface Instance {
   store?: {
     deviceId: string;
     workspaceUri: string;
+    workspaceUris?: string[];
     agentUri: string;
   };
 }
@@ -259,6 +262,7 @@ export interface HubAgentCatalogEntry {
   port: number;
   running: boolean;
   workspaceUri?: string;
+  workspaceUris?: string[];
 }
 
 /** Result of POST /api/pair/enroll — one QR for all agents on this host. */
@@ -304,6 +308,8 @@ export interface CreateInstanceInput {
   id?: string;
   engine?: string;
   cwd: string;
+  /** Extra absolute workspace roots (ACP additionalDirectories). */
+  additionalDirectories?: string[];
   label?: string;
   port?: number;
   host?: string;
@@ -326,6 +332,8 @@ export interface UpdateInstanceInput {
   host?: string;
   baseUrl?: string;
   cwd?: string;
+  /** Full replacement list of additional workspace roots (empty clears). */
+  additionalDirectories?: string[];
   extraArgs?: string[];
   tunnel?: TunnelConfig;
   clearTunnel?: boolean;
@@ -371,8 +379,10 @@ export interface StoreMapping {
   label: string;
   engine: string;
   cwd: string;
+  additionalDirectories?: string[];
   deviceId: string;
   workspaceUri: string;
+  workspaceUris?: string[];
   agentUri: string;
 }
 

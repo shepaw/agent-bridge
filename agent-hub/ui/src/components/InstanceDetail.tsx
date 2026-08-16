@@ -91,6 +91,7 @@ export function InstanceDetail({
   const [showEdit, setShowEdit] = useState(false);
   const [editLabel, setEditLabel] = useState('');
   const [editCwd, setEditCwd] = useState('');
+  const [editAdditionalDirectories, setEditAdditionalDirectories] = useState<string[]>([]);
   const [editHost, setEditHost] = useState('127.0.0.1');
   const [editBaseUrl, setEditBaseUrl] = useState('');
   const [editExtraArgs, setEditExtraArgs] = useState('');
@@ -103,6 +104,7 @@ export function InstanceDetail({
   const [editBusy, setEditBusy] = useState(false);
   const [editSessionMode, setEditSessionMode] = useState('');
   const [showDirPicker, setShowDirPicker] = useState(false);
+  const [dirPickerTarget, setDirPickerTarget] = useState<'cwd' | number>('cwd');
   const [engineInfos, setEngineInfos] = useState<EngineInfo[]>([]);
 
   const load = async () => {
@@ -298,6 +300,7 @@ export function InstanceDetail({
     onTabChange('config');
     setEditLabel(p.label);
     setEditCwd(p.cwd);
+    setEditAdditionalDirectories([...(p.additionalDirectories ?? [])]);
     setEditHost(p.host);
     setEditBaseUrl(p.baseUrl);
     setEditExtraArgs(p.extraArgs.join(' '));
@@ -360,6 +363,9 @@ export function InstanceDetail({
       await api.instances.update(instanceId, {
         label: editLabel || undefined,
         cwd: editCwd || undefined,
+        additionalDirectories: editAdditionalDirectories
+          .map((d) => d.trim())
+          .filter((d) => d.length > 0 && d !== editCwd.trim()),
         host: editHost || undefined,
         baseUrl: editBaseUrl || undefined,
         extraArgs: editExtraArgs.trim() ? editExtraArgs.trim().split(/\s+/) : [],
@@ -459,6 +465,12 @@ export function InstanceDetail({
               <div style={infoGrid}>
                 <InfoItem label={t('detail.bind')} value={`${instance.host}:${instance.port}`} />
                 <InfoItem label={t('detail.cwd')} value={instance.cwd} />
+                {(instance.additionalDirectories?.length ?? 0) > 0 && (
+                  <InfoItem
+                    label={t('detail.additionalDirs')}
+                    value={(instance.additionalDirectories ?? []).join('\n')}
+                  />
+                )}
                 <InfoItem
                   label={t('detail.agentMode')}
                   value={
@@ -529,7 +541,7 @@ export function InstanceDetail({
                     </div>
                     <div style={storeRow}>
                       <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={storeLabel}>{t('detail.workspace')}</div>
+                        <div style={storeLabel}>{t('detail.primaryWorkspace')}</div>
                         <code style={storeUri} title={instance.store.workspaceUri}>
                           {instance.store.workspaceUri}
                         </code>
@@ -553,6 +565,34 @@ export function InstanceDetail({
                         )}
                       </div>
                     </div>
+                    {(instance.store.workspaceUris ?? [])
+                      .slice(1)
+                      .map((uri) => (
+                        <div key={uri} style={storeRow}>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={storeLabel}>{t('detail.additionalWorkspace')}</div>
+                            <code style={storeUri} title={uri}>{uri}</code>
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              style={storeBtn}
+                              onClick={() => void navigator.clipboard.writeText(uri)}
+                            >
+                              {t('common.copy')}
+                            </button>
+                            {onOpenStore && (
+                              <button
+                                type="button"
+                                style={storePrimaryBtn}
+                                onClick={() => onOpenStore(uri)}
+                              >
+                                {t('detail.viewWorkspace')}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                   </div>
                 </div>
               )}
@@ -807,11 +847,67 @@ export function InstanceDetail({
                         <button
                           type="button"
                           style={browseBtn}
-                          onClick={() => setShowDirPicker(true)}
+                          onClick={() => {
+                            setDirPickerTarget('cwd');
+                            setShowDirPicker(true);
+                          }}
                         >
                           {t('common.browse')}
                         </button>
                       </div>
+                    </div>
+                    <div style={{ ...editField, gridColumn: '1 / -1' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <label style={editLbl}>{t('detail.additionalDirs')}</label>
+                        <button
+                          type="button"
+                          style={browseBtn}
+                          onClick={() => setEditAdditionalDirectories((prev) => [...prev, ''])}
+                        >
+                          {t('detail.addDirectory')}
+                        </button>
+                      </div>
+                      <p style={{ color: '#6c7086', fontSize: 12, margin: '4px 0 8px' }}>
+                        {t('detail.additionalDirsHint')}
+                      </p>
+                      {editAdditionalDirectories.map((dir, idx) => (
+                        <div key={idx} style={{ ...cwdRow, marginBottom: 6 }}>
+                          <input
+                            style={{ ...editInp, flex: 1, minWidth: 0 }}
+                            value={dir}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setEditAdditionalDirectories((prev) => {
+                                const next = [...prev];
+                                next[idx] = value;
+                                return next;
+                              });
+                            }}
+                            placeholder={t('add.additionalDirPlaceholder')}
+                          />
+                          <button
+                            type="button"
+                            style={browseBtn}
+                            onClick={() => {
+                              setDirPickerTarget(idx);
+                              setShowDirPicker(true);
+                            }}
+                          >
+                            {t('common.browse')}
+                          </button>
+                          <button
+                            type="button"
+                            style={browseBtn}
+                            onClick={() =>
+                              setEditAdditionalDirectories((prev) =>
+                                prev.filter((_, i) => i !== idx),
+                              )
+                            }
+                          >
+                            {t('common.remove')}
+                          </button>
+                        </div>
+                      ))}
                     </div>
                     <div style={editField}>
                       <label style={editLbl}>{t('add.bindHost')}</label>
@@ -1068,9 +1164,21 @@ export function InstanceDetail({
 
       {showDirPicker && (
         <DirectoryPickerModal
-          initialPath={editCwd}
+          initialPath={
+            dirPickerTarget === 'cwd'
+              ? editCwd
+              : (editAdditionalDirectories[dirPickerTarget] || editCwd)
+          }
           onSelect={(path) => {
-            setEditCwd(path);
+            if (dirPickerTarget === 'cwd') {
+              setEditCwd(path);
+            } else {
+              setEditAdditionalDirectories((prev) => {
+                const next = [...prev];
+                next[dirPickerTarget] = path;
+                return next;
+              });
+            }
             setShowDirPicker(false);
           }}
           onClose={() => setShowDirPicker(false)}

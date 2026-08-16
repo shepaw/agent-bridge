@@ -221,6 +221,7 @@ cli
   .command('instance-add', 'Register a new agent instance (id is auto-generated UUID)')
   .option('--engine <engine>', 'Gateway engine id (built-in or custom; see shepaw-hub engine list)', { default: 'codebuddy' })
   .option('--cwd <dir>', 'Working directory for the gateway', { default: process.cwd() })
+  .option('--additional-directory <dir>', 'Extra workspace root (repeatable; ACP additionalDirectories)', { default: [] })
   .option('--label <text>', 'Display name shown in `status`')
   .option('--port <n>', 'Bind port (default: next free port from 8090)')
   .option('--host <host>', 'Bind host (default: 127.0.0.1; use 0.0.0.0 for LAN)', { default: '127.0.0.1' })
@@ -234,6 +235,7 @@ cli
   .action(async (opts: {
     engine: string;
     cwd: string;
+    additionalDirectory?: string | string[];
     label?: string;
     port?: number | string;
     host: string;
@@ -258,6 +260,12 @@ cli
         ? opts.extraArg.filter((s): s is string => typeof s === 'string')
         : typeof opts.extraArg === 'string'
           ? [opts.extraArg]
+          : [];
+
+      const additionalDirectories = Array.isArray(opts.additionalDirectory)
+        ? opts.additionalDirectory.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : typeof opts.additionalDirectory === 'string' && opts.additionalDirectory.trim().length > 0
+          ? [opts.additionalDirectory]
           : [];
 
       // Parse --env KEY=VALUE flags
@@ -294,6 +302,7 @@ cli
         label: opts.label ?? id,
         engine,
         cwd: opts.cwd,
+        ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
         port,
         host: opts.host,
         baseUrl,
@@ -314,6 +323,9 @@ cli
       console.log(`  engine:    ${instance.engine}`);
       if (saved?.sessionMode) console.log(`  mode:      ${saved.sessionMode}`);
       console.log(`  cwd:       ${instance.cwd}`);
+      if ((saved?.additionalDirectories?.length ?? 0) > 0) {
+        console.log(`  extras:    ${(saved?.additionalDirectories ?? []).join(', ')}`);
+      }
       console.log(`  bind:      ${instance.host}:${instance.port}`);
       if (instance.baseUrl) console.log(`  base URL:  ${instance.baseUrl}`);
       if (instance.tunnel) {
@@ -444,6 +456,8 @@ cli
   .option('--host <host>', 'New bind host')
   .option('--base-url <url>', 'New base URL for pairing QRs')
   .option('--cwd <dir>', 'New working directory')
+  .option('--additional-directory <dir>', 'Replace additional workspace roots (repeatable; omit all to clear when used with --clear-additional-directories)')
+  .option('--clear-additional-directories', 'Clear all additional workspace roots')
   .option('--extra-arg <arg>', 'Replace extra args (repeatable; pass to clear)')
   .option('--tunnel-server <url>', 'New Shepaw Channel Service base URL (update all three tunnel fields together)')
   .option('--tunnel-channel-id <id>', 'New channel ID')
@@ -457,6 +471,8 @@ cli
     host?: string;
     baseUrl?: string;
     cwd?: string;
+    additionalDirectory?: string | string[];
+    clearAdditionalDirectories?: boolean;
     extraArg?: string | string[];
     tunnelServer?: string;
     tunnelChannelId?: string;
@@ -474,6 +490,7 @@ cli
         host?: string;
         baseUrl?: string;
         cwd?: string;
+        additionalDirectories?: ReadonlyArray<string>;
         extraArgs?: ReadonlyArray<string>;
         tunnel?: TunnelConfig;
         mergeEnvVars?: Record<string, string>;
@@ -484,6 +501,15 @@ cli
       if (opts.host !== undefined) patch.host = opts.host;
       if (opts.baseUrl !== undefined) patch.baseUrl = opts.baseUrl;
       if (opts.cwd !== undefined) patch.cwd = opts.cwd;
+      if (opts.clearAdditionalDirectories) {
+        patch.additionalDirectories = [];
+      } else if (opts.additionalDirectory !== undefined) {
+        patch.additionalDirectories = Array.isArray(opts.additionalDirectory)
+          ? opts.additionalDirectory.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+          : typeof opts.additionalDirectory === 'string' && opts.additionalDirectory.trim().length > 0
+            ? [opts.additionalDirectory]
+            : [];
+      }
       if (opts.sessionMode !== undefined) {
         const parsed = parseSessionMode(getInstance(cfg, id).engine, opts.sessionMode);
         if (parsed !== undefined) patch.sessionMode = parsed;
@@ -512,7 +538,7 @@ cli
         }
       }
       if (Object.keys(patch).length === 0 && !opts.clearEnv && (Array.isArray(opts.env) ? opts.env.length === 0 : !opts.env)) {
-        console.log('Nothing to update. Pass at least one of --label / --host / --base-url / --cwd / --extra-arg / --tunnel-* / --clear-tunnel / --env / --clear-env.');
+        console.log('Nothing to update. Pass at least one of --label / --host / --base-url / --cwd / --additional-directory / --clear-additional-directories / --extra-arg / --tunnel-* / --clear-tunnel / --env / --clear-env.');
         process.exit(1);
       }
       if (opts.clearEnv) patch.clearEnvVars = true;

@@ -47,6 +47,7 @@ import {
   supportsSessionList,
   supportsSessionLoad,
   supportsSessionResume,
+  supportsAdditionalDirectories,
 } from './session-lifecycle.js';
 import { filterListedSessions } from './sessions-filter.js';
 import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
@@ -181,6 +182,8 @@ export interface ClearShepawSessionHooks {
 export interface AcpSubprocessOptions {
   readonly spec: AcpEngineSpec;
   readonly cwd: string;
+  /** Extra absolute workspace roots for ACP additionalDirectories. */
+  readonly additionalDirectories?: readonly string[];
   /** Extra env vars forwarded to the ACP agent subprocess. */
   readonly env?: Record<string, string | undefined>;
   /** Approval policy consulted before asking the app. Defaults to ask. */
@@ -192,6 +195,7 @@ export interface AcpSubprocessOptions {
 export class AcpSubprocess {
   private readonly spec: AcpEngineSpec;
   private readonly cwd: string;
+  private readonly additionalDirectories: readonly string[];
   private readonly extraEnv: Record<string, string | undefined>;
   private readonly policy: PermissionPolicy;
   private readonly agentDisplayName: string;
@@ -243,6 +247,7 @@ export class AcpSubprocess {
   constructor(opts: AcpSubprocessOptions) {
     this.spec = opts.spec;
     this.cwd = opts.cwd;
+    this.additionalDirectories = opts.additionalDirectories ?? [];
     this.extraEnv = opts.env ?? {};
     this.policy = opts.policy ?? new PermissionPolicy();
     this.agentDisplayName = opts.agentDisplayName ?? opts.spec.defaultAgentName ?? 'The agent';
@@ -283,7 +288,12 @@ export class AcpSubprocess {
     let session: acp.ActiveSession | undefined;
     let disposableId: string | undefined;
     try {
-      session = await this.connection.agent.buildSession(this.cwd).start();
+      let builder = this.connection.agent.buildSession(this.cwd);
+      const extras = this.sessionAdditionalDirectories();
+      if (extras !== undefined) {
+        builder = builder.withAdditionalDirectories(extras);
+      }
+      session = await builder.start();
       disposableId = session.sessionId;
       this.disposableUpstreamSessionIds.add(disposableId);
       this.warmConfigOptions = mergeConfigOptions(
@@ -1211,13 +1221,28 @@ export class AcpSubprocess {
     ];
   }
 
+  /** Absolute additional roots for session lifecycle requests when advertised. */
+  private sessionAdditionalDirectories(): string[] | undefined {
+    if (
+      this.additionalDirectories.length === 0
+      || !supportsAdditionalDirectories(this.agentCaps)
+    ) {
+      return undefined;
+    }
+    return [...this.additionalDirectories];
+  }
+
   private async startSessionWithMcp(): Promise<acp.ActiveSession> {
     const servers = this.mcpServers();
     if (servers.length > 0) {
       log('injecting %d MCP server(s) into session/new (store)', servers.length);
     }
+    const extras = this.sessionAdditionalDirectories();
     const startOnce = (): Promise<acp.ActiveSession> => {
       let builder = this.connection!.agent.buildSession(this.cwd);
+      if (extras !== undefined) {
+        builder = builder.withAdditionalDirectories(extras);
+      }
       for (const server of servers) {
         builder = builder.withMcpServer(server);
       }
@@ -1247,6 +1272,7 @@ export class AcpSubprocess {
     // an empty list before giving up — keeping the app↔upstream binding intact
     // matters more than immediately re-attaching store tools.
     const mcpAttempts: acp.McpServer[][] = mcpServers.length > 0 ? [mcpServers, []] : [[]];
+    const additionalDirectories = this.sessionAdditionalDirectories();
 
     if (supportsSessionResume(this.agentCaps)) {
       for (const servers of mcpAttempts) {
@@ -1255,13 +1281,15 @@ export class AcpSubprocess {
             sessionId: storedId,
             cwd: this.cwd,
             mcpServers: servers,
+            ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
           });
           const session = attachActiveSession(agent, storedId, response);
           this.rememberConfigOptions(shepawSessionId, response.configOptions);
           log(
-            'resumed ACP session %s (mcp=%d)',
+            'resumed ACP session %s (mcp=%d, additionalDirs=%d)',
             storedId,
             servers.length,
+            additionalDirectories?.length ?? 0,
           );
           return session;
         } catch (err) {
@@ -1282,15 +1310,17 @@ export class AcpSubprocess {
             sessionId: storedId,
             cwd: this.cwd,
             mcpServers: servers,
+            ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
           });
           const session = attachActiveSession(agent, storedId, response);
           this.rememberConfigOptions(shepawSessionId, response.configOptions);
           const discarded = await discardLoadReplayUpdates(session);
           log(
-            'loaded ACP session %s (discarded %d replay updates, mcp=%d)',
+            'loaded ACP session %s (discarded %d replay updates, mcp=%d, additionalDirs=%d)',
             storedId,
             discarded,
             servers.length,
+            additionalDirectories?.length ?? 0,
           );
           return session;
         } catch (err) {

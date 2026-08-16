@@ -227,3 +227,27 @@ export function normalizeCwd(cwd: string): string {
   if (isAbsolute(expanded)) return expanded;
   return join(process.cwd(), expanded);
 }
+
+/**
+ * Normalize additional workspace roots for an instance.
+ * Drops empties / duplicates / paths equal to the primary cwd.
+ */
+export function normalizeAdditionalDirectories(
+  dirs: readonly string[] | undefined,
+  cwd: string,
+): string[] {
+  if (dirs === undefined || dirs.length === 0) return [];
+  const primary = normalizeCwd(cwd);
+  const seen = new Set<string>([primary]);
+  const out: string[] = [];
+  for (const raw of dirs) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    const n = normalizeCwd(trimmed);
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}

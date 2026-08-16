@@ -66,7 +66,6 @@ import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
 import {
   ensureAgentStoreMappings,
   hubStoreDeviceId,
-  workspaceStoreUri,
 } from './peer/agent-store-mapping.js';
 
 // ── types ──────────────────────────────────────────────────────────
@@ -172,7 +171,11 @@ export async function startInstance(instance: InstanceConfig): Promise<{
     }
 
     try {
-      ensureAgentStoreMappings({ agentId: instance.id, cwd: instance.cwd });
+      ensureAgentStoreMappings({
+        agentId: instance.id,
+        cwd: instance.cwd,
+        additionalDirectories: instance.additionalDirectories,
+      });
     } catch {
       /* mapping is best-effort; dashboard/list still advertise the URI */
     }
@@ -185,6 +188,10 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       '--port', String(instance.port),
       '--host', instance.host,
       '--session-store-path', paths.sessionsPath,
+      ...((instance.additionalDirectories ?? []).flatMap((dir) => [
+        '--additional-directory',
+        dir,
+      ])),
       ...instance.extraArgs,
     ];
 
@@ -249,9 +256,18 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       ...(() => {
         try {
           const deviceId = hubStoreDeviceId();
+          const mapping = ensureAgentStoreMappings({
+            agentId: instance.id,
+            cwd: instance.cwd,
+            additionalDirectories: instance.additionalDirectories,
+            deviceId,
+          });
           return {
             SHEPAW_HUB_STORE_DEVICE: deviceId,
-            SHEPAW_WORKSPACE_URI: workspaceStoreUri(deviceId, instance.cwd),
+            SHEPAW_WORKSPACE_URI: mapping.workspaceUri,
+            ...(mapping.workspaceUris.length > 1
+              ? { SHEPAW_WORKSPACE_URIS: mapping.workspaceUris.join('\n') }
+              : {}),
           };
         } catch {
           return {};

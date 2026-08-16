@@ -228,6 +228,7 @@ storeRouter.get('/roots', (_req: Request, res: Response) => {
           ensureAgentStoreMappings({
             agentId: instance.id,
             cwd: instance.cwd,
+            additionalDirectories: instance.additionalDirectories,
             deviceId,
             store,
           });
@@ -251,15 +252,26 @@ storeRouter.get('/roots', (_req: Request, res: Response) => {
       rootUri: buildUri('files', p.fingerprint, ''),
     }));
     const cfg = loadOrCreateHubConfig();
-    const agents = cfg.instances.map((p) => ({
-      instanceId: p.id,
-      label: p.label || p.id,
-      engine: p.engine,
-      cwd: p.cwd,
-      deviceId,
-      workspaceUri: workspaceStoreUri(deviceId, p.cwd),
-      agentUri: agentPrivateStoreUri(deviceId, p.id),
-    }));
+    const agents = cfg.instances.map((p) => {
+      const workspaceUri = workspaceStoreUri(deviceId, p.cwd);
+      const workspaceUris = [
+        workspaceUri,
+        ...(p.additionalDirectories ?? []).map((d) => workspaceStoreUri(deviceId, d)),
+      ];
+      return {
+        instanceId: p.id,
+        label: p.label || p.id,
+        engine: p.engine,
+        cwd: p.cwd,
+        ...(p.additionalDirectories !== undefined && p.additionalDirectories.length > 0
+          ? { additionalDirectories: [...p.additionalDirectories] }
+          : {}),
+        deviceId,
+        workspaceUri,
+        workspaceUris,
+        agentUri: agentPrivateStoreUri(deviceId, p.id),
+      };
+    });
     res.json({
       local: {
         kind: 'local' as const,
@@ -368,15 +380,26 @@ storeRouter.get('/mappings', (_req: Request, res: Response) => {
   try {
     const deviceId = hubStoreDeviceId();
     const cfg = loadOrCreateHubConfig();
-    const mappings = cfg.instances.map((p) => ({
-      instanceId: p.id,
-      label: p.label || p.id,
-      engine: p.engine,
-      cwd: p.cwd,
-      deviceId,
-      workspaceUri: workspaceStoreUri(deviceId, p.cwd),
-      agentUri: agentPrivateStoreUri(deviceId, p.id),
-    }));
+    const mappings = cfg.instances.map((p) => {
+      const workspaceUri = workspaceStoreUri(deviceId, p.cwd);
+      const workspaceUris = [
+        workspaceUri,
+        ...(p.additionalDirectories ?? []).map((d) => workspaceStoreUri(deviceId, d)),
+      ];
+      return {
+        instanceId: p.id,
+        label: p.label || p.id,
+        engine: p.engine,
+        cwd: p.cwd,
+        ...(p.additionalDirectories !== undefined && p.additionalDirectories.length > 0
+          ? { additionalDirectories: [...p.additionalDirectories] }
+          : {}),
+        deviceId,
+        workspaceUri,
+        workspaceUris,
+        agentUri: agentPrivateStoreUri(deviceId, p.id),
+      };
+    });
     res.json({ deviceId, mappings });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

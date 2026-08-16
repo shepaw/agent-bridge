@@ -33,6 +33,8 @@ export interface AgentListEntry {
   readonly avatar_ext?: string;
   /** Mapped store workspace so paired apps can open cwd files remotely. */
   readonly workspace_uri?: string;
+  /** Primary + additional workspace roots (store://…), ordered. */
+  readonly workspace_uris?: readonly string[];
 }
 
 function isInstanceRunning(instanceId: string): boolean {
@@ -53,10 +55,16 @@ export function listAgents(): AgentListEntry[] {
   }
   return cfg.instances.map((i) => {
     const payload = loadEngineAvatarPayload(i.engine);
-    const workspaceUri =
+    const workspaceUris =
       workspaceDeviceId !== undefined
-        ? workspaceStoreUri(workspaceDeviceId, i.cwd)
+        ? [
+            workspaceStoreUri(workspaceDeviceId, i.cwd),
+            ...(i.additionalDirectories ?? []).map((d) =>
+              workspaceStoreUri(workspaceDeviceId, d),
+            ),
+          ]
         : undefined;
+    const workspaceUri = workspaceUris?.[0];
     return {
       id: i.id,
       name: i.label || i.id,
@@ -73,6 +81,9 @@ export function listAgents(): AgentListEntry[] {
         ? { avatar_data: payload.avatar_data, avatar_ext: payload.avatar_ext }
         : {}),
       ...(workspaceUri !== undefined ? { workspace_uri: workspaceUri } : {}),
+      ...(workspaceUris !== undefined && workspaceUris.length > 1
+        ? { workspace_uris: workspaceUris }
+        : {}),
     };
   });
 }

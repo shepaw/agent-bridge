@@ -33,7 +33,13 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 import { resolveEngineAvailability } from './engine-setup.js';
-import { hubConfigPath, validateInstanceId, normalizeCwd, hubRoot } from './paths.js';
+import {
+  hubConfigPath,
+  validateInstanceId,
+  normalizeCwd,
+  normalizeAdditionalDirectories,
+  hubRoot,
+} from './paths.js';
 import { encryptEnvVars, encryptValue, decryptValue, decryptEnvVars } from './crypto.js';
 import {
   ensureAgentStoreMappings,
@@ -151,6 +157,11 @@ export interface InstanceConfig {
   readonly engine: string;
   /** Absolute path to the working directory the gateway runs in. */
   readonly cwd: string;
+  /**
+   * Extra absolute workspace roots (ACP `additionalDirectories`).
+   * Relative paths are resolved then stored absolute. Never includes `cwd`.
+   */
+  readonly additionalDirectories?: ReadonlyArray<string>;
   /** Local TCP port to bind to. Allocated by `ports.nextFreePort` on add. */
   readonly port: number;
   /**
@@ -586,16 +597,22 @@ export function addInstance(
 ): HubConfig {
   validateInstanceId(instance.id);
   const root = hubRoot();
-  const { plainEnvVars, ...rest } = instance;
+  const { plainEnvVars, additionalDirectories: _rawDirs, ...rest } = instance;
   const sessionMode =
     rest.sessionMode ?? defaultSessionModeId(instance.engine);
   if (sessionMode !== undefined) {
     parseSessionMode(instance.engine, sessionMode);
   }
+  const cwd = normalizeCwd(instance.cwd);
+  const additionalDirectories = normalizeAdditionalDirectories(
+    instance.additionalDirectories,
+    cwd,
+  );
   const normalized: InstanceConfig = {
     ...rest,
     ...(sessionMode !== undefined && { sessionMode }),
-    cwd: normalizeCwd(instance.cwd),
+    cwd,
+    ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
     envVars: plainEnvVars && Object.keys(plainEnvVars).length > 0
       ? encryptEnvVars(plainEnvVars, root)
       : {},
@@ -647,7 +664,11 @@ export function addInstance(
   persist(config.path, next, hubPersistMeta(config));
 
   try {
-    ensureAgentStoreMappings({ agentId: normalized.id, cwd: normalized.cwd });
+    ensureAgentStoreMappings({
+      agentId: normalized.id,
+      cwd: normalized.cwd,
+      additionalDirectories: normalized.additionalDirectories,
+    });
   } catch (err) {
     console.warn(
       `[shepaw-hub] Warning: failed to map store spaces for agent "${normalized.id}": ` +
@@ -771,22 +792,38 @@ export function updateInstance(
       allowUnknown: allowUnknown === true,
     });
   }
+  const nextCwd = rest.cwd !== undefined ? normalizeCwd(rest.cwd) : existing.cwd;
+  const nextAdditional =
+    rest.additionalDirectories !== undefined
+      ? normalizeAdditionalDirectories(rest.additionalDirectories, nextCwd)
+      : normalizeAdditionalDirectories(existing.additionalDirectories, nextCwd);
   const next: InstanceConfig = {
     ...existing,
     ...rest,
     // Normalize cwd if changed so relative paths resolve consistently.
-    cwd: rest.cwd !== undefined ? normalizeCwd(rest.cwd) : existing.cwd,
+    cwd: nextCwd,
     envVars,
   };
+  if (nextAdditional.length > 0) {
+    (next as { additionalDirectories: ReadonlyArray<string> }).additionalDirectories = nextAdditional;
+  } else {
+    delete (next as { additionalDirectories?: ReadonlyArray<string> }).additionalDirectories;
+  }
   const nextList = [...config.instances.slice(0, idx), next, ...config.instances.slice(idx + 1)];
   persist(config.path, nextList, hubPersistMeta(config));
 
-  if (next.cwd !== existing.cwd) {
+  const dirsChanged =
+    next.cwd !== existing.cwd
+    || JSON.stringify(next.additionalDirectories ?? [])
+      !== JSON.stringify(existing.additionalDirectories ?? []);
+  if (dirsChanged) {
     try {
       remapAgentWorkspace({
         agentId: next.id,
         previousCwd: existing.cwd,
+        previousAdditionalDirectories: existing.additionalDirectories,
         cwd: next.cwd,
+        additionalDirectories: next.additionalDirectories,
       });
     } catch (err) {
       console.warn(
@@ -915,11 +952,19 @@ function loadExisting(path: string): HubConfig {
       throw new Error(`Hub config at ${path}: entry #${i} must be a JSON object.`);
     }
     const p = raw as Record<string, unknown>;
+    const cwd = requireString(p.cwd, `instances[${i}].cwd`, path);
+    const additionalDirectories = Array.isArray(p.additionalDirectories)
+      ? normalizeAdditionalDirectories(
+          p.additionalDirectories.filter((x): x is string => typeof x === 'string'),
+          cwd,
+        )
+      : [];
     const entry: InstanceConfig = {
       id: requireString(p.id, `instances[${i}].id`, path),
       label: typeof p.label === 'string' ? p.label : '',
       engine: parseInstanceEngine(p.engine, customEngines, `instances[${i}].engine`, path),
-      cwd: requireString(p.cwd, `instances[${i}].cwd`, path),
+      cwd,
+      ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
       port: requireNumber(p.port, `instances[${i}].port`, path),
       host: typeof p.host === 'string' ? p.host : '127.0.0.1',
       baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',

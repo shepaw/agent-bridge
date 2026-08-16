@@ -22,6 +22,8 @@ export const AGENTS_SPACE = 'agents';
 export interface AgentStoreMapping {
   readonly deviceId: string;
   readonly workspaceUri: string;
+  /** Primary cwd URI first, then each additional directory URI. */
+  readonly workspaceUris: readonly string[];
   readonly agentUri: string;
   readonly workspaceRelPath: string;
   readonly agentRelPath: string;
@@ -97,52 +99,78 @@ export function hubStoreDeviceId(): string {
   return loadOrCreatePeerIdentity().fingerprint;
 }
 
+function ensureWorkspaceRootSymlink(
+  store: PeerLocalStore,
+  deviceId: string,
+  absPath: string,
+): string {
+  const cwd = normalizeCwd(absPath);
+  const workspaceRel = encodeWorkspaceStorePath(cwd);
+  const workspaceAbs = join(store.root, deviceId, WORKSPACES_SPACE, ...workspaceRel.split('/'));
+  mkdirSync(dirname(workspaceAbs), { recursive: true });
+  ensureWorkspaceSymlink(workspaceAbs, cwd);
+  return workspaceStoreUri(deviceId, cwd);
+}
+
 /**
- * Ensure store dirs exist for this agent: private agents/<uuid>/ and a
- * workspaces/<abs-path>/ symlink pointing at the Working Directory.
+ * Ensure store dirs exist for this agent: private agents/<uuid>/ and
+ * workspaces/<abs-path>/ symlinks for the primary cwd and any additional roots.
  */
 export function ensureAgentStoreMappings(opts: {
   agentId: string;
   cwd: string;
+  additionalDirectories?: readonly string[];
   deviceId?: string;
   store?: PeerLocalStore;
 }): AgentStoreMapping {
   const deviceId = opts.deviceId ?? hubStoreDeviceId();
   const cwd = normalizeCwd(opts.cwd);
   const store = opts.store ?? getPeerLocalStore();
-  const workspaceRel = encodeWorkspaceStorePath(cwd);
+  const extras = (opts.additionalDirectories ?? [])
+    .map((d) => normalizeCwd(d))
+    .filter((d) => d !== cwd);
   const agentRel = opts.agentId;
-
-  const workspaceAbs = join(store.root, deviceId, WORKSPACES_SPACE, ...workspaceRel.split('/'));
   const agentAbs = join(store.root, deviceId, AGENTS_SPACE, agentRel);
-
-  mkdirSync(dirname(workspaceAbs), { recursive: true });
   mkdirSync(agentAbs, { recursive: true });
 
-  ensureWorkspaceSymlink(workspaceAbs, cwd);
+  const workspaceUri = ensureWorkspaceRootSymlink(store, deviceId, cwd);
+  const additionalUris = extras.map((d) => ensureWorkspaceRootSymlink(store, deviceId, d));
+  const workspaceUris = [workspaceUri, ...additionalUris];
 
   return {
     deviceId,
-    workspaceUri: workspaceStoreUri(deviceId, cwd),
+    workspaceUri,
+    workspaceUris,
     agentUri: agentPrivateStoreUri(deviceId, opts.agentId),
-    workspaceRelPath: workspaceRel,
+    workspaceRelPath: encodeWorkspaceStorePath(cwd),
     agentRelPath: agentRel,
   };
 }
 
-/** Re-point the workspace symlink when Working Directory changes. */
+/** Re-point workspace symlinks when Working Directory / additional roots change. */
 export function remapAgentWorkspace(opts: {
   agentId: string;
   previousCwd?: string;
+  previousAdditionalDirectories?: readonly string[];
   cwd: string;
+  additionalDirectories?: readonly string[];
   deviceId?: string;
   store?: PeerLocalStore;
 }): AgentStoreMapping {
   const deviceId = opts.deviceId ?? hubStoreDeviceId();
   const store = opts.store ?? getPeerLocalStore();
 
-  if (opts.previousCwd) {
-    const prevRel = encodeWorkspaceStorePath(opts.previousCwd);
+  const prevRoots = [
+    ...(opts.previousCwd ? [opts.previousCwd] : []),
+    ...(opts.previousAdditionalDirectories ?? []),
+  ].map((d) => normalizeCwd(d));
+  const nextRoots = new Set([
+    normalizeCwd(opts.cwd),
+    ...(opts.additionalDirectories ?? []).map((d) => normalizeCwd(d)),
+  ]);
+  for (const prev of prevRoots) {
+    if (nextRoots.has(prev)) continue;
+    const prevRel = encodeWorkspaceStorePath(prev);
     const prevAbs = join(store.root, deviceId, WORKSPACES_SPACE, ...prevRel.split('/'));
     removeSymlinkIfPresent(prevAbs);
   }
@@ -150,14 +178,19 @@ export function remapAgentWorkspace(opts: {
   return ensureAgentStoreMappings({
     agentId: opts.agentId,
     cwd: opts.cwd,
+    additionalDirectories: opts.additionalDirectories,
     deviceId,
     store,
   });
 }
 
-/** Ensure every instance has a workspace symlink (idempotent if already correct). */
+/** Ensure every instance has workspace symlinks (idempotent if already correct). */
 export function ensureAllAgentStoreMappings(
-  instances: ReadonlyArray<{ id: string; cwd: string }>,
+  instances: ReadonlyArray<{
+    id: string;
+    cwd: string;
+    additionalDirectories?: readonly string[];
+  }>,
   opts?: { deviceId?: string; store?: PeerLocalStore },
 ): void {
   for (const instance of instances) {
@@ -165,6 +198,7 @@ export function ensureAllAgentStoreMappings(
       ensureAgentStoreMappings({
         agentId: instance.id,
         cwd: instance.cwd,
+        additionalDirectories: instance.additionalDirectories,
         deviceId: opts?.deviceId,
         store: opts?.store,
       });

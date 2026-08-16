@@ -53,6 +53,9 @@ cli
   .option('--cwd <dir>', 'Working directory for the upstream agent', {
     default: process.cwd(),
   })
+  .option('--additional-directory <dir>', 'Extra workspace root (repeatable; ACP additionalDirectories)', {
+    default: [],
+  })
   .option('--port <port>', 'Port to listen on', {
     default: process.env.AGENT_PORT ?? 8090,
   })
@@ -74,6 +77,7 @@ cli
     engineDisplayName?: string;
     acpCommand?: string;
     cwd: string;
+    additionalDirectory?: string | string[];
     port: string | number;
     host: string;
     name?: string;
@@ -101,6 +105,11 @@ cli
     }
 
     const port = Number(opts.port);
+    const additionalDirectories = Array.isArray(opts.additionalDirectory)
+      ? opts.additionalDirectory.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      : typeof opts.additionalDirectory === 'string' && opts.additionalDirectory.trim().length > 0
+        ? [opts.additionalDirectory]
+        : [];
 
     let tunnelConfig: ChannelTunnelConfig | undefined;
     const serverUrl: string | undefined = opts.tunnelServer ?? process.env.PAW_ACP_TUNNEL_SERVER_URL;
@@ -138,6 +147,7 @@ cli
       engineSpec: spec,
       name: opts.name ?? spec.defaultAgentName,
       cwd: opts.cwd,
+      additionalDirectories,
       peersPath: opts.peersPath,
       enrollmentsPath: opts.enrollmentsPath,
       identityPath: opts.identityPath,

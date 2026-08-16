@@ -50,6 +50,11 @@ export function supportsSessionDelete(caps: acp.InitializeResponse | undefined):
     && caps?.agentCapabilities?.sessionCapabilities?.delete !== null;
 }
 
+export function supportsAdditionalDirectories(caps: acp.InitializeResponse | undefined): boolean {
+  return caps?.agentCapabilities?.sessionCapabilities?.additionalDirectories !== undefined
+    && caps?.agentCapabilities?.sessionCapabilities?.additionalDirectories !== null;
+}
+
 export interface DiscardReplayOptions {
   /** Stop after this many ms without a replay update. Default 400. */
   idleMs?: number;

@@ -99,18 +99,34 @@ async function instanceStatus(instance: InstanceConfig) {
 
 async function enrichInstance(p: InstanceConfig) {
   let store:
-    | { deviceId: string; workspaceUri: string; agentUri: string }
+    | {
+        deviceId: string;
+        workspaceUri: string;
+        workspaceUris: string[];
+        agentUri: string;
+      }
     | undefined;
   try {
     const deviceId = hubStoreDeviceId();
     try {
-      ensureAgentStoreMappings({ agentId: p.id, cwd: p.cwd, deviceId });
+      ensureAgentStoreMappings({
+        agentId: p.id,
+        cwd: p.cwd,
+        additionalDirectories: p.additionalDirectories,
+        deviceId,
+      });
     } catch {
       /* URI still advertised even if symlink fails */
     }
+    const workspaceUri = workspaceStoreUri(deviceId, p.cwd);
+    const workspaceUris = [
+      workspaceUri,
+      ...(p.additionalDirectories ?? []).map((d) => workspaceStoreUri(deviceId, d)),
+    ];
     store = {
       deviceId,
-      workspaceUri: workspaceStoreUri(deviceId, p.cwd),
+      workspaceUri,
+      workspaceUris,
       agentUri: agentPrivateStoreUri(deviceId, p.id),
     };
   } catch {
@@ -290,7 +306,7 @@ instancesRouter.post('/restart-all', async (_req: Request, res: Response) => {
 
 instancesRouter.post('/', async (req: Request, res: Response) => {
   try {
-    const { engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars, sessionMode } = req.body as Record<string, unknown>;
+    const { engine, cwd, label, port, host, baseUrl, extraArgs, tunnel, envVars, sessionMode, additionalDirectories } = req.body as Record<string, unknown>;
     const cfg = loadOrCreateHubConfig();
     const id = allocateInstanceId(cfg.instances.map((p) => p.id));
     const resolvedEngine = parseEngine(engine ?? 'codebuddy');
@@ -331,11 +347,18 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
 
     const resolvedSessionMode = parseSessionMode(resolvedEngine, sessionMode);
     const displayLabel = typeof label === 'string' && label.length > 0 ? label : id;
+    const resolvedCwd = typeof cwd === 'string' ? cwd : process.cwd();
+    const resolvedAdditional = Array.isArray(additionalDirectories)
+      ? additionalDirectories.filter((x): x is string => typeof x === 'string')
+      : undefined;
     const instance: Omit<InstanceConfig, 'envVars'> & { plainEnvVars?: Record<string, string> } = {
       id,
       label: displayLabel,
       engine: resolvedEngine,
-      cwd: typeof cwd === 'string' ? cwd : process.cwd(),
+      cwd: resolvedCwd,
+      ...(resolvedAdditional !== undefined && resolvedAdditional.length > 0
+        ? { additionalDirectories: resolvedAdditional }
+        : {}),
       port: resolvedPort,
       host: typeof host === 'string' ? host : '127.0.0.1',
       baseUrl: resolvedBaseUrl,
@@ -352,7 +375,11 @@ instancesRouter.post('/', async (req: Request, res: Response) => {
     // Mapping is also done inside addInstance; re-ensure so create response is consistent
     // even if the first attempt warned.
     try {
-      ensureAgentStoreMappings({ agentId: id, cwd: instance.cwd });
+      ensureAgentStoreMappings({
+        agentId: id,
+        cwd: instance.cwd,
+        additionalDirectories: instance.additionalDirectories,
+      });
     } catch {
       /* warned in addInstance */
     }
@@ -447,12 +474,20 @@ instancesRouter.patch('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const existing = getInstance(cfg, req.params.id!);
-    const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars, sessionMode } = req.body as Record<string, unknown>;
+    const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars, sessionMode, additionalDirectories } = req.body as Record<string, unknown>;
     const patch: Parameters<typeof updateInstance>[2] = {};
     let nextSessionMode: string | undefined;
     if (typeof label === 'string') patch.label = label;
     if (typeof host === 'string') patch.host = host;
     if (typeof cwd === 'string') patch.cwd = cwd;
+    if (additionalDirectories !== undefined) {
+      if (!Array.isArray(additionalDirectories)) {
+        res.status(400).json({ error: '"additionalDirectories" must be an array of strings.' });
+        return;
+      }
+      (patch as { additionalDirectories?: string[] }).additionalDirectories =
+        additionalDirectories.filter((x): x is string => typeof x === 'string');
+    }
     if (sessionMode !== undefined) {
       const parsed = parseSessionMode(existing.engine, sessionMode);
       if (parsed !== undefined) {
