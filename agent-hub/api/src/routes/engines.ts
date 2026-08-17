@@ -114,7 +114,9 @@ enginesRouter.get('/:id/icon', (req: Request, res: Response) => {
   }
   const contentType = file.endsWith('.png') ? 'image/png' : 'image/svg+xml';
   res.setHeader('Content-Type', contentType);
-  res.setHeader('Cache-Control', 'public, max-age=86400');
+  // Revalidate with ETag/Last-Modified so icon updates propagate without
+  // waiting out a long max-age (the icon URL carries no version query).
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.sendFile(file);
 });
 
