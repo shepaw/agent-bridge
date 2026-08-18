@@ -6,6 +6,7 @@
   "workspaces": [
     "sdks/shepaw-acp-sdk-typescript",
     "implementations/acp-proxy-ts",
+    "implementations/dsh-shepaw-plugin",
     "agent-hub/core",
     "agent-hub/api",
     "agent-hub/ui",

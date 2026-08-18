@@ -149,11 +149,12 @@ describe('engine-setup', () => {
     expect(kept.ANTHROPIC_BASE_URL).toBe('https://open.bigmodel.cn/api/anthropic');
   });
 
-  it('returns deepseek-harness guide with ACP demo command and API key', () => {
+  it('returns deepseek-harness guide with DSH profile boot and API key', () => {
     const guide = getEngineSetupGuide('deepseek-harness', 'darwin');
-    expect(guide.acpCommand).toBe('npx -y @deepseek-ai/dsh-acp-demo@latest');
-    expect(guide.checkBinary).toBe('npx');
+    expect(guide.acpCommand).toBe('dsh --profile shepaw');
+    expect(guide.checkBinary).toBe('dsh');
     expect(guide.installable).toBe(true);
+    expect(guide.installCommand).toContain('@deepseek-ai/dsh');
     expect(guide.docsUrl).toContain('deepseek-ai/deepseek-harness');
     const keys = (guide.requiredEnvVars ?? []).map((v) => v.key);
     expect(keys).toEqual(expect.arrayContaining(['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']));

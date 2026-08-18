@@ -39,8 +39,8 @@ import {
   writeFileSync,
   closeSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { createStream as createRotatingStream } from 'rotating-file-stream';
@@ -48,6 +48,8 @@ import { createStream as createRotatingStream } from 'rotating-file-stream';
 import type { InstanceConfig } from './config.js';
 import {
   augmentSpawnPath,
+  DSH_SHEPAW_PROFILE,
+  dshCliSearchPaths,
   getCursorAcpCommand,
   resolveBinaryPath,
   resolveCursorCliBinary,
@@ -308,17 +310,35 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       childEnv = sanitizeZcodeHubEnv(childEnv, ownedEngineEnv);
     }
 
-    const child = nodeSpawn(process.execPath, args, {
-      // Detached so the child survives the hub CLI exiting. On Windows this
-      // also requires `windowsHide: true` to avoid a black console popping
-      // up. On Unix it uses setsid to give the child its own session — it
-      // becomes its own process group leader, so `ps -ef | grep shepaw` is
-      // clean.
-      detached: true,
-      windowsHide: true,
-      stdio: ['ignore', logFd, logFd],
-      env: augmentSpawnPath(childEnv),
-    });
+    let child: ChildProcess;
+    if (instance.engine === 'deepseek-harness') {
+      // DeepSeek Harness runs standalone (`dsh --profile shepaw`) — it mounts
+      // the Shepaw ACP server itself via shepaw-dsh-plugin, so there is no
+      // gateway / ACP stdio subprocess. The plugin reads the shared peer
+      // identity + channel inbox from the same env built above, plus the
+      // per-instance bind address below.
+      childEnv = {
+        ...childEnv,
+        SHEPAW_DSH_HOST: instance.host,
+        SHEPAW_DSH_PORT: String(instance.port),
+        ...(instance.sessionMode !== undefined && instance.sessionMode.length > 0
+          ? { DSH_PERMISSION_MODE: instance.sessionMode }
+          : {}),
+      };
+      child = spawnDeepseekHarnessChild(instance, childEnv, logFd);
+    } else {
+      child = nodeSpawn(process.execPath, args, {
+        // Detached so the child survives the hub CLI exiting. On Windows this
+        // also requires `windowsHide: true` to avoid a black console popping
+        // up. On Unix it uses setsid to give the child its own session — it
+        // becomes its own process group leader, so `ps -ef | grep shepaw` is
+        // clean.
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', logFd, logFd],
+        env: augmentSpawnPath(childEnv),
+      });
+    }
 
     // unref() tells Node's event loop not to wait for this child. The hub
     // CLI can now exit and the child continues.
@@ -330,10 +350,11 @@ export async function startInstance(instance: InstanceConfig): Promise<{
     // check catches obvious cases (e.g. bad engine name) at add time.
     await sleep(200);
     if (!isAlive(child.pid!)) {
-      throw new Error(
-        `Gateway exited immediately. Check logs:\n  ${paths.logFile}\n` +
-          `Common causes: bad --extra-args, missing API key env var, invalid cwd.`,
-      );
+      const cause =
+        instance.engine === 'deepseek-harness'
+          ? 'Common causes: dsh not installed, shepaw profile not configured, missing DEEPSEEK_API_KEY.'
+          : 'Common causes: bad --extra-args, missing API key env var, invalid cwd.';
+      throw new Error(`Agent process exited immediately. Check logs:\n  ${paths.logFile}\n${cause}`);
     }
 
     writeState(paths.statePath, {
@@ -617,6 +638,51 @@ function resolveEngineCliPath(): string {
         `Original error: ${formatErr(err)}`,
     );
   }
+}
+
+/**
+ * Spawn DeepSeek Harness directly (`dsh --profile shepaw`) as the instance's
+ * Shepaw agent server. Resolves the `dsh` CLI and, on Windows, unwraps the
+ * `.cmd` shim to its underlying bin.js so we spawn `node bin.js` without
+ * `shell: true` (mirrors the gateway's `node <cli.js>` approach).
+ */
+function spawnDeepseekHarnessChild(
+  instance: InstanceConfig,
+  childEnv: NodeJS.ProcessEnv,
+  logFd: number,
+): ChildProcess {
+  const dshBin = resolveBinaryPath('dsh', dshCliSearchPaths());
+  if (dshBin === null) {
+    throw new Error(
+      'dsh CLI not found. Run the DeepSeek Harness one-click install ' +
+        '(Settings → Engine Management), then retry.',
+    );
+  }
+
+  let entry = dshBin;
+  let useShell = false;
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(dshBin)) {
+    const js = join(dirname(dshBin), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+    if (existsSync(js)) {
+      entry = js;
+    } else {
+      useShell = true;
+    }
+  }
+
+  const args = ['--profile', DSH_SHEPAW_PROFILE];
+  return nodeSpawn(
+    useShell ? entry : process.execPath,
+    useShell ? args : [entry, ...args],
+    {
+      cwd: instance.cwd,
+      detached: true,
+      windowsHide: true,
+      stdio: ['ignore', logFd, logFd],
+      env: augmentSpawnPath(childEnv),
+      ...(useShell ? { shell: true } : {}),
+    },
+  );
 }
 
 function formatErr(err: unknown): string {

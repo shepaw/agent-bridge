@@ -157,7 +157,9 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     command: 'npx',
     // Official ACP stdio bin (`dsh-acp-demo`). Needs DEEPSEEK_API_KEY and a
     // cordis.yml in the instance cwd (see Hub engine setup).
-    args: ['-y', '@deepseek-ai/dsh-acp-demo@latest'],
+    // Pin to a known-good rc: the `latest` dist-tag still points at
+    // 0.0.1-rc.1, whose peer-dependency tree fails to resolve (ERESOLVE).
+    args: ['-y', '@deepseek-ai/dsh-acp-demo@0.1.0-rc.7'],
     defaultAgentName: 'DeepSeek Harness',
   },
   'qwen-code': {

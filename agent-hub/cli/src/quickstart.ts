@@ -19,6 +19,7 @@ import {
   addInstance,
   allocateInstanceId,
   ensureInstanceDir,
+  getEngineSetupGuide,
   isEngineDisabled,
   isKnownEngine,
   listEngineInfos,
@@ -27,6 +28,7 @@ import {
   nextFreePort,
   resolveEngineAvailability,
   resolvePublicHost,
+  runEngineInstall,
   startInstance,
   startPeerService,
   tryAuthorizePeerServiceOnInstance,
@@ -92,6 +94,48 @@ function pickDefaultEngine(engines: EngineChoice[], preferred?: string): string 
   return preferred ?? engines[0]?.id ?? 'claude-code';
 }
 
+/**
+ * deepseek-harness fast path: when the runtime is missing (`dsh` CLI or the
+ * `shepaw` profile), offer/run the one-click install (install DSH + pnpm +
+ * configure the shepaw-dsh-plugin profile), then re-probe availability.
+ *
+ * Returns the refreshed availability entry, or `undefined` when the install
+ * was skipped (so the caller keeps its original "not ready" warning).
+ */
+async function ensureDeepseekHarnessReady(
+  rl: ReturnType<typeof createInterface> | undefined,
+  opts: QuickstartOptions,
+  cfg: HubConfig,
+): Promise<EngineChoice | undefined> {
+  const guide = getEngineSetupGuide('deepseek-harness');
+  if (!guide.installable || guide.installCommand === undefined) return undefined;
+
+  let doInstall = opts.yes === true;
+  if (!doInstall && rl !== undefined) {
+    console.log(`\n${guide.summary}`);
+    const answer = (await ask(rl, 'DeepSeek Harness 未就绪，一键安装并配置？(Y/n)', 'Y')).toLowerCase();
+    doInstall = answer !== 'n' && answer !== 'no';
+  } else if (!doInstall) {
+    console.log('\n⚠ DeepSeek Harness 未就绪。');
+    console.log('  加 --yes 可自动一键安装，或到 Web 面板的 Engine Management 里安装。');
+    return undefined;
+  }
+  if (!doInstall) return undefined;
+
+  console.log('\n一键安装 DeepSeek Harness + shepaw 插件（首次需下载，可能几分钟）…');
+  console.log(`  ${guide.installCommand}`);
+  const result = runEngineInstall('deepseek-harness');
+  if (result.ok) {
+    console.log('✓ DeepSeek Harness 已安装，并配置好 shepaw profile（shepaw-dsh-plugin）。');
+  } else {
+    const detail = (result.stderr ?? '').trim() || result.status.checkError || 'unknown error';
+    console.warn(`⚠ 安装命令结束，但引擎仍未就绪：${detail}`);
+  }
+  // Re-probe so availability reflects the fresh install (runEngineInstall
+  // already cleared the probe caches).
+  return probeEngines(loadOrCreateHubConfig()).find((e) => e.id === 'deepseek-harness');
+}
+
 async function resolveEngineInteractive(
   rl: ReturnType<typeof createInterface> | undefined,
   engines: EngineChoice[],
@@ -145,8 +189,11 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     if (!isKnownEngine(engine, cfg.customEngines)) {
       throw new Error(`Unknown engine "${engine}". Run \`shepaw-hub engine list\`.`);
     }
-    const chosen = engines.find((e) => e.id === engine);
-    if (chosen && !chosen.available) {
+    let chosen = engines.find((e) => e.id === engine);
+    if (engine === 'deepseek-harness' && (chosen === undefined || !chosen.available)) {
+      chosen = await ensureDeepseekHarnessReady(rl, opts, cfg);
+    }
+    if (chosen !== undefined && !chosen.available) {
       console.log(`\n⚠ Engine "${engine}" is not ready: ${chosen.reason ?? 'unavailable'}`);
       console.log('  Continuing anyway — `start` will fail with a clearer error if the CLI is missing.');
     }

@@ -6,7 +6,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   acpCommandForEngine,
@@ -1013,15 +1014,71 @@ function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
   };
 }
 
+/** DSH CLI install constants. `0.1.0-rc.7` is the current `next`/known-good release. */
+const DSH_PACKAGE = '@deepseek-ai/dsh';
+const DSH_VERSION = '0.1.0-rc.7';
+/** DSH profile name this engine boots (holds the shepaw-bridge plugin). */
+export const DSH_SHEPAW_PROFILE = 'shepaw';
+
+/** Common install locations for the `dsh` CLI (npm global bin, homebrew, nvm, Windows npm shim dir). */
+export function dshCliSearchPaths(platform: HubPlatform = detectHubPlatform()): string[] {
+  const paths = [...spawnPathPrefixes(platform)];
+  if (platform === 'win32') {
+    // `npm install -g` drops `dsh.cmd` / `dsh.ps1` into `%APPDATA%\npm` by default.
+    const appData = process.env.APPDATA;
+    if (appData) paths.push(join(appData, 'npm'));
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) paths.push(join(userProfile, 'AppData', 'Roaming', 'npm'));
+  } else {
+    paths.push(join(homedir(), '.npm-global', 'bin'));
+  }
+  const nodeBin = dirname(process.execPath);
+  if (nodeBin.length > 0 && !paths.includes(nodeBin)) paths.push(nodeBin);
+  return paths;
+}
+
+/**
+ * Locate the shepaw-dsh-plugin to install. In the agent-bridge monorepo this
+ * resolves the sibling `implementations/dsh-shepaw-plugin` directory (so
+ * `dsh plugin add` works from a source checkout without a publish); elsewhere
+ * it falls back to the published registry name.
+ */
+export function resolveDshPluginInstallSpec(): string {
+  const start = dirname(fileURLToPath(import.meta.url));
+  let dir = start;
+  for (let i = 0; i < 8; i++) {
+    const candidate = join(dir, 'implementations', 'dsh-shepaw-plugin');
+    if (existsSync(join(candidate, 'package.json'))) {
+      return `file:${candidate}`;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return 'shepaw-dsh-plugin';
+}
+
+/** One-click install: global DSH + pnpm, then configure the shepaw profile with the plugin. */
+function buildDshInstallCommand(): string {
+  const pluginSpec = resolveDshPluginInstallSpec();
+  return [
+    `npm install -g ${DSH_PACKAGE}@${DSH_VERSION}`,
+    'npm install -g pnpm',
+    `dsh plugin --profile ${DSH_SHEPAW_PROFILE} add ${pluginSpec}`,
+  ].join(' && ');
+}
+
 function buildDeepseekHarnessGuide(platform: HubPlatform): EngineSetupGuide {
+  const installCommand = buildDshInstallCommand();
   return {
     engineId: 'deepseek-harness',
-    summary: `DeepSeek Harness 通过官方 ACP stdio 入口 @deepseek-ai/dsh-acp-demo 接入（${hubPlatformLabel(platform)}）。需要 Node.js 22.19+、DEEPSEEK_API_KEY，以及实例工作目录中的 cordis.yml。`,
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['deepseek-harness'],
+    summary: `DeepSeek Harness 以「DSH + Shepaw 插件」方式接入（${hubPlatformLabel(platform)}）：Hub 检测本机 \`dsh\` CLI，一键安装 DSH 并配置 \`${DSH_SHEPAW_PROFILE}\` profile（自动挂载 shepaw-dsh-plugin）。需要 Node.js 22.19+、DEEPSEEK_API_KEY。`,
+    acpCommand: `dsh --profile ${DSH_SHEPAW_PROFILE}`,
     docsUrl: 'https://github.com/deepseek-ai/deepseek-harness',
-    checkBinary: 'npx',
+    checkBinary: 'dsh',
+    checkPaths: dshCliSearchPaths(platform),
     installable: true,
-    installCommand: 'npx -y -p @deepseek-ai/dsh-acp-demo@latest node -e "process.exit(0)"',
+    installCommand,
     requiredEnvVars: [
       {
         key: 'DEEPSEEK_API_KEY',
@@ -1041,21 +1098,19 @@ function buildDeepseekHarnessGuide(platform: HubPlatform): EngineSetupGuide {
         command: 'node --version && npx --version',
       },
       {
+        title: '一键安装 DeepSeek Harness 并配置插件',
+        description: `一键安装会：① 全局安装 ${DSH_PACKAGE}@${DSH_VERSION}；② 安装 pnpm；③ 初始化 \`${DSH_SHEPAW_PROFILE}\` profile 并安装 shepaw-dsh-plugin（作为 dsh bundle 自动写入 cordis 组合）。`,
+        command: installCommand,
+      },
+      {
         title: '配置 DeepSeek 凭据',
         description:
           '在下方「默认环境变量」添加 DEEPSEEK_API_KEY。自定义网关可另加 DEEPSEEK_BASE_URL。',
       },
       {
-        title: '准备 ACP 组合配置',
-        description:
-          'dsh-acp-demo 默认读取实例工作目录下的 cordis.yml。可从官方仓库 examples/acp-agent/cordis.yml 复制到项目根目录。权限预设由环境变量 DSH_PERMISSION_MODE 控制（read-only / workspace-write / danger-full-access）。',
-        command:
-          'curl -fsSL https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/examples/acp-agent/cordis.yml -o cordis.yml',
-      },
-      {
-        title: '预热 ACP 包（可选）',
-        description: '首次启动也会自动下载；一键安装会预先拉取 @deepseek-ai/dsh-acp-demo。',
-        command: 'npx -y -p @deepseek-ai/dsh-acp-demo@latest node -e "process.exit(0)"',
+        title: '验证 profile',
+        description: '打印 shepaw profile 的组合树，确认 shepaw-bridge 插件已挂载。',
+        command: `dsh --profile ${DSH_SHEPAW_PROFILE} --dump-config`,
       },
     ],
   };

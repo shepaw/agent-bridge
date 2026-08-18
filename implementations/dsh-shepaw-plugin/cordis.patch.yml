@@ -1,0 +1,19 @@
+# Bundle patch for `shepaw-dsh-plugin` — declares `dsh.bundle.patch`, so
+# `dsh plugin --profile <name> add shepaw-dsh-plugin` installs the package AND
+# reconciles it into `dsh.profile.bundles` automatically. On boot this patch is
+# applied over the profile tree and mounts the Shepaw ACP v2.1 bridge.
+#
+# Defaults below can be overridden in the profile's own `cordis.patch.yml`.
+
+- insert:
+    - id: shepaw-bridge
+      name: 'shepaw-dsh-plugin'
+      config:
+        # LAN-reachable so the Shepaw app on the same Wi-Fi can connect.
+        host: 0.0.0.0
+        port: 8080
+        # Default workspace root for new DSH sessions (absolute path).
+        # cwd: /Users/edenzou/workspace/shepaw/shepaw
+        # Optional model/provider override; defaults to the profile's agentDefaultModel.
+        # provider: deepseek-official
+        # model: deepseek-v4-pro
