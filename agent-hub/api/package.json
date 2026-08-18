@@ -1,6 +1,6 @@
 {
   "name": "@shepaw/agent-hub-api",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Express + WebSocket API backend for Shepaw Agent Hub dashboard",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -44,11 +44,11 @@
     "access": "public"
   },
   "dependencies": {
-    "@shepaw/agent-hub-core": "^0.1.6",
-    "@shepaw/agent-hub-ui": "^0.1.6",
+    "@shepaw/agent-hub-core": "^0.1.7",
+    "@shepaw/agent-hub-ui": "^0.1.7",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "shepaw-acp-sdk": "^0.1.6",
+    "shepaw-acp-sdk": "^0.1.7",
     "ws": "^8.18.0"
   },
   "devDependencies": {

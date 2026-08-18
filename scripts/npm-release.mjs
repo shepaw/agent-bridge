@@ -26,6 +26,7 @@ const PACKAGES = [
   { dir: 'agent-hub/ui', name: '@shepaw/agent-hub-ui' },
   { dir: 'agent-hub/api', name: '@shepaw/agent-hub-api' },
   { dir: 'agent-hub/cli', name: 'shepaw-agent-hub' },
+  { dir: 'implementations/dsh-shepaw-plugin', name: 'shepaw-dsh-plugin' },
 ];
 
 const INTERNAL_NAMES = new Set(PACKAGES.map((p) => p.name));
