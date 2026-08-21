@@ -51,6 +51,11 @@ import {
   writeStoreWriteContext,
 } from './store-write-context.js';
 import {
+  buildGroupTaskContextBlock,
+  groupStoreWriteScope,
+  isGroupTurn,
+} from './group-context.js';
+import {
   buildStorePouchCard,
   pouchCardEnabled,
   prependStorePouchCard,
@@ -157,13 +162,25 @@ export class AcpProxyAgent extends ACPAgentServer {
     this.lastShepawSessionId = shepawSessionId;
     this.sessionHistoryCache.invalidate(shepawSessionId);
 
-    // So `shepaw store write` (shell shim) lands under runtime/<agent>/<session>/…
+    // Group-task turns: artifacts land in the group runtime
+    // (`runtime/<group>/<group>/artifacts/…`) so the whole group sees them.
+    // Otherwise keep the member-scoped runtime (`runtime/<agent>/<session>/…`).
+    const groupContext = kwargs.group_context;
     try {
-      writeStoreWriteContext({
-        agent_id: this.agentId,
-        owner: this.agentId,
-        channel: shepawSessionId,
-      });
+      if (isGroupTurn(groupContext)) {
+        const scope = groupStoreWriteScope(groupContext, this.agentId);
+        writeStoreWriteContext({
+          agent_id: scope.agentId,
+          owner: scope.owner,
+          channel: scope.channel,
+        });
+      } else {
+        writeStoreWriteContext({
+          agent_id: this.agentId,
+          owner: this.agentId,
+          channel: shepawSessionId,
+        });
+      }
     } catch (err) {
       log(
         'store write context update failed: %s',
@@ -192,16 +209,25 @@ export class AcpProxyAgent extends ACPAgentServer {
       pouchCardEnabled(process.env) &&
       !this.pouchCardSessions.has(shepawSessionId)
     ) {
-      blocks = prependStorePouchCard(
-        blocks,
-        buildStorePouchCard({
-          deviceId: resolveStoreDeviceIdFromEnv(process.env),
-          workspaceUri: (process.env.SHEPAW_WORKSPACE_URI ?? '').trim() || undefined,
-          hostCardMarkdown: (process.env.SHEPAW_SCOPE_CARD ?? '').trim() || undefined,
-        }),
-      );
+      const pouchCard = buildStorePouchCard({
+        deviceId: resolveStoreDeviceIdFromEnv(process.env),
+        workspaceUri: (process.env.SHEPAW_WORKSPACE_URI ?? '').trim() || undefined,
+        hostCardMarkdown: (process.env.SHEPAW_SCOPE_CARD ?? '').trim() || undefined,
+      });
+      // Group-task turn: append the group context block (roster, own role,
+      // shared workspace URI) once per session so the upstream agent knows
+      // it is working inside a group chat.
+      const groupBlock = isGroupTurn(groupContext)
+        ? buildGroupTaskContextBlock(groupContext)
+        : null;
+      const combined = groupBlock ? `${pouchCard}\n\n${groupBlock}` : pouchCard;
+      blocks = prependStorePouchCard(blocks, combined);
       this.pouchCardSessions.add(shepawSessionId);
-      log('injected device pouch card for session %s', shepawSessionId);
+      log(
+        'injected device pouch card for session %s%s',
+        shepawSessionId,
+        groupBlock ? ' (group-task context)' : '',
+      );
     }
 
     await this.subprocess.runPromptTurn(

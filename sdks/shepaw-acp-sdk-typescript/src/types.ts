@@ -136,7 +136,7 @@ export interface ChatKwargs {
   messages: ConversationMessage[];
   attachments: unknown;
   system_prompt: string;
-  group_context: unknown;
+  group_context: GroupChatContext | undefined;
   /** Optional tool defs (e.g. group_dispatch / group_finish) from `agent.chat`. */
   tools: unknown;
   ui_component_version: string | undefined;
@@ -145,6 +145,49 @@ export interface ChatKwargs {
   is_history_supplement: boolean;
   /** The raw `agent.chat` params (for anything not surfaced above). */
   params: Record<string, unknown>;
+}
+
+/**
+ * Group member as carried in `agent.chat` `group_context.members`.
+ *
+ * Produced by the Shepaw app's group executor
+ * (`GroupAgentExecutor.processGroupAgent` → `sendChatMessage(groupContext: …)`);
+ * the group itself identifies the agent with its registered name in
+ * `orchestration_tools` agent lists.
+ */
+export interface GroupChatMember {
+  id: string;
+  name: string;
+  type: 'agent' | 'user';
+  bio?: string;
+  capabilities?: string[];
+  status?: 'online' | 'offline';
+}
+
+/**
+ * Group-chat context attached to an `agent.chat` turn when the message is a
+ * group-task delegation (Shepaw group orchestration).
+ *
+ * The app sends this for every member turn inside a group; a non-group DM
+ * turn carries `undefined`. The gateway should:
+ * - inject a group-task context block into the upstream agent prompt
+ *   (group name, member roster, own role, shared-area URI),
+ * - scope `shepaw store write` fallback owner/channel to the group so
+ *   produced artifacts land in the group runtime (`runtime/<group>/…`).
+ */
+export interface GroupChatContext {
+  /** Group channel id (`group_<uuid>`); also the session's group family root. */
+  group_id: string;
+  group_name?: string;
+  group_description?: string;
+  member_count?: number;
+  members?: GroupChatMember[];
+  is_first_message?: boolean;
+  message_version?: string;
+  /** Admin-only orchestration tool defs (group_dispatch / group_finish). */
+  orchestration_tools?: unknown;
+  /** Group workspace shared area (`store://workspaces/<device>/group_<gid>/shared`). */
+  workspace_uri?: string;
 }
 
 // ── Slash command discovery (agent.commands.list) ──────────────────
