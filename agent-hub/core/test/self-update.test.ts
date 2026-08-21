@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  checkHubUpdate,
   compareSemver,
   formatUpdateHint,
   isNpmPackageInstall,
@@ -62,5 +63,43 @@ describe('formatUpdateHint', () => {
     expect(text).toContain('0.1.3');
     expect(text).toContain('0.1.4');
     expect(text).toContain('shepaw-hub update');
+  });
+});
+
+describe('checkHubUpdate', () => {
+  it('honors the installed override and reports outdated', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: '9.9.9' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const info = await checkHubUpdate({
+        installed: '0.1.0',
+        skipCache: true,
+        now: 0,
+      });
+      expect(info).toEqual({ installed: '0.1.0', latest: '9.9.9', outdated: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reports up to date when installed matches latest', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: '0.1.4' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const info = await checkHubUpdate({
+        installed: '0.1.4',
+        skipCache: true,
+        now: 0,
+      });
+      expect(info.outdated).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

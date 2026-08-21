@@ -202,6 +202,35 @@ export const en = {
   'settings.peerTitle': 'Pair device',
   'settings.peerHint':
     'Start Peer, then scan with Shepaw App → Device Pairing / Scan to Connect. After pairing, the phone can reach every local instance over Peer.',
+  'settings.versionTitle': 'Version & update',
+  'settings.versionHint':
+    'Installed shepaw-agent-hub release, npm update check, and dashboard server restart.',
+  'settings.installed': 'Installed: {version}',
+  'settings.checkUpdates': 'Check for updates',
+  'settings.checkingUpdates': 'Checking…',
+  'settings.checkFailed': 'Update check failed: {message}',
+  'settings.versionUpToDate': 'Up to date — {latest} is the latest release.',
+  'settings.updateAvailable': 'Update available: {latest}',
+  'settings.upgrade': 'Upgrade now',
+  'settings.upgrading': 'Upgrading… (npm output streams to the shepaw-hub web terminal)',
+  'settings.upgradeFailed': 'Upgrade failed: {message}',
+  'settings.notNpmInstall':
+    'One-click upgrade is only available for a global npm install. From a source checkout: git pull, rebuild, then npm link, or run: npm install -g shepaw-agent-hub@latest',
+  'settings.upgradeInFlight': 'An upgrade is already running. Wait for it to finish.',
+  'settings.restart': 'Restart dashboard',
+  'settings.restartTitle': 'Restart dashboard server?',
+  'settings.restartMessage':
+    'The dashboard API and UI will restart. In-flight requests will be interrupted. This takes a few seconds.',
+  'settings.restarting': 'Restarting…',
+  'settings.restartNotSupervised':
+    'Dashboard restart is only available when launched via `shepaw-hub web`.',
+  'settings.upgradeRestartTitle': 'Restart to apply the upgrade?',
+  'settings.upgradeRestartMessage':
+    'shepaw-agent-hub {version} was installed. The dashboard must restart to run the new version.',
+  'settings.upgradeRestartButton': 'Upgrade & restart',
+  'settings.waitingServer': 'Waiting for the dashboard to come back…',
+  'settings.waitingServerFailed':
+    'The dashboard did not come back. It may still be starting — reload the page manually.',
 
   'peer.section': 'Peer service',
   'peer.hint':

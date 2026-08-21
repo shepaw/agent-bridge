@@ -145,6 +145,19 @@ export {
 } from './paths.js';
 export type { InstancePaths } from './paths.js';
 
+export {
+  checkHubUpdate,
+  compareSemver,
+  fetchLatestVersion,
+  formatUpdateHint,
+  HUB_NPM_PACKAGE,
+  installLatestFromNpm,
+  isNpmPackageInstall,
+  parseLatestVersion,
+  readInstalledVersion,
+} from './self-update.js';
+export type { HubVersionInfo } from './self-update.js';
+
 export { GatewayTunnelRouter } from './tunnel-router.js';
 export type { GatewayRouterOptions } from './tunnel-router.js';
 

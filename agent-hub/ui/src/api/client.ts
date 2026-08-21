@@ -34,6 +34,7 @@ import type {
   StoreRecentResult,
   StoreReadResult,
   StoreWriteResult,
+  SystemVersion,
 } from './types.js';
 
 const BASE = '/api';
@@ -135,7 +136,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       (body && typeof body === 'object' && 'error' in body && body.error)
         ? String(body.error)
         : `HTTP ${res.status}`;
-    throw new Error(msg);
+    const err = new Error(msg) as Error & { code?: string };
+    if (body && typeof body === 'object' && 'code' in body) {
+      const code = (body as { code?: unknown }).code;
+      if (typeof code === 'string') err.code = code;
+    }
+    throw err;
   }
   return body as T;
 }
@@ -412,5 +418,16 @@ export const api = {
     /** Raw download URL (same-origin; auth via Bearer header not possible for <a download>). */
     rawUrl: (uri: string): string =>
       `${BASE}/store/read?uri=${encodeURIComponent(uri)}&raw=1`,
+  },
+
+  system: {
+    version: (refresh = false): Promise<SystemVersion> =>
+      request(`/system/version${refresh ? '?refresh=1' : ''}`),
+
+    upgrade: (): Promise<{ ok: true; installed: string }> =>
+      request('/system/upgrade', { method: 'POST' }),
+
+    restart: (): Promise<{ ok: true; restarting: true }> =>
+      request('/system/restart', { method: 'POST' }),
   },
 };

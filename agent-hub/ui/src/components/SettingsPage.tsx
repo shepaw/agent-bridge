@@ -1,6 +1,7 @@
 import { EngineManager } from './EngineManager.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
+import { VersionPanel } from './VersionPanel.js';
 import type { SettingsTab } from '../utils/settingsRoute.js';
 import { useI18n } from '../i18n/index.js';
 
@@ -32,6 +33,7 @@ export function SettingsPage({
             <p style={cardHint}>{t('settings.tokenHint')}</p>
             <HubAuthTokenPanel onSaved={onAuthTokenSaved} />
           </section>
+          <VersionPanel />
         </div>
       )}
 

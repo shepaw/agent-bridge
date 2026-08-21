@@ -55,6 +55,9 @@ shepaw-hub pair
 # Diagnose setup issues
 shepaw-hub doctor
 
+# Show the installed version (add --check to compare with the npm latest)
+shepaw-hub version
+
 # Update to the latest npm release
 shepaw-hub update
 

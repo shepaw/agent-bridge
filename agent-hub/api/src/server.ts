@@ -30,6 +30,7 @@ import { gatewayRouter } from './routes/gateway.js';
 import { peerRouter } from './routes/peer.js';
 import { fsRouter } from './routes/fs.js';
 import { storeRouter } from './routes/store.js';
+import { systemRouter } from './routes/system.js';
 import { attachLogsWss } from './ws.js';
 import {
   authorizeWsUpgrade,
@@ -131,6 +132,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   app.use('/api/peer', peerRouter);
   app.use('/api/fs', fsRouter);
   app.use('/api/store', storeRouter);
+  app.use('/api/system', systemRouter);
 
   // ── Health check ─────────────────────────────────────────────────
   app.get('/api/health', (_req: Request, res: Response) => {

@@ -460,3 +460,11 @@ export interface StoreWriteResult {
   size: number;
   sha256: string;
 }
+
+export interface SystemVersion {
+  installed: string;
+  npmInstall: boolean;
+  supervised: boolean;
+  latest?: string;
+  outdated?: boolean;
+}

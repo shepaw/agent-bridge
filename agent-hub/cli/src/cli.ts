@@ -5,6 +5,7 @@
  *
  *   init                           Initialize ~/.config/shepaw-hub/ (idempotent)
  *   doctor                         Pre-flight diagnostics (Node, engines, ports, instances)
+ *   version [--check]              Show installed version (--check: compare with npm latest)
  *   update                         Install the latest shepaw-agent-hub from npm
  *   quickstart                     Interactive: init → pick engine → start → print pairing QR
  *   test [id]                      Connectivity probe (HTTP; --rpc; --chat)
@@ -37,6 +38,7 @@
 
 import { existsSync } from 'node:fs';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { runWebSupervisor, type WebOptions } from './web-supervisor.js';
 
 import { cac } from 'cac';
 import qrcode from 'qrcode-terminal';
@@ -85,7 +87,13 @@ import { tailLog } from '@shepaw/agent-hub-core';
 import { probeInstanceRuntime, createHubPairing } from '@shepaw/agent-hub-core';
 import { updateInstance } from '@shepaw/agent-hub-core';
 import { runDoctor } from './doctor.js';
-import { readInstalledVersion, runUpdateCommand, notifyIfUpdateAvailable } from './self-update.js';
+import {
+  checkHubUpdate,
+  HUB_NPM_PACKAGE,
+  readInstalledVersion,
+  runUpdateCommand,
+  notifyIfUpdateAvailable,
+} from './self-update.js';
 import { runQuickstart } from './quickstart.js';
 import { runTest } from './test-cmd.js';
 import {
@@ -131,6 +139,28 @@ cli
   .action(async (opts: { full?: boolean }) => {
     const failures = await runDoctor({ full: opts.full === true });
     if (failures > 0) process.exitCode = 1;
+  });
+
+cli
+  .command('version', 'Show the installed shepaw-hub version')
+  .option('--check', 'Also query npm for the latest release and report whether an update is available')
+  .action(async (opts: { check?: boolean }) => {
+    console.log(`shepaw-hub ${readInstalledVersion()}`);
+    if (opts.check !== true) return;
+    try {
+      const info = await checkHubUpdate({ skipCache: true, installed: readInstalledVersion() });
+      console.log(`Latest:    ${info.latest}`);
+      if (info.outdated) {
+        console.log(`Status:    update available — run: shepaw-hub update`);
+      } else {
+        console.log('Status:    already up to date.');
+      }
+    } catch (err) {
+      console.error(
+        `Could not query npm for ${HUB_NPM_PACKAGE}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exitCode = 1;
+    }
   });
 
 cli
@@ -1268,109 +1298,96 @@ cli
   .option('--no-open', 'Do not automatically open the browser')
   .option('--no-peer', 'Do not auto-start the device peer service')
   .option('--gateway', 'Also start the tunnel router if a channel is configured')
-  .action(async (opts: {
-    port: number | string;
-    host: string;
-    tlsCert?: string;
-    tlsKey?: string;
-    open?: boolean;
-    peer?: boolean;
-    gateway?: boolean;
-  }) => {
-    try {
-      const port = Number(opts.port);
-      const host = opts.host;
-      const shouldOpen = opts.open !== false;
-      const authToken = process.env.SHEPAW_HUB_TOKEN?.trim();
-      const tlsCert = opts.tlsCert ?? process.env.SHEPAW_HUB_TLS_CERT?.trim();
-      const tlsKey = opts.tlsKey ?? process.env.SHEPAW_HUB_TLS_KEY?.trim();
-      const tlsEnabled = Boolean(tlsCert || tlsKey);
-      const scheme = tlsEnabled ? 'https' : 'http';
-
-      if (host === '0.0.0.0' || host === '::') {
-        console.warn('');
-        console.warn('WARNING: Binding the Hub dashboard to all interfaces.');
-        console.warn('  This exposes start/stop/engine APIs on your LAN/public network.');
-        console.warn('  SHEPAW_HUB_TOKEN is REQUIRED for non-loopback binds.');
-        console.warn('  Prefer: shepaw-hub web --host 127.0.0.1');
-        console.warn('');
-        if (!authToken) {
-          console.error('Refusing to start: set SHEPAW_HUB_TOKEN before using --host 0.0.0.0');
-          process.exit(1);
-        }
-      }
-
-      console.log(`Starting Shepaw Hub dashboard on ${scheme}://${host}:${port} ...`);
-      if (tlsEnabled) {
-        console.log(`TLS: cert=${tlsCert ?? '(env)'} key=${tlsKey ?? '(env)'}`);
-      }
-      if (authToken) {
-        console.log('Auth: SHEPAW_HUB_TOKEN is set (Bearer required for /api and /ws).');
-      }
-
-      const { startServer } = await import('@shepaw/agent-hub-api');
-      await startServer({ port, host, authToken, tlsCert, tlsKey });
-
-      const baseUrl = `${scheme}://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
-      console.log(`Dashboard ready: ${baseUrl}`);
-      if (authToken) {
-        console.log('  Auth enabled: open the URL and enter SHEPAW_HUB_TOKEN in the login dialog.');
-        console.log('  (Token is not passed via URL — paste it in the dashboard when prompted.)');
-      }
-
-      if (opts.peer !== false) {
-        try {
-          const res = await startPeerService();
-          console.log(
-            `Peer service: ${res.alreadyRunning ? 'already running' : 'started'} ` +
-              `on ${res.host}:${res.port}/peer/ws (pid ${res.pid})`,
-          );
-          if (res.relocated) {
-            console.log('  Preferred peer port was busy; using the bind above.');
-          }
-          console.log('  Next: open the dashboard → 添加实例. Pair phones under 扫码配对.');
-        } catch (err) {
-          console.warn(
-            `Peer service failed to start: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          console.warn('  App pairing will not work until you run: shepaw-hub peer-start');
-        }
-      } else {
-        console.log('Peer service: skipped (--no-peer). Start later with: shepaw-hub peer-start');
-      }
-
-      if (opts.gateway) {
-        const cfg = loadOrCreateHubConfig();
-        if (cfg.gateway?.tunnel !== undefined) {
-          try {
-            const res = await startGatewayRouter(cfg);
-            console.log(
-              `Tunnel router: ${res.alreadyRunning ? 'already running' : 'started'} ` +
-                `(pid ${res.pid}, port ${res.routerPort})`,
-            );
-          } catch (err) {
-            console.warn(
-              `Tunnel router failed to start: ${err instanceof Error ? err.message : String(err)}`,
-            );
-            console.warn('  Remote pairing will not work until you run: shepaw-hub gateway-start');
-          }
-        }
-      }
-
-      if (shouldOpen) {
-        try {
-          const { default: open } = await import('open');
-          await open(baseUrl);
-        } catch {
-          // Silently ignore if `open` fails (headless env, etc.)
-        }
-      }
-
-      void notifyIfUpdateAvailable();
-    } catch (err) {
-      exitWithError(err);
+  .option('--child', 'Internal: run as supervised dashboard child (used by the supervisor)')
+  .action((opts: WebOptions) => {
+    if (opts.child === true) {
+      return runWebChild(opts).catch(exitWithError);
     }
+    return runWebSupervisor(opts);
   });
+
+/** In-process dashboard server (the `--child` half of `web`). */
+async function runWebChild(opts: WebOptions): Promise<void> {
+  const port = Number(opts.port);
+  const host = opts.host;
+  const authToken = process.env.SHEPAW_HUB_TOKEN?.trim();
+  const tlsCert = opts.tlsCert ?? process.env.SHEPAW_HUB_TLS_CERT?.trim();
+  const tlsKey = opts.tlsKey ?? process.env.SHEPAW_HUB_TLS_KEY?.trim();
+  const tlsEnabled = Boolean(tlsCert || tlsKey);
+  const scheme = tlsEnabled ? 'https' : 'http';
+
+  if (host === '0.0.0.0' || host === '::') {
+    console.warn('');
+    console.warn('WARNING: Binding the Hub dashboard to all interfaces.');
+    console.warn('  This exposes start/stop/engine APIs on your LAN/public network.');
+    console.warn('  SHEPAW_HUB_TOKEN is REQUIRED for non-loopback binds.');
+    console.warn('  Prefer: shepaw-hub web --host 127.0.0.1');
+    console.warn('');
+    if (!authToken) {
+      console.error('Refusing to start: set SHEPAW_HUB_TOKEN before using --host 0.0.0.0');
+      process.exit(1);
+    }
+  }
+
+  console.log(`Starting Shepaw Hub dashboard on ${scheme}://${host}:${port} ...`);
+  if (tlsEnabled) {
+    console.log(`TLS: cert=${tlsCert ?? '(env)'} key=${tlsKey ?? '(env)'}`);
+  }
+  if (authToken) {
+    console.log('Auth: SHEPAW_HUB_TOKEN is set (Bearer required for /api and /ws).');
+  }
+
+  const { startServer } = await import('@shepaw/agent-hub-api');
+  await startServer({ port, host, authToken, tlsCert, tlsKey });
+
+  const baseUrl = `${scheme}://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
+  console.log(`Dashboard ready: ${baseUrl}`);
+  if (authToken) {
+    console.log('  Auth enabled: open the URL and enter SHEPAW_HUB_TOKEN in the login dialog.');
+    console.log('  (Token is not passed via URL — paste it in the dashboard when prompted.)');
+  }
+
+  if (opts.peer !== false) {
+    try {
+      const res = await startPeerService();
+      console.log(
+        `Peer service: ${res.alreadyRunning ? 'already running' : 'started'} ` +
+          `on ${res.host}:${res.port}/peer/ws (pid ${res.pid})`,
+      );
+      if (res.relocated) {
+        console.log('  Preferred peer port was busy; using the bind above.');
+      }
+      console.log('  Next: open the dashboard → 添加实例. Pair phones under 扫码配对.');
+    } catch (err) {
+      console.warn(
+        `Peer service failed to start: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.warn('  App pairing will not work until you run: shepaw-hub peer-start');
+    }
+  } else {
+    console.log('Peer service: skipped (--no-peer). Start later with: shepaw-hub peer-start');
+  }
+
+  if (opts.gateway) {
+    const cfg = loadOrCreateHubConfig();
+    if (cfg.gateway?.tunnel !== undefined) {
+      try {
+        const res = await startGatewayRouter(cfg);
+        console.log(
+          `Tunnel router: ${res.alreadyRunning ? 'already running' : 'started'} ` +
+            `(pid ${res.pid}, port ${res.routerPort})`,
+        );
+      } catch (err) {
+        console.warn(
+          `Tunnel router failed to start: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        console.warn('  Remote pairing will not work until you run: shepaw-hub gateway-start');
+      }
+    }
+  }
+
+  void notifyIfUpdateAvailable();
+}
 
 // ── help formatting ────────────────────────────────────────────────
 
@@ -1382,6 +1399,7 @@ cli.help((sections) => {
     [/enroll-(list|revoke)/g, 'enroll $1'],
     [/gateway-(pair|set-channel|clear-channel|show|start|stop|status)/g, 'gateway $1'],
     [/peer-(start|stop|status|pair|devices|devices-remove)/g, 'peer $1'],
+    [/^\s+--child.*$/gm, ''],
   ];
   for (const s of sections) {
     if (typeof s.body === 'string') {
