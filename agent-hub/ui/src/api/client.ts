@@ -27,6 +27,7 @@ import type {
   UpdateCustomEngineInput,
   UpdateInstanceInput,
   FsBrowseResult,
+  StoreBackupDevice,
   StoreHealth,
   StoreListResult,
   StoreMappingsResult,
@@ -390,6 +391,12 @@ export const api = {
     },
 
     mappings: (): Promise<StoreMappingsResult> => request('/store/mappings'),
+
+    /** Devices that mirrored their pouch into this hub (master backup mirrors). */
+    backups: (): Promise<{ devices: StoreBackupDevice[] }> => request('/store/backups'),
+
+    removeBackup: (fingerprint: string): Promise<{ ok: boolean }> =>
+      request(`/store/backups/${encodeURIComponent(fingerprint)}`, { method: 'DELETE' }),
 
     list: (uri: string, depth = 1): Promise<StoreListResult> =>
       request(`/store/list?uri=${encodeURIComponent(uri)}&depth=${depth}`),

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -239,5 +239,66 @@ describe('PeerLocalStore', () => {
         { deviceId: device, space: 'files', path: 'b.txt' },
       ),
     ).toThrow(/exists/);
+  });
+
+  it('listBackupDevices enumerates mirrors, excluding self and non-device entries', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const self = 'deadbeefdeadbeef';
+    const devA = 'aaaaaaaaaaaaaaaa';
+    const devB = 'bbbbbbbbbbbbbbbb';
+    const write = (device: string, space: string, path: string, text: string) => {
+      const content = Buffer.from(text);
+      const sha = createHash('sha256').update(content).digest('hex');
+      const begin = store.writeBegin({ deviceId: device, space, path, size: content.length, sha256: sha });
+      store.writeChunk(device, begin.upload_id, 0, content);
+      store.commit(device, space, [begin.upload_id], 1);
+    };
+
+    write(self, 'files', 'self.txt', 'self'); // own device — must be excluded
+    write(devA, 'files', 'a.txt', 'hello');
+    write(devA, 'artifacts', 'note.md', 'world');
+    write(devB, 'files', 'b.txt', 'backup');
+    mkdirSync(join(dir, '.staging'), { recursive: true }); // not a device dir
+
+    const devices = store.listBackupDevices(self);
+    expect(devices.map((d) => d.fingerprint).sort()).toEqual(['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']);
+
+    const a = devices.find((d) => d.fingerprint === devA)!;
+    expect(a.spaces.map((s) => s.space).sort()).toEqual(['artifacts', 'files']);
+    expect(a.totalFiles).toBe(2);
+    expect(a.totalBytes).toBe('hello'.length + 'world'.length);
+    expect(a.lastSyncSeq).toBe(1);
+
+    const b = devices.find((d) => d.fingerprint === devB)!;
+    expect(b.totalFiles).toBe(1);
+    expect(b.totalBytes).toBe('backup'.length);
+  });
+
+  it('removeBackupDevice deletes the mirror and clears the sync cursor', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const self = 'deadbeefdeadbeef';
+    const dev = 'cccccccccccccccc';
+    const content = Buffer.from('data');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({ deviceId: dev, space: 'files', path: 'x.txt', size: content.length, sha256: sha });
+    store.writeChunk(dev, begin.upload_id, 0, content);
+    store.commit(dev, 'files', [begin.upload_id], 5);
+    expect(store.appliedSeq(dev)).toBe(5);
+
+    store.removeBackupDevice(dev, self);
+    expect(existsSync(join(dir, dev))).toBe(false);
+    expect(store.appliedSeq(dev)).toBe(0);
+    expect(store.listBackupDevices(self)).toHaveLength(0);
+  });
+
+  it('removeBackupDevice refuses self and invalid fingerprints', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const self = 'deadbeefdeadbeef';
+    expect(() => store.removeBackupDevice(self, self)).toThrow();
+    expect(() => store.removeBackupDevice('../../etc', self)).toThrow();
+    expect(() => store.removeBackupDevice('nothex!!', self)).toThrow();
   });
 });

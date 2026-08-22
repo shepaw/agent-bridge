@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getHubAuthToken } from '../api/client.js';
 import type {
+  StoreBackupDevice,
   StoreEntry,
   StoreMapping,
   StoreRecentEntry,
@@ -18,7 +19,8 @@ export interface StoreBrowserPanelProps {
 type SideSelection =
   | { kind: 'local' }
   | { kind: 'peer'; fingerprint: string }
-  | { kind: 'agent'; instanceId: string };
+  | { kind: 'agent'; instanceId: string }
+  | { kind: 'backups' };
 
 type PreviewKind = 'text' | 'image' | 'json' | 'binary' | 'empty';
 
@@ -171,6 +173,8 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     defaultValue: string;
   } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; entry: StoreEntry } | null>(null);
+  const [backups, setBackups] = useState<StoreBackupDevice[]>([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialApplied = useRef(false);
   const previewUrlRef = useRef<string | null>(null);
@@ -272,7 +276,7 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         });
         setRecent(data.entries);
         setWritable(false);
-      } else {
+      } else if (sel.kind === 'agent') {
         const agent = rootsData.agents.find((a) => a.instanceId === sel.instanceId);
         if (!agent) {
           setRecent([]);
@@ -286,6 +290,10 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         });
         setRecent(data.entries);
         setWritable(true);
+      } else {
+        // 'backups' management view — recent list not applicable.
+        setRecent([]);
+        setWritable(false);
       }
     } catch (e) {
       setRecent([]);
@@ -415,6 +423,40 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
   const selectAgent = (agent: StoreMapping) => {
     setSide({ kind: 'agent', instanceId: agent.instanceId });
     navigate(null);
+  };
+  const selectBackups = () => {
+    setSide({ kind: 'backups' });
+    navigate(null);
+    void loadBackups();
+  };
+
+  const loadBackups = async () => {
+    setBackupsLoading(true);
+    setErr(null);
+    try {
+      const data = await api.store.backups();
+      setBackups(data.devices);
+    } catch (e) {
+      setBackups([]);
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBackupsLoading(false);
+    }
+  };
+
+  const deleteBackup = async (device: StoreBackupDevice) => {
+    const name = device.deviceName || device.fingerprint;
+    if (!confirm(t('store.backupDeleteConfirm', { name }))) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.store.removeBackup(device.fingerprint);
+      await loadBackups();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const openSpace = (space: string) => {
@@ -715,7 +757,9 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
     ? t('store.local')
     : side.kind === 'peer'
       ? (activePeer?.deviceName ?? t('store.pairedDevice'))
-      : (activeAgent?.label ?? 'Agent');
+      : side.kind === 'agent'
+        ? (activeAgent?.label ?? 'Agent')
+        : t('store.backups');
 
   const showHome = !uri;
   const showPreviewPane = Boolean(
@@ -755,6 +799,19 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
             </span>
           </button>
         ))}
+
+        <div style={sideSection}>{t('store.backups')}</div>
+        <button
+          type="button"
+          style={sideItem(side.kind === 'backups')}
+          onClick={selectBackups}
+        >
+          <span style={sideIcon}>⌫</span>
+          <span>
+            <div style={sideLabel}>{t('store.backups')}</div>
+            <div style={sideSub}>{t('store.backupsSub')}</div>
+          </span>
+        </button>
 
         <div style={sideSection}>{t('store.agentSpaces')}</div>
         {roots?.agents.length === 0 && (
@@ -801,66 +858,137 @@ export function StoreBrowserPanel({ initialUri, onUriChange }: StoreBrowserPanel
         {/* ── Home: folders first, then recent ───────────────────── */}
         {showHome && (
           <div style={homeScroll}>
-            <section style={{ marginBottom: 20, flexShrink: 0 }}>
-              <h4 style={sectionTitle}>{t('store.partitions')}</h4>
-              {side.kind === 'agent' && activeAgent ? (
-                <div style={spaceGrid}>
-                  <button type="button" style={spaceCard} onClick={() => navigate(activeAgent.agentUri)}>
-                    <div style={spaceIconBig}>📁</div>
-                    <div style={spaceName}>{t('store.space.agents')}</div>
-                    <code style={spaceCode}>agents/{activeAgent.instanceId}</code>
-                  </button>
-                  <button type="button" style={spaceCard} onClick={() => navigate(activeAgent.workspaceUri)}>
-                    <div style={spaceIconBig}>📁</div>
-                    <div style={spaceName}>Workspace</div>
-                    <code style={spaceCode}>workspaces/…</code>
-                  </button>
-                </div>
-              ) : (
-                <div style={spaceGrid}>
-                  {spaces.map((space) => (
-                    <button key={space} type="button" style={spaceCard} onClick={() => openSpace(space)}>
-                      <div style={spaceIconBig}>📁</div>
-                      <div style={spaceName}>{spaceLabel(space, t)}</div>
-                      <code style={spaceCode}>{space}</code>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
+            {side.kind === 'backups' ? (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <h4 style={sectionTitle}>{t('store.backupsTitle')}</h4>
+                <p style={sideHint}>{t('store.backupsHint')}</p>
+                {backupsLoading && <p style={muted}>{t('common.loading')}</p>}
+                {!backupsLoading && backups.length === 0 && (
+                  <p style={muted}>{t('store.backupEmpty')}</p>
+                )}
+                {!backupsLoading && backups.length > 0 && (
+                  <div style={backupList}>
+                    {backups.map((d) => (
+                      <div key={d.fingerprint} style={backupCard}>
+                        <div style={backupHeader}>
+                          <span style={backupName}>{d.deviceName || d.fingerprint}</span>
+                          <code style={backupFp}>{d.fingerprint}</code>
+                          {d.paired ? (
+                            <span style={pairedBadge}>✓ {t('store.backupPaired')}</span>
+                          ) : (
+                            <span style={unpairedBadge}>{t('store.backupUnpaired')}</span>
+                          )}
+                        </div>
+                        <div style={backupMeta}>
+                          <span>
+                            {t('store.backupFiles', { files: String(d.totalFiles), size: formatSize(d.totalBytes) })}
+                          </span>
+                          {d.lastModified > 0 && (
+                            <span>{formatTime(d.lastModified, t)}</span>
+                          )}
+                          <span>{t('store.backupLastSync', { n: String(d.lastSyncSeq) })}</span>
+                        </div>
+                        {d.spaces.length > 0 && (
+                          <div style={capRow}>
+                            {d.spaces.map((s) => (
+                              <button
+                                key={s.space}
+                                type="button"
+                                style={spaceChip}
+                                onClick={() => navigate(`store://${s.space}/${d.fingerprint}/`)}
+                                title={`${s.space}: ${s.files} files · ${formatSize(s.bytes)}`}
+                              >
+                                {s.space} · {formatSize(s.bytes)}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <div style={backupActions}>
+                          <button
+                            type="button"
+                            style={secondaryBtn}
+                            onClick={() => navigate(`store://files/${d.fingerprint}/`)}
+                          >
+                            {t('store.backupBrowse')}
+                          </button>
+                          <button
+                            type="button"
+                            style={dangerBtn}
+                            disabled={busy}
+                            onClick={() => void deleteBackup(d)}
+                          >
+                            {t('store.backupDelete')}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <section style={{ marginBottom: 20, flexShrink: 0 }}>
+                  <h4 style={sectionTitle}>{t('store.partitions')}</h4>
+                  {side.kind === 'agent' && activeAgent ? (
+                    <div style={spaceGrid}>
+                      <button type="button" style={spaceCard} onClick={() => navigate(activeAgent.agentUri)}>
+                        <div style={spaceIconBig}>📁</div>
+                        <div style={spaceName}>{t('store.space.agents')}</div>
+                        <code style={spaceCode}>agents/{activeAgent.instanceId}</code>
+                      </button>
+                      <button type="button" style={spaceCard} onClick={() => navigate(activeAgent.workspaceUri)}>
+                        <div style={spaceIconBig}>📁</div>
+                        <div style={spaceName}>Workspace</div>
+                        <code style={spaceCode}>workspaces/…</code>
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={spaceGrid}>
+                      {spaces.map((space) => (
+                        <button key={space} type="button" style={spaceCard} onClick={() => openSpace(space)}>
+                          <div style={spaceIconBig}>📁</div>
+                          <div style={spaceName}>{spaceLabel(space, t)}</div>
+                          <code style={spaceCode}>{space}</code>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
 
-            <section style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <h4 style={sectionTitle}>{t('store.recent')}</h4>
-              {loading && <p style={muted}>{t('common.loading')}</p>}
-              {!loading && recent.length === 0 && (
-                <p style={muted}>{t('store.noRecent')}</p>
-              )}
-              {!loading && recent.length > 0 && (
-                <div style={recentList}>
-                  {recent.map((item) => (
-                    <button
-                      key={item.uri}
-                      type="button"
-                      style={recentRow}
-                      onClick={() => void openRecent(item)}
-                      title={item.uri}
-                    >
-                      <span style={fileIconStyle}>{fileIcon(entryName(item.path), false)}</span>
-                      <span style={recentMain}>
-                        <span style={recentName}>{entryName(item.path)}</span>
-                        <span style={recentMeta}>
-                          {spaceLabel(item.space, t)} · {item.path}
-                        </span>
-                      </span>
-                      <span style={recentRight}>
-                        <span>{formatSize(item.size)}</span>
-                        <span>{formatTime(item.mtime, t)}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
+                <section style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <h4 style={sectionTitle}>{t('store.recent')}</h4>
+                  {loading && <p style={muted}>{t('common.loading')}</p>}
+                  {!loading && recent.length === 0 && (
+                    <p style={muted}>{t('store.noRecent')}</p>
+                  )}
+                  {!loading && recent.length > 0 && (
+                    <div style={recentList}>
+                      {recent.map((item) => (
+                        <button
+                          key={item.uri}
+                          type="button"
+                          style={recentRow}
+                          onClick={() => void openRecent(item)}
+                          title={item.uri}
+                        >
+                          <span style={fileIconStyle}>{fileIcon(entryName(item.path), false)}</span>
+                          <span style={recentMain}>
+                            <span style={recentName}>{entryName(item.path)}</span>
+                            <span style={recentMeta}>
+                              {spaceLabel(item.space, t)} · {item.path}
+                            </span>
+                          </span>
+                          <span style={recentRight}>
+                            <span>{formatSize(item.size)}</span>
+                            <span>{formatTime(item.mtime, t)}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
           </div>
         )}
 
@@ -1257,6 +1385,41 @@ const secondaryBtn: React.CSSProperties = {
 const dangerBtn: React.CSSProperties = {
   background: '#452632', color: '#f38ba8', border: '1px solid #f38ba8', borderRadius: 5,
   padding: '6px 12px', cursor: 'pointer', fontSize: 12,
+};
+const backupList: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto',
+};
+const backupCard: React.CSSProperties = {
+  background: '#181825', border: '1px solid #313244', borderRadius: 8, padding: '10px 12px',
+  display: 'flex', flexDirection: 'column', gap: 8,
+};
+const backupHeader: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+};
+const backupName: React.CSSProperties = { color: '#cdd6f4', fontSize: 14, fontWeight: 600 };
+const backupFp: React.CSSProperties = {
+  fontSize: 10, color: '#6c7086', background: '#11111b', borderRadius: 4,
+  padding: '2px 6px', fontFamily: 'ui-monospace, Menlo, monospace',
+};
+const pairedBadge: React.CSSProperties = {
+  fontSize: 11, color: '#a6e3a1', border: '1px solid #a6e3a155', borderRadius: 10, padding: '1px 8px',
+};
+const unpairedBadge: React.CSSProperties = {
+  fontSize: 11, color: '#fab387', border: '1px solid #fab38755', borderRadius: 10, padding: '1px 8px',
+};
+const backupMeta: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+  color: '#6c7086', fontSize: 12,
+};
+const capRow: React.CSSProperties = {
+  display: 'flex', flexWrap: 'wrap', gap: 6,
+};
+const spaceChip: React.CSSProperties = {
+  background: '#313244', color: '#89dceb', border: 'none', borderRadius: 10,
+  padding: '3px 10px', cursor: 'pointer', fontSize: 11,
+};
+const backupActions: React.CSSProperties = {
+  display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2,
 };
 const newBox: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, flexShrink: 0,
