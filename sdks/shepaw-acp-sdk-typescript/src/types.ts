@@ -137,8 +137,13 @@ export interface ChatKwargs {
   attachments: unknown;
   system_prompt: string;
   group_context: GroupChatContext | undefined;
-  /** Optional tool defs (e.g. group_dispatch / group_finish) from `agent.chat`. */
-  tools: unknown;
+  /**
+   * Optional tool defs (e.g. group_dispatch / group_finish) from `agent.chat`.
+   * Opaque to the SDK — forwarded verbatim to `onChat` for implementations
+   * that render or bridge them (the acp-proxy surfaces them as text hints;
+   * MCP/CLI group tools cover structured invocation).
+   */
+  tools: ChatToolDef[] | undefined;
   ui_component_version: string | undefined;
   user_id: string;
   message_id: string;
@@ -146,6 +151,13 @@ export interface ChatKwargs {
   /** The raw `agent.chat` params (for anything not surfaced above). */
   params: Record<string, unknown>;
 }
+
+/**
+ * One tool definition as passed in `agent.chat` `params.tools` (host-side
+ * JSON shape, e.g. `{name, description, input_schema}` or OpenAI function
+ * format). The SDK treats it as opaque.
+ */
+export type ChatToolDef = Record<string, unknown>;
 
 /**
  * Group member as carried in `agent.chat` `group_context.members`.

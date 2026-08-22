@@ -87,6 +87,7 @@ import type {
   SessionsListParams,
   SessionsListResult,
   SlashCommandInfo,
+  ChatToolDef,
   GroupChatContext,
   GroupChatMember,
 } from './types.js';
@@ -103,6 +104,21 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 /** Our version of the v2 msg 2 server-side payload. */
 const SERVER_VERSION_STRING = 'acp-sdk/2.1';
+
+/**
+ * Validate raw `agent.chat` params.tools into an opaque tool-def array.
+ * Non-array / non-object entries are dropped; absent → undefined.
+ */
+function normalizeTools(raw: unknown): ChatToolDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ChatToolDef[] = [];
+  for (const item of raw) {
+    if (typeof item === 'object' && item !== null) {
+      out.push(item as ChatToolDef);
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
 
 /**
  * Validate the raw `agent.chat` group_context into a typed
@@ -1550,7 +1566,7 @@ export class ACPAgentServer {
       attachments: params.attachments,
       system_prompt: typeof params.system_prompt === 'string' ? params.system_prompt : this.systemPrompt,
       group_context: normalizeGroupContext(params.group_context),
-      tools: params.tools,
+      tools: normalizeTools(params.tools),
       ui_component_version:
         typeof params.ui_component_version === 'string' ? params.ui_component_version : undefined,
       user_id: typeof params.user_id === 'string' ? params.user_id : '',
