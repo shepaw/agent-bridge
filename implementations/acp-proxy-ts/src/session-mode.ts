@@ -84,7 +84,9 @@ export function findModeConfigOption(
 ): (acp.SessionConfigOption & { type: 'select' }) | undefined {
   if (configOptions === undefined || configOptions === null) return undefined;
   for (const opt of configOptions) {
-    if (isRunModeConfigOption(opt)) return opt;
+    if (isRunModeConfigOption(opt)) {
+      return opt as acp.SessionConfigOption & { type: 'select' };
+    }
   }
   for (const opt of configOptions) {
     if (opt.type !== 'select') continue;

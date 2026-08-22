@@ -16,8 +16,8 @@ export function extractEmbeddedTimestamp(content: string): {
   const match = TIMESTAMP_TAG_RE.exec(content);
   if (match === null) return { text: content };
 
-  const cleaned = content.replace(match[0], '');
-  const raw = match[1].trim();
+  const cleaned = content.replace(match[0]!, '');
+  const raw = match[1]!.trim();
   const ms = Date.parse(raw);
   if (Number.isNaN(ms)) return { text: cleaned };
   return { text: cleaned, createdAt: new Date(ms).toISOString() };

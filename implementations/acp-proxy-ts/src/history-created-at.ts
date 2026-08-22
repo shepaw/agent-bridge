@@ -29,13 +29,13 @@ export function ensureHistoryCreatedAt(
 
   // Forward-fill from known stamps (covers agent replies after a stamped user).
   for (let i = 0; i < out.length; i++) {
-    if (out[i].created_at !== undefined) continue;
+    if (out[i]!.created_at !== undefined) continue;
     if (i === 0) continue;
-    const prev = out[i - 1].created_at;
+    const prev = out[i - 1]!.created_at;
     if (prev === undefined) continue;
     const ms = Date.parse(prev);
     if (Number.isNaN(ms)) continue;
-    out[i].created_at = new Date(ms + 1000).toISOString();
+    out[i]!.created_at = new Date(ms + 1000).toISOString();
   }
 
   const stillMissing = out.some((m) => m.created_at === undefined);
@@ -48,7 +48,7 @@ export function ensureHistoryCreatedAt(
     }
     // Prefer the latest known stamp in the transcript.
     for (let i = out.length - 1; i >= 0; i--) {
-      const at = out[i].created_at;
+      const at = out[i]!.created_at;
       if (at === undefined) continue;
       const ms = Date.parse(at);
       if (!Number.isNaN(ms)) return ms;
@@ -57,17 +57,17 @@ export function ensureHistoryCreatedAt(
   })();
 
   for (let i = 0; i < out.length; i++) {
-    if (out[i].created_at !== undefined) continue;
+    if (out[i]!.created_at !== undefined) continue;
     const offsetFromEnd = out.length - 1 - i;
-    out[i].created_at = new Date(endMs - offsetFromEnd * MINUTE_MS).toISOString();
+    out[i]!.created_at = new Date(endMs - offsetFromEnd * MINUTE_MS).toISOString();
   }
 
   // Keep chronological order stable if anchors mixed oddly.
   for (let i = 1; i < out.length; i++) {
-    const prev = Date.parse(out[i - 1].created_at!);
-    const cur = Date.parse(out[i].created_at!);
+    const prev = Date.parse(out[i - 1]!.created_at!);
+    const cur = Date.parse(out[i]!.created_at!);
     if (!Number.isNaN(prev) && !Number.isNaN(cur) && cur < prev) {
-      out[i].created_at = new Date(prev + 1000).toISOString();
+      out[i]!.created_at = new Date(prev + 1000).toISOString();
     }
   }
 

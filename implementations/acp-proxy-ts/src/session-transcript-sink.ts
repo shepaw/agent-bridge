@@ -211,7 +211,13 @@ export function promptToPlainText(
       .map((b) => (b && typeof b === 'object' && b.type === 'text' ? String(b.text ?? '') : ''))
       .join('');
   }
-  if (prompt && typeof prompt === 'object' && prompt.type === 'text') {
+  if (
+    prompt &&
+    typeof prompt === 'object' &&
+    !Array.isArray(prompt) &&
+    'type' in prompt &&
+    prompt.type === 'text'
+  ) {
     return String(prompt.text ?? '');
   }
   return '';

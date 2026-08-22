@@ -84,6 +84,6 @@ export function prependStorePouchCard<T extends { type: string }>(
 ): T[] {
   const text = card.trim();
   if (!text) return [...blocks];
-  const head = { type: 'text', text } as T;
+  const head = { type: 'text', text } as unknown as T;
   return [head, ...blocks];
 }
