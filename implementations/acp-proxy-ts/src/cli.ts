@@ -173,6 +173,9 @@ cli
       }
       process.exit(1);
     }
+    console.log('\nAgent resume:');
+    console.log(agent.resumeSummary);
+    console.log();
     await agent.run({ host: opts.host, port });
   });
 

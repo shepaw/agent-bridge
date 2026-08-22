@@ -220,6 +220,8 @@ export interface ACPAgentServerOptions {
    */
   enrollmentsPath?: string;
   description?: string;
+  /** Agent's self-description / resume. Defaults to `description`. */
+  bio?: string;
   systemPrompt?: string;
   /** Max conversation turns kept per session. Default 20. */
   maxHistory?: number;
@@ -318,6 +320,7 @@ export class ACPAgentServer {
   readonly identity: AgentIdentity;
   readonly agentId: string;
   readonly description: string;
+  readonly bio: string;
   readonly systemPrompt: string;
   readonly cleanDirectivesInHistory: boolean;
   readonly convMgr: ConversationManager;
@@ -424,6 +427,7 @@ export class ACPAgentServer {
     this.peers = loadOrCreatePeers({ path: opts.peersPath });
     this.enrollmentsPath = resolveEnrollmentsPath(opts.enrollmentsPath);
     this.description = opts.description ?? `ACP Agent: ${this.name}`;
+    this.bio = opts.bio ?? this.description;
     this.systemPrompt = opts.systemPrompt ?? 'You are a helpful AI assistant.';
     this.cleanDirectivesInHistory = opts.cleanDirectivesInHistory ?? true;
     this.convMgr = new ConversationManager({ maxHistory: opts.maxHistory ?? 20 });
@@ -492,6 +496,7 @@ export class ACPAgentServer {
       agent_id: this.agentId,
       name: this.name,
       description: this.description,
+      bio: this.bio,
       version: '1.0.0',
       capabilities: [...DEFAULT_CAPABILITIES],
       supported_protocols: [...DEFAULT_PROTOCOLS],

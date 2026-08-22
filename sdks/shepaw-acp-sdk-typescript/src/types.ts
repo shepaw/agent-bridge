@@ -38,6 +38,8 @@ export interface AgentCard {
   agent_id: string;
   name: string;
   description: string;
+  /** Agent's self-description / resume. Defaults to `description`. */
+  bio?: string;
   version: string;
   capabilities: string[];
   supported_protocols: string[];

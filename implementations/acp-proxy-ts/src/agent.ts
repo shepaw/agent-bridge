@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import {
   ACPAgentServer,
   SessionStore,
+  type AgentCard,
   type AgentRuntimeStatus,
   type ChannelTunnelConfig,
   type ChannelMailboxConfig,
@@ -61,6 +62,13 @@ import {
   prependStorePouchCard,
   resolveStoreDeviceIdFromEnv,
 } from './store-pouch-card.js';
+import {
+  buildFallbackResume,
+  buildResumeForAgent,
+  persistAgentResume,
+  resolveResumePersistenceDir,
+  type AgentResume,
+} from './workspace-resume.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
 
@@ -95,12 +103,16 @@ export class AcpProxyAgent extends ACPAgentServer {
   private readonly cwd: string;
   private readonly additionalDirectories: readonly string[];
   private readonly engineId: string;
+  private readonly engineDisplayName: string;
   private readonly subprocess: AcpSubprocess;
   private readonly sessionStore: SessionStore;
   private readonly sessionHistoryCache = new SessionHistoryCache();
 
   /** Last active Shepaw session — used for model picker when no session in params. */
   private lastShepawSessionId: string | undefined;
+
+  /** Workspace-grounded self-description, built in init() (fallback until then). */
+  private resume: AgentResume;
 
   /** Sessions that already received the device pouch card (once per Shepaw session). */
   private readonly pouchCardSessions = new Set<string>();
@@ -121,6 +133,16 @@ export class AcpProxyAgent extends ACPAgentServer {
     this.cwd = opts.cwd ?? process.cwd();
     this.additionalDirectories = opts.additionalDirectories ?? [];
     this.engineId = spec.id;
+    this.engineDisplayName = spec.displayName;
+    // Constructor-time fallback resume — pure, no I/O. Replaced in init().
+    this.resume = buildFallbackResume({
+      agentId: this.agentId,
+      fingerprint: this.identity.fingerprint,
+      engineId: this.engineId,
+      engineDisplayName: spec.displayName,
+      agentName: this.name,
+      cwd: this.cwd,
+    });
     this.subprocess =
       opts.subprocess ??
       new AcpSubprocess({
@@ -148,6 +170,40 @@ export class AcpProxyAgent extends ACPAgentServer {
       /* non-fatal */
     }
     await this.subprocess.start();
+    // Build the workspace-grounded resume once the upstream agent is alive, and
+    // persist it to the gateway config dir. Best-effort — a scan failure must
+    // never take the gateway down, so we keep the constructor-time fallback.
+    try {
+      const { resume, profile } = await buildResumeForAgent({
+        agentId: this.agentId,
+        fingerprint: this.identity.fingerprint,
+        engineId: this.engineId,
+        engineDisplayName: this.engineDisplayName,
+        agentName: this.name,
+        cwd: this.cwd,
+      });
+      this.resume = resume;
+      const persistDir = resolveResumePersistenceDir(process.env);
+      if (persistDir !== null) {
+        await persistAgentResume(resume, {
+          dir: persistDir,
+          input: {
+            agentId: this.agentId,
+            fingerprint: this.identity.fingerprint,
+            engineId: this.engineId,
+            engineDisplayName: this.engineDisplayName,
+            agentName: this.name,
+            cwd: this.cwd,
+          },
+          profile,
+        });
+      }
+    } catch (err) {
+      log(
+        'workspace resume build failed: %s',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     // Make the binding contract visible in hub agent.log (DEBUG may be off):
     // after ACP (re)start we rely on sessions.json to resume, never silently
     // invent a second upstream session for an already-bound app conversation.
@@ -378,6 +434,21 @@ export class AcpProxyAgent extends ACPAgentServer {
       ...super.getRuntimeStatus(),
       ...this.subprocess.getRuntimeSnapshot(),
     };
+  }
+
+  /** Agent card enriched with the workspace-grounded resume. */
+  override getAgentCard(): AgentCard {
+    return {
+      ...super.getAgentCard(),
+      description: this.resume.summary,
+      capabilities: [...this.resume.capabilities],
+      version: this.resume.version,
+    };
+  }
+
+  /** Resume summary for the CLI banner / embedders. */
+  get resumeSummary(): string {
+    return this.resume.summary;
   }
 
   /** Gracefully tear down the upstream ACP subprocess. */
