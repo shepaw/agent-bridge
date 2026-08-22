@@ -231,6 +231,22 @@ export async function getInstanceAgentCard(instanceId: string): Promise<Instance
   return card;
 }
 
+/**
+ * Ask the running gateway to re-derive its workspace resume (`agent.resume.rebuild`)
+ * and refresh the cached card immediately. Returns `null` when the gateway is
+ * offline or the agent doesn't support re-derivation.
+ */
+export async function rebuildInstanceResume(instanceId: string): Promise<InstanceAgentCard | null> {
+  try {
+    const card = parseAgentCard(await withAcpClient(instanceId, (client) => client.resumeRebuild()));
+    if (card !== null) cardCache.set(instanceId, { at: Date.now(), card });
+    return card;
+  } catch {
+    cardCache.delete(instanceId);
+    return null;
+  }
+}
+
 export interface InstanceChatTestResult {
   readonly ok: boolean;
   readonly reply: string;

@@ -65,9 +65,12 @@ import {
 import {
   buildFallbackResume,
   buildResumeForAgent,
+  isResumeRebuildForced,
+  loadAgentResume,
   persistAgentResume,
   resolveResumePersistenceDir,
   type AgentResume,
+  type AgentResumeInput,
 } from './workspace-resume.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
@@ -135,14 +138,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     this.engineId = spec.id;
     this.engineDisplayName = spec.displayName;
     // Constructor-time fallback resume — pure, no I/O. Replaced in init().
-    this.resume = buildFallbackResume({
-      agentId: this.agentId,
-      fingerprint: this.identity.fingerprint,
-      engineId: this.engineId,
-      engineDisplayName: spec.displayName,
-      agentName: this.name,
-      cwd: this.cwd,
-    });
+    this.resume = buildFallbackResume(this.buildResumeInput());
     this.subprocess =
       opts.subprocess ??
       new AcpSubprocess({
@@ -170,39 +166,27 @@ export class AcpProxyAgent extends ACPAgentServer {
       /* non-fatal */
     }
     await this.subprocess.start();
-    // Build the workspace-grounded resume once the upstream agent is alive, and
-    // persist it to the gateway config dir. Best-effort — a scan failure must
-    // never take the gateway down, so we keep the constructor-time fallback.
-    try {
-      const { resume, profile } = await buildResumeForAgent({
-        agentId: this.agentId,
-        fingerprint: this.identity.fingerprint,
-        engineId: this.engineId,
-        engineDisplayName: this.engineDisplayName,
-        agentName: this.name,
-        cwd: this.cwd,
-      });
-      this.resume = resume;
-      const persistDir = resolveResumePersistenceDir(process.env);
-      if (persistDir !== null) {
-        await persistAgentResume(resume, {
-          dir: persistDir,
-          input: {
-            agentId: this.agentId,
-            fingerprint: this.identity.fingerprint,
-            engineId: this.engineId,
-            engineDisplayName: this.engineDisplayName,
-            agentName: this.name,
-            cwd: this.cwd,
-          },
-          profile,
-        });
+    // Workspace resume: derive once, then reuse the persisted landing result.
+    // Only a first run (no persisted resume), a forced rebuild env flag, or an
+    // explicit agent.resume.rebuild RPC re-derives. Best-effort — a failure
+    // must never take the gateway down, so we keep the constructor fallback.
+    const persistDir = resolveResumePersistenceDir(process.env);
+    const loaded =
+      persistDir !== null && !isResumeRebuildForced(process.env)
+        ? await loadAgentResume(persistDir, this.agentId)
+        : null;
+    if (loaded !== null) {
+      this.resume = loaded;
+      log('workspace resume loaded from %s (agent %s)', persistDir, this.agentId);
+    } else {
+      try {
+        await this.rebuildResume();
+      } catch (err) {
+        log(
+          'workspace resume build failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
       }
-    } catch (err) {
-      log(
-        'workspace resume build failed: %s',
-        err instanceof Error ? err.message : String(err),
-      );
     }
     // Make the binding contract visible in hub agent.log (DEBUG may be off):
     // after ACP (re)start we rely on sessions.json to resume, never silently
@@ -449,6 +433,43 @@ export class AcpProxyAgent extends ACPAgentServer {
   /** Resume summary for the CLI banner / embedders. */
   get resumeSummary(): string {
     return this.resume.summary;
+  }
+
+  /** Narrow struct passed to workspace-resume (keeps the module decoupled). */
+  private buildResumeInput(): AgentResumeInput {
+    return {
+      agentId: this.agentId,
+      fingerprint: this.identity.fingerprint,
+      engineId: this.engineId,
+      engineDisplayName: this.engineDisplayName,
+      agentName: this.name,
+      cwd: this.cwd,
+    };
+  }
+
+  /**
+   * Re-derive the workspace resume now (scan + persist). Used by init() on a
+   * first run / forced rebuild and by the `agent.resume.rebuild` RPC.
+   */
+  async rebuildResume(): Promise<AgentResume> {
+    const input = this.buildResumeInput();
+    const { resume, profile } = await buildResumeForAgent(input);
+    this.resume = resume;
+    const persistDir = resolveResumePersistenceDir(process.env);
+    if (persistDir !== null) {
+      await persistAgentResume(resume, { dir: persistDir, input, profile });
+    }
+    return resume;
+  }
+
+  /**
+   * ACP `agent.resume.rebuild` — external trigger to re-derive the workspace
+   * resume on a running gateway. Returns the fresh card (description/bio
+   * updated immediately for getCard consumers).
+   */
+  override async onResumeRebuild(): Promise<AgentCard> {
+    await this.rebuildResume();
+    return this.getAgentCard();
   }
 
   /** Gracefully tear down the upstream ACP subprocess. */

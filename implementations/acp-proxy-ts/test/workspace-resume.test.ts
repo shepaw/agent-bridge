@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  agentResumeDir,
   buildFallbackResume,
   composeAgentResume,
+  isResumeRebuildForced,
+  loadAgentResume,
   persistAgentResume,
   renderResumeMarkdown,
   resolveProxyVersion,
@@ -238,15 +241,18 @@ describe('renderResumeMarkdown / resolveProxyVersion / persistence', () => {
     );
   });
 
-  it('persists resume.md and resume.json into the target directory', async () => {
+  it('persists resume.md and resume.json into the per-agent directory', async () => {
     const dir = await tempDir();
     const resume = composeAgentResume(INPUT, buildTestProfile(), '0.1.7');
     await persistAgentResume(resume, { dir, input: INPUT, profile: buildTestProfile() });
 
-    const md = await readFile(join(dir, 'resume.md'), 'utf-8');
+    const outDir = agentResumeDir(dir, INPUT.agentId);
+    expect(outDir.endsWith(join('agents', 'acp_agent_deadbeef'))).toBe(true);
+
+    const md = await readFile(join(outDir, 'resume.md'), 'utf-8');
     expect(md).toContain('## Capabilities');
 
-    const json = JSON.parse(await readFile(join(dir, 'resume.json'), 'utf-8')) as {
+    const json = JSON.parse(await readFile(join(outDir, 'resume.json'), 'utf-8')) as {
       version: string;
       capabilities: string[];
       summary: string;
@@ -256,6 +262,66 @@ describe('renderResumeMarkdown / resolveProxyVersion / persistence', () => {
     expect(json.capabilities).toContain('lang:typescript');
     expect(json.summary).toContain('resume-demo');
     expect(json.agent_id).toBe('acp_agent_deadbeef');
+  });
+});
+
+describe('loadAgentResume', () => {
+  it('round-trips a persisted resume back to an AgentResume', async () => {
+    const dir = await tempDir();
+    const resume = composeAgentResume(INPUT, buildTestProfile(), '0.1.7');
+    await persistAgentResume(resume, { dir, input: INPUT, profile: buildTestProfile() });
+
+    const loaded = await loadAgentResume(dir, INPUT.agentId);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.version).toBe('0.1.7');
+    expect(loaded!.summary).toBe(resume.summary);
+    expect(loaded!.capabilities).toEqual(resume.capabilities);
+  });
+
+  it('returns null when no persisted resume exists', async () => {
+    const dir = await tempDir();
+    expect(await loadAgentResume(dir, INPUT.agentId)).toBeNull();
+  });
+
+  it('returns null for corrupt json', async () => {
+    const dir = await tempDir();
+    const outDir = agentResumeDir(dir, INPUT.agentId);
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(outDir, 'resume.json'), '{ not json', 'utf-8');
+    expect(await loadAgentResume(dir, INPUT.agentId)).toBeNull();
+  });
+
+  it('returns null when the file belongs to a different agent', async () => {
+    const dir = await tempDir();
+    const resume = composeAgentResume(INPUT, buildTestProfile(), '0.1.7');
+    await persistAgentResume(resume, { dir, input: INPUT, profile: buildTestProfile() });
+    expect(await loadAgentResume(dir, 'acp_agent_other')).toBeNull();
+  });
+
+  it('returns null when summary is missing or empty', async () => {
+    const dir = await tempDir();
+    const outDir = agentResumeDir(dir, INPUT.agentId);
+    await mkdir(outDir, { recursive: true });
+    await writeFile(
+      join(outDir, 'resume.json'),
+      JSON.stringify({ agent_id: INPUT.agentId, version: '1.0.0', capabilities: [], summary: '' }),
+      'utf-8',
+    );
+    expect(await loadAgentResume(dir, INPUT.agentId)).toBeNull();
+  });
+});
+
+describe('isResumeRebuildForced', () => {
+  it('accepts truthy markers', () => {
+    expect(isResumeRebuildForced({ SHEPAW_RESUME_REBUILD: '1' })).toBe(true);
+    expect(isResumeRebuildForced({ SHEPAW_RESUME_REBUILD: 'true' })).toBe(true);
+    expect(isResumeRebuildForced({ SHEPAW_RESUME_REBUILD: 'YES' })).toBe(true);
+  });
+
+  it('rejects off / empty / missing', () => {
+    expect(isResumeRebuildForced({ SHEPAW_RESUME_REBUILD: '0' })).toBe(false);
+    expect(isResumeRebuildForced({ SHEPAW_RESUME_REBUILD: '' })).toBe(false);
+    expect(isResumeRebuildForced({})).toBe(false);
   });
 });
 

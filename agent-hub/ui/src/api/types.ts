@@ -440,6 +440,18 @@ export interface StoreListResult {
   entries: StoreEntry[];
 }
 
+/** A device that mirrored its pouch into this hub (this hub as master). */
+export interface StoreBackupDevice {
+  fingerprint: string;
+  deviceName: string | null;
+  paired: boolean;
+  spaces: Array<{ space: string; files: number; bytes: number }>;
+  totalFiles: number;
+  totalBytes: number;
+  lastModified: number;
+  lastSyncSeq: number;
+}
+
 export interface StoreRecentEntry {
   uri: string;
   space: string;

@@ -294,6 +294,53 @@ storeRouter.get('/roots', (_req: Request, res: Response) => {
   }
 });
 
+/** List devices that mirrored their pouch into this hub (this hub as master). */
+storeRouter.get('/backups', (_req: Request, res: Response) => {
+  try {
+    const self = hubStoreDeviceId();
+    const store = getPeerLocalStore();
+    const paired = new Map(
+      loadPairedPeers().map((p) => [p.fingerprint.toLowerCase(), p] as const),
+    );
+    const devices = store.listBackupDevices(self).map((d) => {
+      const peer = paired.get(d.fingerprint.toLowerCase());
+      return {
+        ...d,
+        deviceName: peer?.deviceName ?? null,
+        paired: peer !== undefined,
+      };
+    });
+    res.json({ devices });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** Remove a device's mirrored pouch from this hub. */
+storeRouter.delete('/backups/:fingerprint', (req: Request, res: Response) => {
+  try {
+    const fingerprint = (req.params.fingerprint ?? '').trim().toLowerCase();
+    if (!/^[a-f0-9]{16}$/i.test(fingerprint)) {
+      res.status(400).json({ error: 'Invalid device fingerprint.', code: 'bad_path' });
+      return;
+    }
+    const self = hubStoreDeviceId();
+    if (fingerprint === self.toLowerCase()) {
+      res.status(400).json({ error: 'Cannot delete the local device.', code: 'bad_path' });
+      return;
+    }
+    getPeerLocalStore().removeBackupDevice(fingerprint, self);
+    res.json({ ok: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'not_found') {
+      res.status(404).json({ error: 'No mirrored pouch for this device.', code: 'not_found' });
+      return;
+    }
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 /**
  * Recent files across spaces for a device (flat, sorted by mtime desc).
  * Query: device= (defaults to self), spaces=comma list, prefix=, limit=50

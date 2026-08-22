@@ -106,6 +106,7 @@ export function InstanceDetail({
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [dirPickerTarget, setDirPickerTarget] = useState<'cwd' | number>('cwd');
   const [engineInfos, setEngineInfos] = useState<EngineInfo[]>([]);
+  const [rebuildBusy, setRebuildBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -208,6 +209,19 @@ export function InstanceDetail({
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleRebuildResume = async () => {
+    setRebuildBusy(true);
+    setErr(null);
+    try {
+      await api.instances.rebuildResume(instanceId);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRebuildBusy(false);
     }
   };
 
@@ -464,7 +478,17 @@ export function InstanceDetail({
               <p style={panelHint}>{t('detail.overviewHint')}</p>
               {instance.card && (
                 <div style={resumeBox}>
-                  <div style={resumeLabel}>{t('detail.description')}</div>
+                  <div style={resumeHeaderRow}>
+                    <div style={resumeLabel}>{t('detail.description')}</div>
+                    <button
+                      type="button"
+                      style={rebuildBtn}
+                      disabled={rebuildBusy}
+                      onClick={() => void handleRebuildResume()}
+                    >
+                      {rebuildBusy ? t('detail.rebuilding') : `↻ ${t('detail.rebuildResume')}`}
+                    </button>
+                  </div>
                   <p style={resumeText}>
                     {instance.card.bio || instance.card.description || '—'}
                   </p>
@@ -1333,8 +1357,18 @@ const resumeBox: React.CSSProperties = {
   marginBottom: 16,
 };
 
+const resumeHeaderRow: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+};
+
 const resumeLabel: React.CSSProperties = {
   color: '#a6adc8', fontSize: 12, fontWeight: 600, marginBottom: 4,
+};
+
+const rebuildBtn: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #45475a', color: '#89dceb',
+  borderRadius: 5, padding: '2px 10px', cursor: 'pointer', fontSize: 12,
+  whiteSpace: 'nowrap', flexShrink: 0,
 };
 
 const resumeText: React.CSSProperties = {

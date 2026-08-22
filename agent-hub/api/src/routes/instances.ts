@@ -53,6 +53,7 @@ import {
   listInstanceConversations,
   getInstanceConversationHistory,
   getInstanceAgentCard,
+  rebuildInstanceResume,
   InstanceGatewayOfflineError,
   closeInstanceAcpRpcClient,
   applyInstanceSessionMode,
@@ -608,6 +609,31 @@ instancesRouter.post('/:id/stop', async (req: Request, res: Response) => {
       res.status(404).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+// ── resume ─────────────────────────────────────────────────────────
+
+/** POST /api/instances/:id/resume/rebuild — re-derive the agent's workspace
+ * resume on the running gateway and return the fresh card. */
+instancesRouter.post('/:id/resume/rebuild', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    const p = getInstance(cfg, req.params.id!);
+    const card = await rebuildInstanceResume(p.id);
+    if (card === null) {
+      res.status(502).json({
+        error: 'Resume rebuild failed: gateway offline or agent does not support agent.resume.rebuild.',
+      });
+      return;
+    }
+    res.json({ ok: true, card });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   }
 });

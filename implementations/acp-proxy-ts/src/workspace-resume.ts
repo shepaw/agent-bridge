@@ -395,13 +395,20 @@ export function resolveResumePersistenceDir(env: NodeJS.ProcessEnv = process.env
   return join(base, RESUME_CONFIG_DIR_NAME);
 }
 
+/** Per-agent persistence dir under the base config dir — isolates agents so
+ * multiple gateways on one host never clobber each other's landed resume. */
+export function agentResumeDir(dir: string, agentId: string): string {
+  return join(dir, 'agents', agentId);
+}
+
 /** Write resume.md + resume.json. Best-effort — never throws. */
 export async function persistAgentResume(
   resume: AgentResume,
   meta: PersistAgentResumeMeta,
 ): Promise<void> {
+  const outDir = agentResumeDir(meta.dir, meta.input.agentId);
   try {
-    await mkdir(meta.dir, { recursive: true });
+    await mkdir(outDir, { recursive: true });
   } catch {
     return;
   }
@@ -430,9 +437,45 @@ export async function persistAgentResume(
   };
 
   await Promise.all([
-    writeFile(join(meta.dir, 'resume.md'), md, 'utf-8').catch(() => undefined),
-    writeFile(join(meta.dir, 'resume.json'), JSON.stringify(json, null, 2), 'utf-8').catch(() => undefined),
+    writeFile(join(outDir, 'resume.md'), md, 'utf-8').catch(() => undefined),
+    writeFile(join(outDir, 'resume.json'), JSON.stringify(json, null, 2), 'utf-8').catch(() => undefined),
   ]);
+}
+
+/**
+ * Load a previously-persisted resume for an agent. Returns `null` when the
+ * file is missing, corrupt, or belongs to a different agent — callers then
+ * fall back to a fresh scan.
+ */
+export async function loadAgentResume(dir: string, agentId: string): Promise<AgentResume | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(agentResumeDir(dir, agentId), 'resume.json'), 'utf-8');
+  } catch {
+    return null;
+  }
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    if (obj === null || typeof obj !== 'object') return null;
+    if (obj.agent_id !== agentId) return null;
+    const summary = typeof obj.summary === 'string' ? obj.summary.trim() : '';
+    if (summary.length === 0) return null;
+    return {
+      version: typeof obj.version === 'string' && obj.version.length > 0 ? obj.version : PKG_VERSION_FALLBACK,
+      capabilities: Array.isArray(obj.capabilities)
+        ? obj.capabilities.filter((c): c is string => typeof c === 'string')
+        : [],
+      summary,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the process should force a re-scan on this start (ignore persisted). */
+export function isResumeRebuildForced(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = (env.SHEPAW_RESUME_REBUILD ?? '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
 }
 
 // ── workspace scanning internals ───────────────────────────────────

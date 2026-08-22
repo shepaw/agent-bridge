@@ -45,6 +45,28 @@ export const ALL_SPACES = new Set([
 ]);
 export const MAX_CHUNK = 64 * 1024;
 
+/** Cap on files scanned per device when enumerating backup mirrors. */
+export const MAX_BACKUP_WALK_FILES = 50_000;
+
+/** Per-space usage within a mirrored device pouch. */
+export interface BackupSpaceInfo {
+  space: string;
+  files: number;
+  bytes: number;
+}
+
+/** A device that mirrored its pouch into this hub (this hub acting as master). */
+export interface BackupDeviceInfo {
+  fingerprint: string;
+  spaces: BackupSpaceInfo[];
+  totalFiles: number;
+  totalBytes: number;
+  /** Newest file mtime across the mirror (ms). */
+  lastModified: number;
+  /** Sync progress from .cursors.json. */
+  lastSyncSeq: number;
+}
+
 export interface StoreEntryJson {
   path: string;
   size: number;
@@ -404,6 +426,124 @@ export class PeerLocalStore {
     rmSync(abs, { recursive: true, force: true });
     if (typeof uptoSeq === 'number') this.setAppliedSeq(deviceId, uptoSeq);
     return { applied_seq: this.appliedSeq(deviceId) };
+  }
+
+  /**
+   * Enumerate devices that have mirrored a pouch into this hub (this hub acting
+   * as master). Excludes self and non-device entries (`.staging`, dotfiles).
+   * The per-device walk is bounded so a huge mirror can't stall the dashboard.
+   */
+  listBackupDevices(selfDeviceId: string): BackupDeviceInfo[] {
+    const DEVICE_DIR = /^[a-f0-9]{16}$/i;
+    const out: BackupDeviceInfo[] = [];
+    let names: string[];
+    try {
+      names = readdirSync(this.root);
+    } catch {
+      return out;
+    }
+    for (const name of names.sort()) {
+      if (!DEVICE_DIR.test(name)) continue;
+      if (name.toLowerCase() === selfDeviceId.toLowerCase()) continue;
+      const deviceAbs = join(this.root, name);
+      let st: Stats;
+      try {
+        st = statSync(deviceAbs);
+      } catch {
+        continue;
+      }
+      if (!st.isDirectory()) continue;
+
+      const spaces: BackupSpaceInfo[] = [];
+      let totalFiles = 0;
+      let totalBytes = 0;
+      let lastModified = 0;
+      let scanned = 0;
+      const walkSpace = (dir: string, stats: BackupSpaceInfo): void => {
+        if (scanned >= MAX_BACKUP_WALK_FILES) return;
+        let entries: string[];
+        try {
+          entries = readdirSync(dir);
+        } catch {
+          return;
+        }
+        for (const entry of entries.sort()) {
+          if (scanned >= MAX_BACKUP_WALK_FILES) return;
+          if (entry.startsWith('.')) continue;
+          const abs = join(dir, entry);
+          let es: Stats;
+          try {
+            es = statSync(abs);
+          } catch {
+            continue;
+          }
+          if (es.isDirectory()) {
+            walkSpace(abs, stats);
+          } else if (es.isFile()) {
+            scanned += 1;
+            stats.files += 1;
+            stats.bytes += es.size;
+            if (es.mtimeMs > lastModified) lastModified = es.mtimeMs;
+          }
+        }
+      };
+
+      for (const space of [...ALL_SPACES].sort()) {
+        const spaceAbs = join(deviceAbs, space);
+        try {
+          if (!existsSync(spaceAbs) || !statSync(spaceAbs).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        const stats: BackupSpaceInfo = { space, files: 0, bytes: 0 };
+        walkSpace(spaceAbs, stats);
+        if (stats.files > 0) {
+          spaces.push(stats);
+          totalFiles += stats.files;
+          totalBytes += stats.bytes;
+        }
+      }
+
+      out.push({
+        fingerprint: name,
+        spaces,
+        totalFiles,
+        totalBytes,
+        lastModified,
+        lastSyncSeq: this.appliedSeq(name),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Remove a device's mirrored pouch (backup cleanup). Refuses self and
+   * non-device entries; also clears the device's sync cursor.
+   */
+  removeBackupDevice(fingerprint: string, selfDeviceId: string): void {
+    if (!/^[a-f0-9]{16}$/i.test(fingerprint)) {
+      throw Object.assign(new Error('bad_path'), { code: 'bad_path' });
+    }
+    if (fingerprint.toLowerCase() === selfDeviceId.toLowerCase()) {
+      throw Object.assign(new Error('bad_path'), { code: 'bad_path' });
+    }
+    const abs = resolveUnder(this.root, fingerprint);
+    if (!existsSync(abs)) {
+      throw Object.assign(new Error('not_found'), { code: 'not_found' });
+    }
+    rmSync(abs, { recursive: true, force: true });
+    this.clearAppliedSeq(fingerprint);
+  }
+
+  private clearAppliedSeq(deviceId: string): void {
+    let map: Record<string, number> = {};
+    try {
+      map = JSON.parse(readFileSync(this.cursorsPath(), 'utf-8')) as Record<string, number>;
+    } catch {
+      /* empty */
+    }
+    delete map[deviceId];
+    writeFileSync(this.cursorsPath(), JSON.stringify(map, null, 2));
   }
 
   /**

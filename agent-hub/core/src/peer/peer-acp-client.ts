@@ -627,6 +627,27 @@ export class PeerAcpClient {
     });
   }
 
+  /**
+   * Ask the agent to re-derive its workspace resume via `agent.resume.rebuild`.
+   * Resolves with the fresh card object (undefined on failure/timeout). The
+   * timeout is generous — re-scanning the workspace can take a few seconds.
+   */
+  async resumeRebuild(): Promise<Record<string, unknown> | undefined> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }, 30_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.resume.rebuild', params: {} });
+    });
+  }
+
   // ── internals ────────────────────────────────────────────────────
 
   private async ensureConnected(): Promise<void> {

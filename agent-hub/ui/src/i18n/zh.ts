@@ -290,6 +290,8 @@ export const zh: Record<MessageKey, string> = {
   'detail.overviewHint': '实例状态、绑定地址与运行时指标。',
   'detail.description': '描述',
   'detail.capabilities': '能力',
+  'detail.rebuildResume': '重新推导简历',
+  'detail.rebuilding': '推导中…',
   'detail.storeTitle': '储物空间',
   'detail.storeHint':
     '每个 Agent 拥有私有储物袋空间，Working Directory 同时映射为 workspace。可在全局「储物袋」中以网盘方式管理。',

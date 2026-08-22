@@ -172,6 +172,10 @@ export const api = {
     stop: (id: string): Promise<{ result: 'graceful' | 'hard' | 'not-running' }> =>
       request(`/instances/${id}/stop`, { method: 'POST' }),
 
+    /** Re-derive the agent's workspace resume on the running gateway. */
+    rebuildResume: (id: string): Promise<{ ok: boolean; card?: Instance['card'] }> =>
+      request(`/instances/${id}/resume/rebuild`, { method: 'POST' }),
+
     restartAll: (): Promise<{
       restarted: number;
       failed: number;

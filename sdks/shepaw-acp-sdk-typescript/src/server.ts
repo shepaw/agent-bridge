@@ -1323,6 +1323,9 @@ export class ACPAgentServer {
         case 'agent.getCard':
           await this.handleGetCard(ws, msgId);
           return;
+        case 'agent.resume.rebuild':
+          await this.handleResumeRebuild(ws, msgId);
+          return;
         case 'agent.commands.list':
           await this.handleCommandsList(ws, msgId, params);
           return;
@@ -2183,6 +2186,34 @@ export class ACPAgentServer {
   private async handleGetCard(ws: WebSocket, msgId: string | number): Promise<void> {
     const card = this.getAgentCard();
     await wsSend(ws, jsonrpcResponse(msgId, { result: card }));
+  }
+
+  /**
+   * Handle `agent.resume.rebuild` — re-derive the agent's workspace resume.
+   * Default implementation is a no-op that returns the current card; gateway
+   * implementations override `onResumeRebuild` to actually re-scan.
+   */
+  private async handleResumeRebuild(ws: WebSocket, msgId: string | number): Promise<void> {
+    try {
+      const card = await this.onResumeRebuild();
+      await wsSend(ws, jsonrpcResponse(msgId, { result: card }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+        }),
+      );
+    }
+  }
+
+  /**
+   * Override point for `agent.resume.rebuild`. Default: return the current
+   * card unchanged. Rebuilding implementations must return the fresh card so
+   * the caller can refresh its metadata immediately.
+   */
+  async onResumeRebuild(): Promise<AgentCard> {
+    return this.getAgentCard();
   }
 
   private async handleCommandsList(

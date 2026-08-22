@@ -79,7 +79,12 @@ export {
   SHARED_SPACES,
   MAX_CHUNK,
 } from './peer/peer-local-store.js';
-export type { StoreEntryJson, StoreLocation } from './peer/peer-local-store.js';
+export type {
+  BackupDeviceInfo,
+  BackupSpaceInfo,
+  StoreEntryJson,
+  StoreLocation,
+} from './peer/peer-local-store.js';
 export {
   agentPrivateStoreUri,
   ensureAgentStoreMappings,
@@ -228,6 +233,7 @@ export {
   InstanceGatewayOfflineError,
   listInstanceConversations,
   pingInstanceAcpRpc,
+  rebuildInstanceResume,
 } from './instance-acp-rpc.js';
 export type { InstanceAgentCard, InstanceChatTestResult } from './instance-acp-rpc.js';
 
