@@ -41,6 +41,34 @@ interface PoolEntry {
 const pool = new Map<string, PoolEntry>();
 const creating = new Map<string, Promise<PoolEntry>>();
 
+export interface InstanceAgentCard {
+  readonly name: string;
+  readonly description: string;
+  readonly bio?: string;
+  readonly version: string;
+  readonly capabilities: string[];
+}
+
+/** The card is static per gateway process — a short TTL avoids a WS round-trip
+ * on every 3s detail-page poll. */
+const CARD_CACHE_TTL_MS = 30_000;
+const cardCache = new Map<string, { at: number; card: InstanceAgentCard | null }>();
+
+function parseAgentCard(raw: unknown): InstanceAgentCard | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.description !== 'string' || obj.description.length === 0) return null;
+  return {
+    name: typeof obj.name === 'string' ? obj.name : '',
+    description: obj.description,
+    bio: typeof obj.bio === 'string' ? obj.bio : undefined,
+    version: typeof obj.version === 'string' ? obj.version : '1.0.0',
+    capabilities: Array.isArray(obj.capabilities)
+      ? obj.capabilities.filter((c): c is string => typeof c === 'string')
+      : [],
+  };
+}
+
 function parseSessionInfo(raw: unknown): SessionInfo | null {
   if (raw === null || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -124,6 +152,7 @@ async function acquirePoolEntry(instanceId: string): Promise<PoolEntry> {
 
 /** Drop a pooled client (e.g. when the instance stops). */
 export function closeInstanceAcpRpcClient(instanceId: string): void {
+  cardCache.delete(instanceId);
   const entry = pool.get(instanceId);
   if (entry === undefined) return;
   if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
@@ -181,6 +210,25 @@ export async function applyInstanceSessionMode(
 export async function pingInstanceAcpRpc(instanceId: string): Promise<{ sessionCount: number }> {
   const sessions = await withAcpClient(instanceId, (client) => client.sessions());
   return { sessionCount: sessions.length };
+}
+
+/**
+ * Fetch the agent's self-description card (`agent.getCard`) — the workspace
+ * resume in `description`/`bio` plus `capabilities`. Returns `null` when the
+ * gateway is offline or the card can't be read, so detail pages degrade
+ * gracefully. Cached briefly (the card is static per process lifetime).
+ */
+export async function getInstanceAgentCard(instanceId: string): Promise<InstanceAgentCard | null> {
+  const cached = cardCache.get(instanceId);
+  if (cached !== undefined && Date.now() - cached.at < CARD_CACHE_TTL_MS) return cached.card;
+  let card: InstanceAgentCard | null = null;
+  try {
+    card = parseAgentCard(await withAcpClient(instanceId, (client) => client.card()));
+  } catch {
+    card = null;
+  }
+  cardCache.set(instanceId, { at: Date.now(), card });
+  return card;
 }
 
 export interface InstanceChatTestResult {

@@ -52,6 +52,7 @@ import {
   deleteInstanceSession,
   listInstanceConversations,
   getInstanceConversationHistory,
+  getInstanceAgentCard,
   InstanceGatewayOfflineError,
   closeInstanceAcpRpcClient,
   applyInstanceSessionMode,
@@ -97,7 +98,7 @@ async function instanceStatus(instance: InstanceConfig) {
   return probeInstanceRuntime(instance);
 }
 
-async function enrichInstance(p: InstanceConfig) {
+async function enrichInstance(p: InstanceConfig, opts: { withCard?: boolean } = {}) {
   let store:
     | {
         deviceId: string;
@@ -132,7 +133,7 @@ async function enrichInstance(p: InstanceConfig) {
   } catch {
     /* peer identity unavailable — omit store mapping from response */
   }
-  return {
+  const base = {
     ...p,
     // Never expose encrypted envVar values — only the key names.
     envVars: undefined,
@@ -140,6 +141,10 @@ async function enrichInstance(p: InstanceConfig) {
     status: await instanceStatus(p),
     store,
   };
+  if (!opts.withCard) return base;
+  // Workspace-grounded resume reported via agent.getCard (null-tolerant: an
+  // offline gateway just yields no card, the detail page still renders).
+  return { ...base, card: await getInstanceAgentCard(p.id) };
 }
 
 function parseEngine(raw: unknown): string {
@@ -435,7 +440,7 @@ instancesRouter.get('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const p = getInstance(cfg, req.params.id!);
-    res.json(await enrichInstance(p));
+    res.json(await enrichInstance(p, { withCard: true }));
   } catch (err) {
     if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });

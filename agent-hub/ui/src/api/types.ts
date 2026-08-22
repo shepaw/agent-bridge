@@ -64,6 +64,18 @@ export interface Instance {
     workspaceUris?: string[];
     agentUri: string;
   };
+  /**
+   * Agent self-description card reported via agent.getCard — the
+   * workspace-grounded resume in `description`/`bio` plus `capabilities`.
+   * Present on the detail endpoint only; null when the gateway is offline.
+   */
+  card?: {
+    name: string;
+    description: string;
+    bio?: string;
+    version: string;
+    capabilities: string[];
+  } | null;
 }
 
 export interface Peer {

@@ -605,6 +605,28 @@ export class PeerAcpClient {
     });
   }
 
+  /**
+   * Fetch the agent's self-description card via `agent.getCard` on the
+   * persistent WS. Resolves with the card object (undefined on failure/timeout).
+   * The card carries the workspace-grounded resume in `description`/`bio` and a
+   * `capabilities` list — surfaced on the hub's instance detail page.
+   */
+  async card(): Promise<Record<string, unknown> | undefined> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }, 8_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.getCard', params: {} });
+    });
+  }
+
   // ── internals ────────────────────────────────────────────────────
 
   private async ensureConnected(): Promise<void> {

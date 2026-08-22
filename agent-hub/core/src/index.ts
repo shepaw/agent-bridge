@@ -223,12 +223,13 @@ export {
   applyInstanceSessionMode,
   chatInstanceAcpRpc,
   closeInstanceAcpRpcClient,
+  getInstanceAgentCard,
   getInstanceConversationHistory,
   InstanceGatewayOfflineError,
   listInstanceConversations,
   pingInstanceAcpRpc,
 } from './instance-acp-rpc.js';
-export type { InstanceChatTestResult } from './instance-acp-rpc.js';
+export type { InstanceAgentCard, InstanceChatTestResult } from './instance-acp-rpc.js';
 
 export {
   BUILTIN_ENGINE_ACP_COMMANDS,

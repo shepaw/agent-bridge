@@ -462,6 +462,24 @@ export function InstanceDetail({
             <section>
               <h3 style={panelTitle}>{t('detail.overviewTitle')}</h3>
               <p style={panelHint}>{t('detail.overviewHint')}</p>
+              {instance.card && (
+                <div style={resumeBox}>
+                  <div style={resumeLabel}>{t('detail.description')}</div>
+                  <p style={resumeText}>
+                    {instance.card.bio || instance.card.description || '—'}
+                  </p>
+                  {instance.card.capabilities.length > 0 && (
+                    <>
+                      <div style={{ ...resumeLabel, marginTop: 12 }}>{t('detail.capabilities')}</div>
+                      <div style={capRow}>
+                        {instance.card.capabilities.map((c) => (
+                          <code key={c} style={capChip}>{c}</code>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               <div style={infoGrid}>
                 <InfoItem label={t('detail.bind')} value={`${instance.host}:${instance.port}`} />
                 <InfoItem label={t('detail.cwd')} value={instance.cwd} />
@@ -1307,6 +1325,29 @@ const panelTitle: React.CSSProperties = {
 
 const panelHint: React.CSSProperties = {
   margin: '0 0 16px', color: '#a6adc8', fontSize: 13,
+};
+
+const resumeBox: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column',
+  background: '#181825', border: '1px solid #313244', borderRadius: 8, padding: 12,
+  marginBottom: 16,
+};
+
+const resumeLabel: React.CSSProperties = {
+  color: '#a6adc8', fontSize: 12, fontWeight: 600, marginBottom: 4,
+};
+
+const resumeText: React.CSSProperties = {
+  margin: 0, color: '#cdd6f4', fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap',
+};
+
+const capRow: React.CSSProperties = {
+  display: 'flex', flexWrap: 'wrap', gap: 6,
+};
+
+const capChip: React.CSSProperties = {
+  fontSize: 11, padding: '2px 8px', background: '#313244',
+  borderRadius: 10, color: '#89dceb',
 };
 
 const storeBox: React.CSSProperties = {
