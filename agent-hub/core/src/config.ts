@@ -144,6 +144,9 @@ export interface GatewayConfig {
   readonly routerPort: number;
 }
 
+/** Strip `readonly` from all properties (used for mutable patch builders). */
+export type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
 export interface InstanceConfig {
   /**
    * Stable agent UUID. Auto-generated at creation (`crypto.randomUUID`);
@@ -231,7 +234,7 @@ export interface CredentialHint {
  * Stored at the hub (global) level so adding a new instance with the same
  * engine can pre-fill credentials without the user having to re-enter them.
  */
-export type HubCredentialCache = Partial<Record<BuiltinAgentEngine, Record<string, CredentialHint>>>;
+export type HubCredentialCache = Partial<Record<string, Record<string, CredentialHint>>>;
 
 /**
  * Per-engine override stored at the hub level. Applies to BOTH built-in and
@@ -732,7 +735,7 @@ export function getInstance(config: HubConfig, id: string): InstanceConfig {
 export function updateInstance(
   config: HubConfig,
   id: string,
-  patch: Partial<Omit<InstanceConfig, 'id' | 'port' | 'createdAt' | 'envVars'>> & {
+  patch: Partial<Omit<Mutable<InstanceConfig>, 'id' | 'port' | 'createdAt' | 'envVars'>> & {
     mergeEnvVars?: Record<string, string>;
     clearEnvVars?: boolean;
     deleteEnvVarKey?: string;

@@ -42,6 +42,7 @@ import {
   findCustomEngine,
   formatShellCommand,
   resolveEngineAvatarFile,
+  validateCustomEngineId,
 } from '@shepaw/agent-hub-core';
 import { hubRoot } from '@shepaw/agent-hub-core';
 
