@@ -241,6 +241,9 @@ export class AcpProxyAgent extends ACPAgentServer {
           void this.sessionStore.flush();
         },
         priorHistory: kwargs.history,
+        // Group-task turns inject the group-tools MCP (dispatch/finish/mention)
+        // into the upstream session.
+        groupContext: isGroupTurn(groupContext) ? groupContext : undefined,
         onRestoreFailed: (id) => {
           this.sessionStore.delete(id);
         },

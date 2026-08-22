@@ -87,6 +87,8 @@ import type {
   SessionsListParams,
   SessionsListResult,
   SlashCommandInfo,
+  GroupChatContext,
+  GroupChatMember,
 } from './types.js';
 import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS, deriveBusyLevel } from './types.js';
 import type { SlashProviders } from './slash/types.js';
@@ -101,6 +103,36 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 /** Our version of the v2 msg 2 server-side payload. */
 const SERVER_VERSION_STRING = 'acp-sdk/2.1';
+
+/**
+ * Validate the raw `agent.chat` group_context into a typed
+ * [GroupChatContext]. Non-object / missing group_id → undefined (DM turn).
+ */
+function normalizeGroupContext(raw: unknown): GroupChatContext | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const gc = raw as Record<string, unknown>;
+  const groupId = typeof gc.group_id === 'string' ? gc.group_id : undefined;
+  if (!groupId || groupId.length === 0) return undefined;
+  return {
+    group_id: groupId,
+    group_name:
+      typeof gc.group_name === 'string' ? gc.group_name : undefined,
+    group_description:
+      typeof gc.group_description === 'string'
+        ? gc.group_description
+        : undefined,
+    member_count: typeof gc.member_count === 'number' ? gc.member_count : undefined,
+    members: Array.isArray(gc.members)
+      ? (gc.members as GroupChatMember[])
+      : undefined,
+    is_first_message: gc.is_first_message === true ? true : undefined,
+    message_version:
+      typeof gc.message_version === 'string' ? gc.message_version : undefined,
+    orchestration_tools: gc.orchestration_tools,
+    workspace_uri:
+      typeof gc.workspace_uri === 'string' ? gc.workspace_uri : undefined,
+  };
+}
 
 /** Debounce window for fs.watch-triggered allowlist reloads. */
 const PEERS_RELOAD_DEBOUNCE_MS = 100;
@@ -1517,7 +1549,7 @@ export class ACPAgentServer {
       messages: this.convMgr.getMessages(sessionId),
       attachments: params.attachments,
       system_prompt: typeof params.system_prompt === 'string' ? params.system_prompt : this.systemPrompt,
-      group_context: params.group_context,
+      group_context: normalizeGroupContext(params.group_context),
       tools: params.tools,
       ui_component_version:
         typeof params.ui_component_version === 'string' ? params.ui_component_version : undefined,

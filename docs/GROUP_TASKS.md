@@ -49,10 +49,24 @@ Shepaw app（群编排 GroupAgentExecutor）
   `group_finish` 编排——**当前为纯 prompt 约定**，工具定义未转发为上游
   可执行工具；按群卡提示的 JSON 结构输出即可（宿主侧解析）。
 
+## 群工具可执行化（store MCP 挂载）
+
+`group_dispatch` / `group_finish` / `group_mention` 挂在 **peer-store MCP
+server**（`shepaw-peer-store`）上——群空间存放在储物袋里，底层统一走
+store 协议，不设独立 MCP server：
+
+- 群任务 turn（`group_context` 存在）时，per-session MCP 注入附带
+  `GROUP_ID` / `GROUP_SESSION_ID` / `GROUP_WORKSPACE_ROOT` /
+  `GROUP_MEMBER_NAMES` env，MCP 进程据此启用群工具（`tools/list` 才可见）；
+- 工具调用经 store 协议（`space=workspaces` 嵌套路径透传）写入
+  `store://workspaces/<hubDevice>/group_<gid>/shared/orchestration/
+  <sessionId>/inbox/{dispatch,finish,mentions}.json`（带 `issued_at`）；
+- Shepaw 编排循环按轮读取 inbox（`issued_at` 晚于本轮开始才消费），合并
+  优先级：本地工具信号 > inbox 文件 > 文本 JSON 约定；成员提及并入
+  mention cascade。
+
 ## 边界（未实现）
 
-- `group_dispatch` / `group_finish` / `group_mention` 的**可执行工具转发**
-  （MCP 翻译）未实现——上游 agent 以文本约定参与。
 - mailbox（信箱）路径仅携带 `group_id`，无成员/workspace 上下文。
 - `SHEPAW_SCOPE_CARD` 仍是进程级 env；群卡信息由 `group_context` 按 turn
   携带，不经 env。

@@ -12,7 +12,7 @@ import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
 import { TaskCancelledError } from 'shepaw-acp-sdk';
-import type { ModelsListResult, ModelsSetCurrentResult, ModesListResult, ModesSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
+import type { GroupChatContext, ModelsListResult, ModelsSetCurrentResult, ModesListResult, ModesSetCurrentResult, SessionHistoryMessage, TaskContext } from 'shepaw-acp-sdk';
 
 import type { AcpEngineSpec } from './engines.js';
 import {
@@ -51,7 +51,10 @@ import {
 } from './session-lifecycle.js';
 import { filterListedSessions } from './sessions-filter.js';
 import { resolveNexuspouchMcpServers } from './nexuspouch-mcp.js';
-import { resolvePeerStoreMcpServers } from './peer-store-mcp-resolve.js';
+import {
+  resolvePeerStoreMcpServers,
+  type GroupMcpSessionContext,
+} from './peer-store-mcp-resolve.js';
 import { ensureShepawShim } from './shepaw-cli-shim.js';
 import { defaultStoreContextPath } from './store-write-context.js';
 import {
@@ -170,6 +173,12 @@ export interface RunPromptTurnOptions {
    * bind), so a process death cannot silently wipe context.
    */
   readonly priorHistory?: ReadonlyArray<PriorHistoryTurn>;
+  /**
+   * Group-task delegation context (`agent.chat` kwargs.group_context). When
+   * present, the group-tools MCP server (group_dispatch / group_finish /
+   * group_mention) is injected into the upstream session.
+   */
+  readonly groupContext?: GroupChatContext;
 }
 
 /** Hooks shared by prompt turns and explicit session cleanup (`agent.sessions.*`). */
@@ -1036,6 +1045,12 @@ export class AcpSubprocess {
       return { session: existing, origin: 'live' };
     }
 
+    // Group-task turns inject the group-tools MCP into the upstream session.
+    const sessionCtx: GroupMcpSessionContext | undefined =
+      opts.groupContext != null
+        ? { shepawSessionId, groupContext: opts.groupContext }
+        : undefined;
+
     const storedId = opts.getStoredAcpSessionId?.(shepawSessionId);
 
     // Strict binding: when sessions.json already maps this app session to an
@@ -1044,7 +1059,12 @@ export class AcpSubprocess {
     // app conversation drifts onto a second agent session.
     if (storedId !== undefined && storedId.length > 0) {
       if (canRestorePersistedSession(this.agentCaps)) {
-        let attempt = await this.tryRestoreSession(this.connection!.agent, shepawSessionId, storedId);
+        let attempt = await this.tryRestoreSession(
+          this.connection!.agent,
+          shepawSessionId,
+          storedId,
+          sessionCtx,
+        );
         if (attempt.kind === 'timed_out') {
           // Timeout path already killed + restarted the upstream agent. Retry
           // once on the FRESH connection before giving up.
@@ -1128,7 +1148,7 @@ export class AcpSubprocess {
 
     // Use the CURRENT connection — tryRestoreSession may have restarted the
     // upstream agent above, and a stale handle would fail or hang session/new.
-    const session = await this.startSessionWithMcp();
+    const session = await this.startSessionWithMcp(sessionCtx);
     this.sessions.set(shepawSessionId, session);
     opts.onAcpSessionId?.(shepawSessionId, session.sessionId);
     this.rememberConfigOptions(shepawSessionId, session.newSessionResponse.configOptions);
@@ -1182,6 +1202,7 @@ export class AcpSubprocess {
     agent: acp.ClientContext,
     shepawSessionId: string,
     storedId: string,
+    sessionCtx?: GroupMcpSessionContext,
   ): Promise<RestoreAttempt> {
     if (this.disposableUpstreamSessionIds.has(storedId)) {
       log('skip restore for disposable upstream session %s', storedId);
@@ -1189,7 +1210,9 @@ export class AcpSubprocess {
     }
 
     let timedOut = false;
-    const restoreWork = this.doTryRestoreSession(agent, shepawSessionId, storedId).then(
+    const restoreWork = this
+      .doTryRestoreSession(agent, shepawSessionId, storedId, sessionCtx)
+      .then(
       (session): RestoreAttempt =>
         session === undefined ? { kind: 'failed' } : { kind: 'restored', session },
     );
@@ -1213,11 +1236,16 @@ export class AcpSubprocess {
     return result;
   }
 
-  /** Inject Nexuspouch MCP and/or hub peer-store MCP when configured. */
-  private mcpServers(): acp.McpServer[] {
+  /**
+   * Inject Nexuspouch MCP, hub peer-store MCP, and (per-session) the group
+   * orchestration tools MCP for group-task turns.
+   */
+  private mcpServers(
+    sessionCtx?: GroupMcpSessionContext,
+  ): acp.McpServer[] {
     return [
       ...resolveNexuspouchMcpServers(),
-      ...resolvePeerStoreMcpServers(),
+      ...resolvePeerStoreMcpServers(sessionCtx),
     ];
   }
 
@@ -1232,8 +1260,10 @@ export class AcpSubprocess {
     return [...this.additionalDirectories];
   }
 
-  private async startSessionWithMcp(): Promise<acp.ActiveSession> {
-    const servers = this.mcpServers();
+  private async startSessionWithMcp(
+    sessionCtx?: GroupMcpSessionContext,
+  ): Promise<acp.ActiveSession> {
+    const servers = this.mcpServers(sessionCtx);
     if (servers.length > 0) {
       log('injecting %d MCP server(s) into session/new (store)', servers.length);
     }
@@ -1265,8 +1295,9 @@ export class AcpSubprocess {
     agent: acp.ClientContext,
     shepawSessionId: string,
     storedId: string,
+    sessionCtx?: GroupMcpSessionContext,
   ): Promise<acp.ActiveSession | undefined> {
-    const mcpServers = this.mcpServers();
+    const mcpServers = this.mcpServers(sessionCtx);
     // Some engines reject resume/load when MCP servers differ from the original
     // session. Try with the configured MCP set first; if that fails, retry with
     // an empty list before giving up — keeping the app↔upstream binding intact

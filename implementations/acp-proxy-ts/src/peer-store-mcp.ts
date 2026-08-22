@@ -1,19 +1,35 @@
 /**
  * Stdio MCP server that exposes store_* tools against the hub peer store HTTP API.
  *
+ * Also carries the group-orchestration tools (`group_dispatch` /
+ * `group_finish` / `group_mention`) — everything lives in the pouch
+ * (储物袋), so everything speaks the store protocol. Group tools persist
+ * their calls as inbox files under the hub's workspaces tree for the app's
+ * orchestration loop to read back.
+ *
  * Run: node dist/peer-store-mcp.js
  * Env: SHEPAW_HUB_STORE_URL (or SHEPAW_PEER_STORE=1 → http://127.0.0.1:18792)
  *      SHEPAW_HUB_STORE_DEVICE — hub fingerprint (fetched from /api/v1/health if unset)
  *      SHEPAW_HUB_STORE_TOKEN — optional Bearer (hub currently ignores)
+ *      GROUP_ID / GROUP_SESSION_ID / GROUP_WORKSPACE_ROOT / GROUP_MEMBER_NAMES
+ *        — group-turn context; when present, the group tools are enabled.
  */
 
 import { createInterface } from 'node:readline';
 import {
   executeStoreTool,
   storeToolDefs,
+  type StoreToolResult,
   StoreToolsClient,
 } from './store-tools.js';
 import { resolveHubStoreBase } from './hub-store-env.js';
+import {
+  buildInboxWrite,
+  GROUP_TOOL_NAMES,
+  groupToolDefs,
+  readGroupStoreMcpEnv,
+  writeGroupInbox,
+} from './group-store-tools.js';
 
 type JsonRpcReq = {
   jsonrpc?: string;
@@ -65,6 +81,18 @@ async function main(): Promise<void> {
   const device = await resolveDevice(base, env);
   const client = new StoreToolsClient(base, token, device);
 
+  // Group-orchestration tools are enabled for group-task turns (env set by
+  // the per-session MCP injection).
+  const groupEnv = readGroupStoreMcpEnv(env);
+  const tools = [
+    ...storeToolDefs.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    })),
+    ...(groupEnv !== null ? groupToolDefs(groupEnv.memberNames) : []),
+  ];
+
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -89,18 +117,32 @@ async function main(): Promise<void> {
         case 'initialized':
           break;
         case 'tools/list':
-          reply(id, {
-            tools: storeToolDefs.map((t) => ({
-              name: t.name,
-              description: t.description,
-              inputSchema: t.inputSchema,
-            })),
-          });
+          reply(id, { tools });
           break;
         case 'tools/call': {
           const name = String(params?.name ?? '');
           const args = (params?.arguments ?? {}) as Record<string, unknown>;
-          const out = await executeStoreTool(name, args, client);
+          // Group-orchestration tools persist to the inbox via the store
+          // protocol; everything else dispatches to the store tools.
+          let out: StoreToolResult;
+          if (groupEnv !== null && GROUP_TOOL_NAMES.has(name)) {
+            const planned = buildInboxWrite(name, args);
+            if ('error' in planned) {
+              reply(id, {
+                content: [{ type: 'text', text: planned.error }],
+                isError: true,
+              });
+              break;
+            }
+            out = await writeGroupInbox(
+              client,
+              groupEnv,
+              planned.file,
+              planned.payload,
+            );
+          } else {
+            out = await executeStoreTool(name, args, client);
+          }
           reply(id, {
             content: [{ type: 'text', text: JSON.stringify(out) }],
             isError: !out.ok,
