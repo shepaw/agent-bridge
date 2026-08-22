@@ -65,8 +65,14 @@ store 协议，不设独立 MCP server：
   优先级：本地工具信号 > inbox 文件 > 文本 JSON 约定；成员提及并入
   mention cascade。
 
+## Mailbox 路径
+
+App 离线时经 Channel Service 信箱留言：宿主在 ciphertext payload 内携带
+完整 `group_context`（群名/成员表/workspace_uri），SDK 解密后经
+`normalizeGroupContext` 重构 kwargs.group_context（缺失时回退
+`{group_id}`）——离线恢复后群工具与共享空间仍可用。
+
 ## 边界（未实现）
 
-- mailbox（信箱）路径仅携带 `group_id`，无成员/workspace 上下文。
 - `SHEPAW_SCOPE_CARD` 仍是进程级 env；群卡信息由 `group_context` 按 turn
   携带，不经 env。

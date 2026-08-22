@@ -1773,6 +1773,7 @@ export class ACPAgentServer {
       message_id?: string;
       request_id?: string;
       group_id?: string;
+      group_context?: unknown;
       history?: ConversationMessage[];
       caller_pubkey?: string;
     };
@@ -1874,7 +1875,9 @@ export class ACPAgentServer {
         messages: this.convMgr.getMessages(sessionId),
         attachments: undefined,
         system_prompt: this.systemPrompt,
-        group_context: groupId ? { group_id: groupId } : undefined,
+        group_context:
+          normalizeGroupContext(payload.group_context) ??
+          (groupId ? { group_id: groupId } : undefined),
         tools: undefined,
         ui_component_version: undefined,
         user_id: mail.caller_fp,
