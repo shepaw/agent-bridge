@@ -265,7 +265,67 @@ describe('shepaw-cli against mock store API', () => {
     const io = makeIo({ NEXUSPOUCH_URL: base });
     const code = await runShepawCli(['os', 'file.read'], io.io);
     expect(code).toBe(1);
-    expect(lastJson(io.out().lines).error).toMatch(/only 'shepaw store/);
+    expect(lastJson(io.out().lines).error).toMatch(/shepaw store …/);
+  });
+
+  it('group dispatch persists to the orchestration inbox', async () => {
+    const io = makeIo({ NEXUSPOUCH_URL: base });
+    const code = await runShepawCli(
+      [
+        'group',
+        'dispatch',
+        '--group',
+        'group_abc',
+        '--session',
+        'group_session_1',
+        '--mode',
+        'sequential',
+        '--steps',
+        JSON.stringify([
+          { step: 1, agents: ['Coder'], task: '实现登录' },
+        ]),
+      ],
+      io.io,
+    );
+    expect(code).toBe(0);
+    const out = lastJson(io.out().lines);
+    expect(out.success).toBe(true);
+    expect(out.inbox).toBe('dispatch.json');
+    expect(out.uri).toBe(
+      'store://workspaces/' +
+        DEVICE +
+        '/group_group_abc/shared/orchestration/group_session_1/inbox/dispatch.json',
+    );
+    const body = JSON.parse(
+      files
+        .get(
+          'group_group_abc/shared/orchestration/group_session_1/inbox/dispatch.json',
+        )!
+        .toString('utf8'),
+    ) as { kind: string; mode: string; steps: Array<{ task: string }>; issued_at: string };
+    expect(body.kind).toBe('dispatch');
+    expect(body.mode).toBe('sequential');
+    expect(body.steps[0]!.task).toBe('实现登录');
+    expect(typeof body.issued_at).toBe('string');
+  });
+
+  it('group finish rejects a bad action', async () => {
+    const io = makeIo({ NEXUSPOUCH_URL: base });
+    const code = await runShepawCli(
+      [
+        'group',
+        'finish',
+        '--group',
+        'group_abc',
+        '--session',
+        's1',
+        '--action',
+        'nope',
+      ],
+      io.io,
+    );
+    expect(code).toBe(1);
+    expect(lastJson(io.out().lines).error).toContain('done|continue|pause');
   });
 
   it('no backend configured is a JSON error', async () => {

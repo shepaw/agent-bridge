@@ -18,6 +18,11 @@
 
 import { pathToFileURL } from 'node:url';
 import {
+  buildInboxWrite,
+  writeGroupInbox,
+  type GroupStoreMcpEnv,
+} from './group-store-tools.js';
+import {
   executeStoreTool,
   StoreToolsClient,
   type StoreToolResult,
@@ -124,6 +129,16 @@ const USAGE = `shepaw store — read/write store:// URIs (Nexuspouch pouch)
   shepaw store list --uri <store://…>
   shepaw store meta --uri <store://…>
 
+shepaw group — group orchestration (fallback when MCP tools are unavailable)
+
+  shepaw group dispatch --group <gid> --session <sid>
+      [--mode concurrent|sequential] --steps '<json array>'
+  shepaw group finish --group <gid> --session <sid> --action done|continue|pause
+  shepaw group mention --group <gid> --session <sid> --mentions '<json array>'
+
+Group commands persist the decision to the orchestration inbox the same way
+the store-MCP tools do (store://workspaces/<device>/group_<gid>/…/inbox/).
+
 Default write space is runtime:
   store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>
 Owner/channel fall back to SHEPAW_STORE_* env / store-context.json.
@@ -167,11 +182,14 @@ export async function runShepawCli(
     (io.stdout ?? ((t) => process.stdout.write(t + '\n')))(USAGE);
     return 0;
   }
+  if (namespace === 'group' && command) {
+    return runGroupCommand(command, flags, env, io);
+  }
   if (namespace !== 'store' || !command) {
     return emit(io, {
       success: false,
       error:
-        "this shepaw shim implements only 'shepaw store …' (read/write/list/meta)",
+        "this shepaw shim implements 'shepaw store …' and 'shepaw group …'",
       usage: USAGE,
     });
   }
@@ -239,6 +257,123 @@ export async function runShepawCli(
       'Shared on write (local-first, synced in background). Cite the URI / reference verbatim.';
   }
   return emit(io, envelope);
+}
+
+/**
+ * `shepaw group …` — group-orchestration fallback for engines without MCP.
+ *
+ * Persists the decision to the orchestration inbox exactly like the store-MCP
+ * group tools (same buildInboxWrite validation + writeGroupInbox store
+ * protocol write), so the app's orchestration loop consumes it identically.
+ */
+async function runGroupCommand(
+  command: string,
+  flags: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+  io: ShepawCliIO,
+): Promise<number> {
+  const groupId = (flags.group ?? flags.gid ?? '').trim();
+  const sessionId = (flags.session ?? flags.session_id ?? '').trim();
+  if (!groupId || !sessionId) {
+    return emit(io, {
+      success: false,
+      error: 'missing --group / --session (group channel id and session id)',
+      usage: USAGE,
+    });
+  }
+
+  const client = await resolveStoreClient(env, io.fetchImpl ?? fetch);
+  if (!client) {
+    return emit(io, {
+      success: false,
+      error:
+        'no store backend configured (set NEXUSPOUCH_URL / NEXUSPOUCH_ROOT or SHEPAW_HUB_STORE_URL)',
+    });
+  }
+
+  const envCtx: GroupStoreMcpEnv = {
+    groupId,
+    sessionId,
+    workspaceRoot: `group_${groupId}`,
+    memberNames: (flags.members ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  };
+
+  let args: Record<string, unknown>;
+  switch (command) {
+    case 'dispatch': {
+      const rawSteps = (flags.steps ?? '').trim();
+      if (!rawSteps) {
+        return emit(io, {
+          success: false,
+          error: 'missing --steps (JSON array of {step,agents,task})',
+        });
+      }
+      let steps: unknown;
+      try {
+        steps = JSON.parse(rawSteps);
+      } catch {
+        return emit(io, { success: false, error: '--steps is not valid JSON' });
+      }
+      args = { steps, mode: flags.mode ?? 'concurrent' };
+      break;
+    }
+    case 'finish': {
+      const action = (flags.action ?? '').trim();
+      if (!action) {
+        return emit(io, {
+          success: false,
+          error: 'missing --action (done|continue|pause)',
+        });
+      }
+      args = { action };
+      break;
+    }
+    case 'mention': {
+      const rawMentions = (flags.mentions ?? '').trim();
+      if (!rawMentions) {
+        return emit(io, {
+          success: false,
+          error: 'missing --mentions (JSON array of {name,notify?,reason?})',
+        });
+      }
+      let mentions: unknown;
+      try {
+        mentions = JSON.parse(rawMentions);
+      } catch {
+        return emit(io, {
+          success: false,
+          error: '--mentions is not valid JSON',
+        });
+      }
+      args = { mentions };
+      break;
+    }
+    default:
+      return emit(io, {
+        success: false,
+        error: `unknown group command: ${command}`,
+        usage: USAGE,
+      });
+  }
+
+  const planned = buildInboxWrite(`group_${command}`, args);
+  if ('error' in planned) {
+    return emit(io, { success: false, error: planned.error });
+  }
+  const out = await writeGroupInbox(client, envCtx, planned.file, planned.payload);
+  if (!out.ok) {
+    return emit(io, { success: false, error: out.error });
+  }
+  const uri = (out.data as Record<string, unknown> | undefined)?.uri;
+  return emit(io, {
+    success: true,
+    uri,
+    inbox: planned.file,
+    note: '已写入群编排 inbox（与 store-MCP 群工具同一通道）。',
+  });
 }
 
 const invokedAsMain = (() => {
