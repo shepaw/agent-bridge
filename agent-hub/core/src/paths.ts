@@ -89,6 +89,26 @@ export function gatewayLogFile(root: string = hubRoot()): string {
   return join(gatewayLogsDir(root), 'gateway.log');
 }
 
+/** State file for the supervised dashboard web child (pid / host / port). */
+export function dashboardStatePath(root: string = hubRoot()): string {
+  return join(root, 'dashboard-state.json');
+}
+
+/** Lock + plan file for a `shepaw-hub restart` orchestrator run. */
+export function restartStatePath(root: string = hubRoot()): string {
+  return join(root, 'restart-state.json');
+}
+
+/** Directory holding the detached restart orchestrator's log. */
+export function restartLogsDir(root: string = hubRoot()): string {
+  return join(root, 'restart-logs');
+}
+
+/** Log file for the detached restart orchestrator process. */
+export function restartLogFile(root: string = hubRoot()): string {
+  return join(restartLogsDir(root), 'restart.log');
+}
+
 /** Long-term X25519 identity for the device-level peer service (shepaw://peer). */
 export function peerIdentityPath(root: string = hubRoot()): string {
   return join(root, 'peer-identity.json');

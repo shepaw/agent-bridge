@@ -18,6 +18,7 @@
  *
  *   start <id>                     Spawn the gateway process (detached)
  *   stop <id>                      Stop the gateway (SIGTERM on Unix, TerminateProcess on Windows)
+ *   restart [id]                   Restart all services (dashboard → instances → peer → tunnel); or one instance
  *   status [<id>]                  Show running state (all instances if no id)
  *   logs <id>                      Tail the gateway's stdout/stderr
  *   logs rotate <id>               Force log rotation
@@ -38,6 +39,7 @@
 
 import { existsSync } from 'node:fs';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 import { runWebSupervisor, type WebOptions } from './web-supervisor.js';
 
 import { cac } from 'cac';
@@ -77,12 +79,19 @@ import {
   ensureInstanceDir,
   isAlive,
   readState,
+  restartInstance,
   rotateInstanceLogs,
   startInstance,
   stopInstance,
 } from '@shepaw/agent-hub-core';
+import {
+  runRestartOrchestrator,
+  spawnRestartOrchestrator,
+  writeDashboardState,
+} from '@shepaw/agent-hub-core';
+import type { RestartPlan, RestartReport } from '@shepaw/agent-hub-core';
 import { nextFreePort } from '@shepaw/agent-hub-core';
-import { instancePaths, hubRoot, hubConfigPath, gatewayLogFile } from '@shepaw/agent-hub-core';
+import { instancePaths, hubRoot, hubConfigPath, gatewayLogFile, restartLogFile } from '@shepaw/agent-hub-core';
 import { tailLog } from '@shepaw/agent-hub-core';
 import { probeInstanceRuntime, createHubPairing } from '@shepaw/agent-hub-core';
 import { updateInstance } from '@shepaw/agent-hub-core';
@@ -638,6 +647,77 @@ cli
       } else {
         console.log(`Instance "${id}" was not running.`);
       }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('restart [id]', 'Restart services in order: dashboard → instances → peer → tunnel (all when no id)')
+  .option('--detach', 'Run the restart in a detached daemon (survives this process being killed)')
+  .option('--upgrade', 'Run `npm install -g shepaw-agent-hub@latest` before restarting')
+  .option('--skip-dashboard', 'Do not restart the dashboard')
+  .option('--no-instances', 'Do not restart running instances')
+  .option('--no-peer', 'Do not restart the peer service')
+  .option('--no-gateway', 'Do not restart the shared tunnel router')
+  .option('--yes', 'Skip the confirmation prompt')
+  .action(async (id: string | undefined, opts: RestartOptions) => {
+    try {
+      if (id !== undefined) {
+        const cfg = loadOrCreateHubConfig();
+        const instance = getInstance(cfg, id);
+        const result = await restartInstance(instance);
+        if (!result.wasRunning) {
+          console.log(`Instance "${id}" was not running — nothing to restart.`);
+        } else if (result.error !== undefined) {
+          console.error(`Restart of "${id}" failed: ${result.error}`);
+          process.exitCode = 1;
+        } else {
+          console.log(`Restarted "${id}" (pid ${result.startResult?.pid}).`);
+        }
+        return;
+      }
+
+      const plan: RestartPlan = {
+        dashboard: opts.skipDashboard !== true,
+        instances: opts.instances !== false,
+        peer: opts.peer !== false,
+        gateway: opts.gateway !== false,
+        upgrade: opts.upgrade === true,
+      };
+
+      // When invoked from inside an agent instance (SHEPAW_PEERS_PATH is set by
+      // the spawner), this process is about to be killed — force detach.
+      const autoDetached =
+        process.env.SHEPAW_PEERS_PATH !== undefined && process.env.SHEPAW_PEERS_PATH.length > 0;
+      const detached = opts.detach === true || autoDetached;
+
+      if (!detached && process.stdin.isTTY === true && opts.yes !== true) {
+        const ok = await confirm('Restart all services (dashboard, instances, peer, tunnel)? [y/N] ');
+        if (!ok) {
+          console.log('Aborted.');
+          return;
+        }
+      }
+
+      if (detached) {
+        const res = spawnRestartOrchestrator(plan);
+        console.log('');
+        console.log('Restart orchestrator launched in the background (detached).');
+        if (autoDetached) {
+          console.log('  (auto-detached: running inside an agent instance that will be restarted)');
+        }
+        console.log(`  orchestrator pid: ${res.pid}`);
+        console.log(`  log: ${res.logFile}`);
+        console.log(`  plan: ${describeRestartPlan(plan)}`);
+        console.log(`  watch: tail -f ${res.logFile}`);
+        console.log('');
+        return;
+      }
+
+      const report = await runRestartOrchestrator(plan);
+      printRestartReport(report);
+      if (report.failed) process.exitCode = 1;
     } catch (err) {
       exitWithError(err);
     }
@@ -1347,6 +1427,18 @@ async function runWebChild(opts: WebOptions): Promise<void> {
     console.log('  (Token is not passed via URL — paste it in the dashboard when prompted.)');
   }
 
+  // Record the dashboard's own pid/port so `shepaw-hub restart` and the
+  // /api/system/restart-all endpoint can locate (and restart) this process.
+  // Written on every respawn — no exit-time cleanup (supervisor re-spawns and
+  // overwrites it), so a stale pid self-heals.
+  writeDashboardState({
+    pid: process.pid,
+    host: host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host,
+    port,
+    scheme,
+    supervised: process.env.SHEPAW_HUB_SUPERVISED === '1',
+  });
+
   if (opts.peer !== false) {
     try {
       const res = await startPeerService();
@@ -1427,6 +1519,50 @@ function warnRouterIfNeeded(): void {
   console.log('     Remote pairing/connections will fail until you start it:');
   console.log('       shepaw-hub gateway start');
   console.log('');
+}
+
+interface RestartOptions {
+  detach?: boolean;
+  upgrade?: boolean;
+  skipDashboard?: boolean;
+  instances?: boolean;
+  peer?: boolean;
+  gateway?: boolean;
+  yes?: boolean;
+}
+
+async function confirm(message: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(message)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+function describeRestartPlan(plan: RestartPlan): string {
+  const parts: string[] = [];
+  if (plan.upgrade === true) parts.push('upgrade');
+  if (plan.dashboard !== false) parts.push('dashboard');
+  if (plan.instances !== false) parts.push('instances');
+  if (plan.peer !== false) parts.push('peer');
+  if (plan.gateway !== false) parts.push('gateway');
+  return parts.length > 0 ? parts.join(' → ') : 'nothing';
+}
+
+function printRestartReport(report: RestartReport): void {
+  console.log('');
+  console.log('Restart summary:');
+  for (const ph of report.phases) {
+    const mark = ph.status === 'ok' ? 'ok  ' : ph.status === 'skipped' ? 'skip' : 'FAIL';
+    console.log(`  [${mark}] ${ph.phase}${ph.detail !== undefined ? ` — ${ph.detail}` : ''}`);
+  }
+  if (report.failed) {
+    console.log('One or more phases failed.');
+  } else {
+    console.log('All services restarted.');
+  }
 }
 
 /** `wss://<server>/proxy/<channelId>` base for the shared gateway channel. */

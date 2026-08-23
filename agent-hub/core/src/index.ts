@@ -135,6 +135,7 @@ export type { FsBrowseEntry, FsBrowseResult } from './fs-browse.js';
 export { detectLanIPv4, resolvePublicHost } from './network.js';
 
 export {
+  dashboardStatePath,
   gatewayLogFile,
   gatewayLogsDir,
   gatewayStatePath,
@@ -146,6 +147,9 @@ export {
   instancePaths,
   peerAttachmentsDir,
   peerStoreRoot,
+  restartLogFile,
+  restartLogsDir,
+  restartStatePath,
   validateInstanceId,
 } from './paths.js';
 export type { InstancePaths } from './paths.js';
@@ -173,6 +177,24 @@ export {
   stopGatewayRouter,
 } from './gateway-process.js';
 export type { GatewayState } from './gateway-process.js';
+
+export {
+  readDashboardState,
+  readRestartState,
+  runRestartOrchestrator,
+  spawnRestartOrchestrator,
+  writeDashboardState,
+} from './restart.js';
+export type {
+  DashboardState,
+  RestartPhaseName,
+  RestartPhaseReport,
+  RestartPhaseStatus,
+  RestartPlan,
+  RestartReport,
+  RestartState,
+  SpawnRestartResult,
+} from './restart.js';
 
 export { allocateListenPort, nextFreePort, NoFreePortError, probeBindable } from './ports.js';
 export type { FindPortOptions } from './ports.js';

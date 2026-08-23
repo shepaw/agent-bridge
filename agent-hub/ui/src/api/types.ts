@@ -492,3 +492,17 @@ export interface SystemVersion {
   latest?: string;
   outdated?: boolean;
 }
+
+/** Response of `POST /system/restart-all` — the detached orchestrator pid. */
+export interface RestartAllResult {
+  ok: true;
+  pid: number;
+  logFile: string;
+  plan: {
+    dashboard: boolean;
+    instances: boolean;
+    peer: boolean;
+    gateway: boolean;
+    upgrade: boolean;
+  };
+}

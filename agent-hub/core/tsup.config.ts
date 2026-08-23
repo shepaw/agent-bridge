@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/gateway-daemon.ts', 'src/peer/peer-daemon.ts'],
+  entry: ['src/index.ts', 'src/gateway-daemon.ts', 'src/peer/peer-daemon.ts', 'src/restart-daemon.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   sourcemap: true,

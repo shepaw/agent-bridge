@@ -18,7 +18,7 @@ export function VersionPanel() {
   const [upgradeBusy, setUpgradeBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [modal, setModal] = useState<'none' | 'restart' | 'upgrade'>('none');
+  const [modal, setModal] = useState<'none' | 'restart' | 'restartAll' | 'upgrade'>('none');
 
   const loadVersion = async () => {
     try {
@@ -110,6 +110,30 @@ export function VersionPanel() {
     }
   };
 
+  /** Restart every service (dashboard → instances → peer → tunnel) via the
+   * detached orchestrator, then wait for the dashboard to come back. */
+  const confirmRestartAll = async () => {
+    setRestarting(true);
+    setErr(null);
+    try {
+      await api.system.restartAll();
+      await waitForServer();
+      window.location.reload();
+    } catch (e) {
+      const code = e instanceof Error ? (e as Error & { code?: string }).code : undefined;
+      setErr(
+        code === 'restart-in-flight'
+          ? t('settings.restartAllInFlight')
+          : code === 'upgrade-in-flight'
+            ? t('settings.upgradeInFlight')
+            : e instanceof Error ? e.message : String(e),
+      );
+      setModal('none');
+    } finally {
+      setRestarting(false);
+    }
+  };
+
   const closeModal = () => {
     if (!restarting) setModal('none');
   };
@@ -152,6 +176,13 @@ export function VersionPanel() {
             {restarting ? t('settings.restarting') : t('settings.restart')}
           </button>
         )}
+        <button
+          style={dangerBtn}
+          disabled={checking || upgradeBusy || restarting}
+          onClick={() => setModal('restartAll')}
+        >
+          {restarting ? t('settings.restarting') : t('settings.restartAll')}
+        </button>
       </div>
 
       {version?.npmInstall === false && (
@@ -171,6 +202,18 @@ export function VersionPanel() {
           tone="danger"
           busy={restarting}
           onConfirm={() => void confirmRestart()}
+          onCancel={closeModal}
+        />
+      )}
+      {modal === 'restartAll' && (
+        <ConfirmModal
+          title={t('settings.restartAllTitle')}
+          message={t('settings.restartAllMessage')}
+          confirmLabel={t('settings.restartAllButton')}
+          cancelLabel={t('common.cancel')}
+          tone="danger"
+          busy={restarting}
+          onConfirm={() => void confirmRestartAll()}
           onCancel={closeModal}
         />
       )}
@@ -203,5 +246,9 @@ const primaryBtn: React.CSSProperties = {
 };
 const secondaryBtn: React.CSSProperties = {
   background: 'transparent', color: '#cdd6f4', border: '1px solid #45475a',
+  borderRadius: 6, padding: '8px 16px', cursor: 'pointer', fontWeight: 600,
+};
+const dangerBtn: React.CSSProperties = {
+  background: 'transparent', color: '#f38ba8', border: '1px solid #f38ba8',
   borderRadius: 6, padding: '8px 16px', cursor: 'pointer', fontWeight: 600,
 };

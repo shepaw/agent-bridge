@@ -5,9 +5,10 @@
  * respawns it, loading whatever version of the package npm just installed.
  *
  * Guards (mirrored in the UI):
- *   - upgrade  → requires a global npm install (not a source checkout)
- *   - restart  → requires SHEPAW_HUB_SUPERVISED=1 (set by the supervisor)
- *   - both     → refuse while an upgrade is in flight
+ *   - upgrade    → requires a global npm install (not a source checkout)
+ *   - restart    → requires SHEPAW_HUB_SUPERVISED=1 (set by the supervisor)
+ *   - both       → refuse while an upgrade is in flight
+ *   - restart-all → refuse while a restart is already in flight
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -18,6 +19,7 @@ import {
   installLatestFromNpm,
   isNpmPackageInstall,
   readInstalledVersion,
+  spawnRestartOrchestrator,
 } from '@shepaw/agent-hub-core';
 
 export const systemRouter = Router();
@@ -124,4 +126,38 @@ systemRouter.post('/restart', (req: Request, res: Response) => {
     console.log('[shepaw-hub] Restart requested via dashboard — exiting for supervisor respawn.');
     process.exit(0);
   }, 500);
+});
+
+// POST /api/system/restart-all
+// Restart every hub service (dashboard → instances → peer → tunnel) via the
+// detached restart orchestrator. Unlike `/restart`, this survives the current
+// process being killed (the dashboard is one of the things being restarted).
+systemRouter.post('/restart-all', (req: Request, res: Response) => {
+  if (upgradeInFlight) {
+    res.status(409).json({
+      error: 'An upgrade is running; wait for it to finish before restarting.',
+      code: 'upgrade-in-flight',
+    });
+    return;
+  }
+  try {
+    const result = spawnRestartOrchestrator({});
+    res.json({
+      ok: true,
+      pid: result.pid,
+      logFile: result.logFile,
+      plan: { dashboard: true, instances: true, peer: true, gateway: true, upgrade: false },
+    });
+  } catch (err) {
+    if (err instanceof Error && /restart is already in progress/i.test(err.message)) {
+      res.status(409).json({
+        error: err.message,
+        code: 'restart-in-flight',
+      });
+      return;
+    }
+    res.status(500).json({
+      error: `Could not start restart: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 });

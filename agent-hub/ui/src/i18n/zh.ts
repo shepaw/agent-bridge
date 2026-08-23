@@ -222,6 +222,12 @@ export const zh: Record<MessageKey, string> = {
   'settings.restartMessage': '服务会停止并重新启动，正在进行的请求将被中断，大约需要几秒钟。',
   'settings.restarting': '重启中…',
   'settings.restartNotSupervised': '仅通过 `shepaw-hub web` 启动的服务支持重启。',
+  'settings.restartAll': '重启全部服务',
+  'settings.restartAllTitle': '确定重启全部服务？',
+  'settings.restartAllMessage':
+    '会重启仪表盘、全部实例、Peer 服务与共享隧道。进行中的轮次可能中断；重启后既有会话中的新对话可恢复。',
+  'settings.restartAllButton': '重启全部',
+  'settings.restartAllInFlight': '已有重启正在进行，请等待完成。',
   'settings.upgradeRestartTitle': '重启以应用升级？',
   'settings.upgradeRestartMessage': '已安装 shepaw-agent-hub {version}，重启后才会运行新版本。',
   'settings.upgradeRestartButton': '升级并重启',

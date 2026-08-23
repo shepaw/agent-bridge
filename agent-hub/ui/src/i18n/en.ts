@@ -224,6 +224,12 @@ export const en = {
   'settings.restarting': 'Restarting…',
   'settings.restartNotSupervised':
     'Dashboard restart is only available when launched via `shepaw-hub web`.',
+  'settings.restartAll': 'Restart all services',
+  'settings.restartAllTitle': 'Restart all services?',
+  'settings.restartAllMessage':
+    'Restarts the dashboard, every running instance, the peer service, and the shared tunnel. In-flight turns may be interrupted; new turns in existing conversations resume after reconnect.',
+  'settings.restartAllButton': 'Restart all',
+  'settings.restartAllInFlight': 'A restart is already running. Wait for it to finish.',
   'settings.upgradeRestartTitle': 'Restart to apply the upgrade?',
   'settings.upgradeRestartMessage':
     'shepaw-agent-hub {version} was installed. The dashboard must restart to run the new version.',

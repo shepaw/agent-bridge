@@ -36,6 +36,7 @@ import type {
   StoreReadResult,
   StoreWriteResult,
   SystemVersion,
+  RestartAllResult,
 } from './types.js';
 
 const BASE = '/api';
@@ -440,5 +441,8 @@ export const api = {
 
     restart: (): Promise<{ ok: true; restarting: true }> =>
       request('/system/restart', { method: 'POST' }),
+
+    restartAll: (): Promise<RestartAllResult> =>
+      request('/system/restart-all', { method: 'POST' }),
   },
 };

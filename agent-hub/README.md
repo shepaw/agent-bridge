@@ -134,6 +134,7 @@ pair the phone under **扫码配对**.
 |---------|-------------|
 | `shepaw-hub start <id>` | Spawn the gateway process (detached, survives hub exit) |
 | `shepaw-hub stop <id>` | Graceful stop (SIGTERM → SIGKILL after 5s; Windows: TerminateProcess) |
+| `shepaw-hub restart [id]` | Restart all services in order (dashboard → instances → peer → tunnel); or one instance. `--detach` runs in a background daemon (survives this process being killed), `--upgrade` npm-upgrades first, `--skip-dashboard`/`--no-instances`/`--no-peer`/`--no-gateway` skip phases |
 | `shepaw-hub status [id]` | Show running state for one or all projects |
 
 ### Logs
@@ -237,6 +238,15 @@ The web server exposes a REST API at `/api`. All requests/responses use JSON.
 | `GET` | `/api/engines` | List built-in + custom engines |
 | `POST` | `/api/engines` | Register `{ id, displayName, acpCommand }` |
 | `DELETE` | `/api/engines/:id` | Remove a custom engine (409 if in use) |
+
+### System
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/system/version[?refresh=1]` | Installed version, npm-install flag, supervised flag (refresh: check npm) |
+| `POST` | `/api/system/upgrade` | `npm install -g shepaw-agent-hub@latest` |
+| `POST` | `/api/system/restart` | Restart just the dashboard server (requires supervised; the supervisor respawns it) |
+| `POST` | `/api/system/restart-all` | Restart every service (dashboard → instances → peer → tunnel) via a detached orchestrator. Returns `{ ok, pid, logFile, plan }`; `409` with `code: "restart-in-flight"` if a restart is already running |
 
 ### WebSocket Log Streaming
 
