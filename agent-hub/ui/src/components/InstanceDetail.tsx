@@ -107,6 +107,7 @@ export function InstanceDetail({
   const [dirPickerTarget, setDirPickerTarget] = useState<'cwd' | number>('cwd');
   const [engineInfos, setEngineInfos] = useState<EngineInfo[]>([]);
   const [rebuildBusy, setRebuildBusy] = useState(false);
+  const [rebuildNotice, setRebuildNotice] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -215,9 +216,13 @@ export function InstanceDetail({
   const handleRebuildResume = async () => {
     setRebuildBusy(true);
     setErr(null);
+    setRebuildNotice(null);
     try {
       await api.instances.rebuildResume(instanceId);
       await load();
+      // The re-derive is near-instant and deterministic, so the resume text may
+      // not visibly change — surface explicit confirmation that it ran.
+      setRebuildNotice(t('detail.rebuildDone', { time: new Date().toLocaleTimeString() }));
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -492,6 +497,9 @@ export function InstanceDetail({
                   <p style={resumeText}>
                     {instance.card.bio || instance.card.description || '—'}
                   </p>
+                  {rebuildNotice && (
+                    <p style={rebuildNoticeStyle}>{rebuildNotice}</p>
+                  )}
                   {instance.card.capabilities.length > 0 && (
                     <>
                       <div style={{ ...resumeLabel, marginTop: 12 }}>{t('detail.capabilities')}</div>
@@ -1369,6 +1377,10 @@ const rebuildBtn: React.CSSProperties = {
   background: 'transparent', border: '1px solid #45475a', color: '#89dceb',
   borderRadius: 5, padding: '2px 10px', cursor: 'pointer', fontSize: 12,
   whiteSpace: 'nowrap', flexShrink: 0,
+};
+
+const rebuildNoticeStyle: React.CSSProperties = {
+  margin: '8px 0 0', color: '#a6e3a1', fontSize: 12, fontWeight: 500,
 };
 
 const resumeText: React.CSSProperties = {

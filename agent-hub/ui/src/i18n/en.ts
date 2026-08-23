@@ -304,6 +304,7 @@ export const en = {
   'detail.capabilities': 'Capabilities',
   'detail.rebuildResume': 'Rebuild resume',
   'detail.rebuilding': 'Rebuilding…',
+  'detail.rebuildDone': 'Resume rebuilt · {time}',
   'detail.storeTitle': 'Nexus Pouch spaces',
   'detail.storeHint':
     'Each agent has a private Nexus Pouch space; the working directory is also mapped as workspace. Manage files from the global Nexus Pouch like a drive.',
