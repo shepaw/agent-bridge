@@ -22,6 +22,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { StoreToolsClient } from './store-tools.js';
+
 // ── types ──────────────────────────────────────────────────────────
 
 export interface ScriptCapabilities {
@@ -86,6 +88,90 @@ export interface PersistAgentResumeMeta {
 
 /** Mirrors agent.ts `GATEWAY_DIR_NAME`; kept local to avoid a circular import. */
 const RESUME_CONFIG_DIR_NAME = 'shepaw-acp-proxy-gateway';
+
+/**
+ * Markers delimiting the durable "自我补充 / Self Notes" section of resume.md.
+ * On rebuild the gateway re-derives the auto sections (Identity / Workspace /
+ * Capabilities / Summary) from a fresh workspace scan and preserves only the
+ * text between these markers verbatim — the agent keeps manual additions there.
+ */
+export const RESUME_NOTES_START = '<!-- SHEPAW_RESUME_NOTES_START -->';
+export const RESUME_NOTES_END = '<!-- SHEPAW_RESUME_NOTES_END -->';
+
+/** Fixed pouch location for an agent's resume document. */
+export function resumeStoreUri(device: string, agentId: string): string {
+  return `store://files/${device}/${agentId}/resume.md`;
+}
+
+/** Extract the durable self-notes between the markers; '' when absent. */
+export function extractResumeNotes(md: string): string {
+  const start = md.indexOf(RESUME_NOTES_START);
+  if (start < 0) return '';
+  const bodyStart = start + RESUME_NOTES_START.length;
+  const end = md.indexOf(RESUME_NOTES_END, bodyStart);
+  if (end < 0) return '';
+  return md.slice(bodyStart, end).trim();
+}
+
+/**
+ * Combine a freshly derived resume with the previous document: the auto
+ * sections come from the new scan; only the previous self-notes survive.
+ */
+export function mergeResumeWithPrevious(
+  input: AgentResumeInput,
+  profile: WorkspaceProfile,
+  resume: AgentResume,
+  previousMd: string,
+): string {
+  return renderResumeMarkdown(input, profile, resume, extractResumeNotes(previousMd));
+}
+
+/** Read a resume.md document from the pouch store. null when absent/unreadable. */
+export async function readResumeFromStore(
+  client: StoreToolsClient,
+  uri: string,
+): Promise<string | null> {
+  try {
+    const out = await client.read({ uri });
+    if (!out.ok) return null;
+    const data = out.data as { content?: unknown; encoding?: unknown } | null | undefined;
+    const content = data?.content;
+    if (typeof content !== 'string' || content.length === 0) return null;
+    // store read returns utf8 text when decodable, base64 otherwise.
+    return data?.encoding === 'base64'
+      ? Buffer.from(content, 'base64').toString('utf8')
+      : content;
+  } catch {
+    return null;
+  }
+}
+
+/** Write the resume.md document into the pouch at the fixed agent location. Best-effort. */
+export async function writeResumeToStore(
+  client: StoreToolsClient,
+  agentId: string,
+  md: string,
+): Promise<void> {
+  try {
+    await client.write({
+      space: 'files',
+      task: agentId,
+      filename: 'resume.md',
+      content: md,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Load the previously rendered resume.md (local fallback for the merge). */
+export async function loadAgentResumeMarkdown(dir: string, agentId: string): Promise<string | null> {
+  try {
+    return await readFile(join(agentResumeDir(dir, agentId), 'resume.md'), 'utf-8');
+  } catch {
+    return null;
+  }
+}
 
 const PKG_VERSION_FALLBACK = '0.0.0';
 
@@ -302,8 +388,9 @@ export function composeAgentResume(
 export function buildFallbackResume(input: AgentResumeInput): AgentResume {
   const capabilities = ['chat', 'streaming'];
   const summary = [
-    `${input.agentName} — ACP agent gateway bridging Shepaw to the upstream ${input.engineDisplayName} agent.`,
-    `Workspace: ${workspaceLabel(input.cwd)}`,
+    `${workspaceLabel(input.cwd)} — ${input.engineDisplayName} workspace agent (resume pending scan).`,
+    `Workspace: ${input.cwd}`,
+    `Agent: ${input.agentName}`,
     `Capabilities: ${capabilities.join(', ')}`,
   ].join('\n');
   return { version: PKG_VERSION_FALLBACK, capabilities, summary };
@@ -337,6 +424,7 @@ export function renderResumeMarkdown(
   input: AgentResumeInput,
   profile: WorkspaceProfile,
   resume: AgentResume,
+  notes: string = '',
 ): string {
   const secondary = profile.languages.filter((l) => l !== profile.language).slice(0, 3);
   const gitLine =
@@ -376,6 +464,11 @@ export function renderResumeMarkdown(
     '',
     '## Summary',
     resume.summary,
+    '',
+    '## 自我补充 / Self Notes',
+    RESUME_NOTES_START,
+    notes.trim(),
+    RESUME_NOTES_END,
   ].join('\n');
 }
 
@@ -795,9 +888,9 @@ async function extractReadmeDescription(
   if (current.length > 0) paragraphs.push(current.join(' '));
   if (paragraphs.length === 0) return undefined;
 
-  const first = paragraphs[0]?.replace(/\s+/g, ' ').trim() ?? '';
-  if (first.length === 0) return undefined;
-  return first.length > README_MAX_LENGTH ? `${first.slice(0, README_MAX_LENGTH).trimEnd()}…` : first;
+  const cleaned = cleanDescriptionText(paragraphs[0] ?? '');
+  if (cleaned.length === 0) return undefined;
+  return cleaned.length > README_MAX_LENGTH ? `${cleaned.slice(0, README_MAX_LENGTH).trimEnd()}…` : cleaned;
 }
 
 function isSkippableReadmeLine(line: string): boolean {
@@ -805,9 +898,26 @@ function isSkippableReadmeLine(line: string): boolean {
     line.startsWith('#') ||
     line.startsWith('<') ||
     line.startsWith('!') ||
+    line.startsWith('>') || // blockquote notices / language badges
+    line.startsWith('|') || // table rows
+    line.startsWith('```') ||
     /^!\[[^\]]*\]\([^)]*\)$/.test(line) ||
-    /^\[[^\]]*\]\([^)]*\)$/.test(line)
+    /^\[[^\]]*\]\([^)]*\)$/.test(line) ||
+    /^\[!\[/.test(line) // badge link: [![...](...)](...)
   );
+}
+
+/** Strip markdown links/badges/emphasis so the description reads as prose. */
+function cleanDescriptionText(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // ![alt](url) → alt
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) → text
+    .replace(/`([^`]*)`/g, '$1') // `code` → code
+    .replace(/\*\*([^*]+)\*\*/g, '$1') // **bold** → bold
+    .replace(/__([^_]+)__/g, '$1') // __under__ → under
+    .replace(/\*([^*]+)\*/g, '$1') // *italic* → italic
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 interface CensusResult {
@@ -954,16 +1064,32 @@ function buildSummary(
   capabilities: string[],
 ): string {
   const projectName = profile.projectName ?? workspaceLabel(input.cwd);
-  const projectLine = profile.projectDescription
-    ? `${projectName} — ${profile.projectDescription}`
-    : projectName;
   const language = profile.language ?? profile.languages[0] ?? 'unknown';
-  return [
-    `${input.agentName} — ACP agent gateway bridging Shepaw to the upstream ${input.engineDisplayName} agent.`,
-    `Workspace: ${projectLine}`,
+  const tooling = [
+    profile.scripts.build ? 'build' : '',
+    profile.scripts.test ? 'test' : '',
+    profile.scripts.lint ? 'lint' : '',
+    profile.scripts.dev ? 'dev' : '',
+    profile.scripts.format ? 'format' : '',
+    profile.scripts.deploy ? 'deploy' : '',
+  ].filter((v): v is string => v.length > 0);
+  const agentLine =
+    input.agentName === input.engineDisplayName
+      ? input.agentName
+      : `${input.agentName} (${input.engineDisplayName})`;
+  // Lead with the work this agent owns in this workspace — the project and
+  // what it does — then environment, identity, and capabilities.
+  const lines = [
+    profile.projectDescription
+      ? `${projectName} — ${profile.projectDescription}`
+      : `${projectName} — ${input.engineDisplayName} workspace agent.`,
+    `Workspace: ${input.cwd}`,
     `Languages: ${language}`,
-    `Capabilities: ${capabilities.join(', ')}`,
-  ].join('\n');
+  ];
+  if (tooling.length > 0) lines.push(`Tooling: ${tooling.join(', ')}`);
+  lines.push(`Agent: ${agentLine}`);
+  lines.push(`Capabilities: ${capabilities.join(', ')}`);
+  return lines.join('\n');
 }
 
 function workspaceLabel(cwd: string): string {

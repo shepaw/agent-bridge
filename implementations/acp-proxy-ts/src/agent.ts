@@ -62,13 +62,21 @@ import {
   prependStorePouchCard,
   resolveStoreDeviceIdFromEnv,
 } from './store-pouch-card.js';
+import { storeBackendConfigured } from './shepaw-cli-shim.js';
+import { resolveStoreClient } from './shepaw-cli.js';
 import {
   buildFallbackResume,
   buildResumeForAgent,
   isResumeRebuildForced,
   loadAgentResume,
+  loadAgentResumeMarkdown,
+  mergeResumeWithPrevious,
   persistAgentResume,
+  readResumeFromStore,
+  renderResumeMarkdown,
   resolveResumePersistenceDir,
+  resumeStoreUri,
+  writeResumeToStore,
   type AgentResume,
   type AgentResumeInput,
 } from './workspace-resume.js';
@@ -178,6 +186,36 @@ export class AcpProxyAgent extends ACPAgentServer {
     if (loaded !== null) {
       this.resume = loaded;
       log('workspace resume loaded from %s (agent %s)', persistDir, this.agentId);
+      // Ensure the pouch copy exists at the fixed location — covers a migrated
+      // agent / cleared pouch without forcing a re-scan. Best-effort.
+      if (storeBackendConfigured(process.env)) {
+        try {
+          const client = await resolveStoreClient(process.env, fetch);
+          if (client !== undefined) {
+            const uri = resumeStoreUri(client.device, this.agentId);
+            const existing = await readResumeFromStore(client, uri);
+            if (existing === null && persistDir !== null) {
+              const localMd = await loadAgentResumeMarkdown(
+                persistDir,
+                this.agentId,
+              );
+              if (localMd !== null) {
+                await writeResumeToStore(client, this.agentId, localMd);
+                log(
+                  'workspace resume mirrored to %s (agent %s)',
+                  uri,
+                  this.agentId,
+                );
+              }
+            }
+          }
+        } catch (err) {
+          log(
+            'workspace resume store mirror failed: %s',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
     } else {
       try {
         await this.rebuildResume();
@@ -249,9 +287,11 @@ export class AcpProxyAgent extends ACPAgentServer {
       pouchCardEnabled(process.env) &&
       !this.pouchCardSessions.has(shepawSessionId)
     ) {
+      const pouchDeviceId = resolveStoreDeviceIdFromEnv(process.env);
       const pouchCard = buildStorePouchCard({
-        deviceId: resolveStoreDeviceIdFromEnv(process.env),
+        deviceId: pouchDeviceId,
         workspaceUri: (process.env.SHEPAW_WORKSPACE_URI ?? '').trim() || undefined,
+        resumeUri: pouchDeviceId ? resumeStoreUri(pouchDeviceId, this.agentId) : undefined,
         hostCardMarkdown: (process.env.SHEPAW_SCOPE_CARD ?? '').trim() || undefined,
       });
       // Group-task turn: append the group context block (roster, own role,
@@ -448,14 +488,45 @@ export class AcpProxyAgent extends ACPAgentServer {
   }
 
   /**
-   * Re-derive the workspace resume now (scan + persist). Used by init() on a
-   * first run / forced rebuild and by the `agent.resume.rebuild` RPC.
+   * Re-derive the workspace resume now (scan + merge + persist). Used by
+   * init() on a first run / forced rebuild and by the `agent.resume.rebuild`
+   * RPC. Auto sections are refreshed from a fresh scan; the previous document's
+   * "自我补充 / Self Notes" section is preserved. The result lands in the pouch
+   * store at the fixed location (`store://files/<device>/<agentId>/resume.md`)
+   * when a backend is configured; local persistence stays as the fallback.
+   * Best-effort — a store failure must never take the gateway down.
    */
   async rebuildResume(): Promise<AgentResume> {
     const input = this.buildResumeInput();
     const { resume, profile } = await buildResumeForAgent(input);
     this.resume = resume;
     const persistDir = resolveResumePersistenceDir(process.env);
+
+    if (storeBackendConfigured(process.env)) {
+      try {
+        const client = await resolveStoreClient(process.env, fetch);
+        if (client !== undefined) {
+          const uri = resumeStoreUri(client.device, this.agentId);
+          const previousMd =
+            (await readResumeFromStore(client, uri)) ??
+            (persistDir !== null
+              ? await loadAgentResumeMarkdown(persistDir, this.agentId)
+              : null);
+          const md =
+            previousMd !== null
+              ? mergeResumeWithPrevious(input, profile, resume, previousMd)
+              : renderResumeMarkdown(input, profile, resume);
+          await writeResumeToStore(client, this.agentId, md);
+          log('workspace resume synced to %s (agent %s)', uri, this.agentId);
+        }
+      } catch (err) {
+        log(
+          'workspace resume store sync failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
     if (persistDir !== null) {
       await persistAgentResume(resume, { dir: persistDir, input, profile });
     }

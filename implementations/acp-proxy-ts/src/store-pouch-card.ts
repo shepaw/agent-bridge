@@ -46,6 +46,8 @@ export function resolveHostScopeCardMarkdown(
 export function buildStorePouchCard(opts: {
   deviceId?: string;
   workspaceUri?: string;
+  /** Fixed store URI of this agent's resume document (store read/write). */
+  resumeUri?: string;
   /** Pre-rendered host Scope Card; wins over local template. */
   hostCardMarkdown?: string;
 } = {}): string {
@@ -60,6 +62,10 @@ export function buildStorePouchCard(opts: {
   const workspaceLine = workspace
     ? `- 工作区已挂载：\`${workspace}\`（相对路径如 \`docs/good.md\` 即该目录下文件）`
     : '';
+  const resume = opts.resumeUri?.trim();
+  const resumeLine = resume
+    ? `- 简历：\`${resume}\` — store read 读取 / store write 更新（重建时自动章节随扫描刷新，持久手工补充请写在 \`## 自我补充 / Self Notes\` 段内）`
+    : '';
 
   return [
     '## 当前储物袋作用域',
@@ -68,6 +74,7 @@ export function buildStorePouchCard(opts: {
     deviceLine,
     '- URI：`store://<space>/<device_id>/<path>`',
     ...(workspaceLine ? [workspaceLine] : []),
+    ...(resumeLine ? [resumeLine] : []),
     '',
     '- 分区：`files` 沉淀 · `public` 公开引用 · `runtime` 会话产物 · `cognition` Soul/结构化记忆权威 · `workspaces` 工作区 · `backups` 本端灾备',
     '- 读: `shepaw store read --uri <uri-as-is>` · 列: `shepaw store list --uri <uri> --depth 1`',

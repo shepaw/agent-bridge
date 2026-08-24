@@ -495,7 +495,7 @@ export function InstanceDetail({
                     </button>
                   </div>
                   <p style={resumeText}>
-                    {instance.card.bio || instance.card.description || '—'}
+                    {instance.card.description || instance.card.bio || '—'}
                   </p>
                   {rebuildNotice && (
                     <p style={rebuildNoticeStyle}>{rebuildNotice}</p>

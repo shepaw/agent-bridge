@@ -5,15 +5,20 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  RESUME_NOTES_END,
+  RESUME_NOTES_START,
   agentResumeDir,
   buildFallbackResume,
   composeAgentResume,
+  extractResumeNotes,
   isResumeRebuildForced,
   loadAgentResume,
+  mergeResumeWithPrevious,
   persistAgentResume,
   renderResumeMarkdown,
   resolveProxyVersion,
   resolveResumePersistenceDir,
+  resumeStoreUri,
   scanWorkspaceProfile,
   type AgentResumeInput,
   type WorkspaceProfile,
@@ -308,6 +313,62 @@ describe('loadAgentResume', () => {
       'utf-8',
     );
     expect(await loadAgentResume(dir, INPUT.agentId)).toBeNull();
+  });
+});
+
+describe('resume notes merge / store URI', () => {
+  it('renders the self-notes section with markers in every resume', () => {
+    const profile = buildTestProfile();
+    const md = renderResumeMarkdown(INPUT, profile, composeAgentResume(INPUT, profile, '0.1.7'));
+    expect(md).toContain('## 自我补充 / Self Notes');
+    expect(md).toContain(RESUME_NOTES_START);
+    expect(md).toContain(RESUME_NOTES_END);
+  });
+
+  it('extractResumeNotes returns the text between markers only', () => {
+    const md = [
+      '# x',
+      RESUME_NOTES_START,
+      'I prefer pnpm.',
+      '',
+      'Speaks Chinese.',
+      RESUME_NOTES_END,
+      'tail',
+    ].join('\n');
+    expect(extractResumeNotes(md)).toBe('I prefer pnpm.\n\nSpeaks Chinese.');
+  });
+
+  it('extractResumeNotes returns empty when markers are missing', () => {
+    expect(extractResumeNotes('# no markers here')).toBe('');
+    expect(extractResumeNotes(`${RESUME_NOTES_START} open only`)).toBe('');
+  });
+
+  it('mergeResumeWithPrevious preserves notes and refreshes auto sections', () => {
+    const oldProfile = buildTestProfile();
+    const oldMd = renderResumeMarkdown(
+      INPUT,
+      oldProfile,
+      composeAgentResume(INPUT, oldProfile, '0.1.6'),
+      'Manual notes: keep me.',
+    );
+    const newProfile: WorkspaceProfile = {
+      ...buildTestProfile(),
+      projectName: 'renamed-project',
+      frameworks: ['React', 'Vite'],
+    };
+    const resume = composeAgentResume(INPUT, newProfile, '0.1.7');
+    const merged = mergeResumeWithPrevious(INPUT, newProfile, resume, oldMd);
+
+    expect(merged).toContain('## Summary');
+    expect(merged).toContain('- project: renamed-project'); // auto sections refreshed
+    expect(merged).not.toContain('- project: resume-demo');
+    expect(merged).toContain('Manual notes: keep me.');
+  });
+
+  it('resumeStoreUri builds the fixed pouch location', () => {
+    expect(resumeStoreUri('abc123', 'acp_agent_deadbeef')).toBe(
+      'store://files/abc123/acp_agent_deadbeef/resume.md',
+    );
   });
 });
 
