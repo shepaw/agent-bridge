@@ -1014,9 +1014,9 @@ function buildZcodeGuide(platform: HubPlatform): EngineSetupGuide {
   };
 }
 
-/** DSH CLI install constants. `0.1.0-rc.7` is the current `next`/known-good release. */
+/** DSH CLI install constants. `0.1.1-rc.2` is the current known-good release. */
 const DSH_PACKAGE = '@deepseek-ai/dsh';
-const DSH_VERSION = '0.1.0-rc.7';
+const DSH_VERSION = '0.1.1-rc.2';
 /** DSH profile name this engine boots (holds the shepaw-bridge plugin). */
 export const DSH_SHEPAW_PROFILE = 'shepaw';
 

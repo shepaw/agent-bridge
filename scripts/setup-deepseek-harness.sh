@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-DSH_VERSION="${DSH_VERSION:-0.1.0-rc.7}"
+DSH_VERSION="${DSH_VERSION:-0.1.1-rc.2}"
 PROFILE="${DSH_SHEPAW_PROFILE:-shepaw}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,4 +66,7 @@ Done. The engine is ready — create and start a deepseek-harness instance:
 
 The Shepaw app pairs once against the Peer channel (shepaw://peer QR); the DSH
 instance reuses that same peer identity, so no second scan is needed.
+
+To upgrade DSH later: npm install -g @deepseek-ai/dsh@latest
+(Hub uses whatever \`dsh\` is on PATH — see implementations/dsh-shepaw-plugin/README.md § DSH 版本与自升级)
 EOF

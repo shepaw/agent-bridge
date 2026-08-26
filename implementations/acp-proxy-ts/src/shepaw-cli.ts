@@ -16,7 +16,8 @@
  * Key shapes match the Dart store namespace (content / content_base64).
  */
 
-import { pathToFileURL } from 'node:url';
+import { basename } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   buildInboxWrite,
   writeGroupInbox,
@@ -378,7 +379,14 @@ async function runGroupCommand(
 
 const invokedAsMain = (() => {
   try {
-    return process.argv[1] !== undefined &&
+    if (process.argv[1] === undefined) return false;
+    // tsup `splitting: false` inlines this module into dist/cli.js (and the
+    // SDK index bundle), where import.meta.url equals argv[1] — the naive
+    // check would misfire, running `shepaw store …` against the gateway's own
+    // argv and exiting 1 before serve starts. Only auto-run when this module
+    // genuinely IS the standalone shepaw-cli.js binary.
+    const selfBasename = basename(fileURLToPath(import.meta.url));
+    return selfBasename === 'shepaw-cli.js' &&
       import.meta.url === pathToFileURL(process.argv[1]).href;
   } catch {
     return false;

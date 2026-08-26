@@ -61,6 +61,41 @@ shepaw-acp-peers add <base64-pubkey> --label "My iPhone"
 
 因此由 Hub 拉起的 DSH 实例共享同一套 peer 身份 + 白名单 + 通道，**app 只需对 peer 通道扫一次码**，无需再对该 DSH 实例单独扫码。独立运行（非 Hub 托管）时则是它自己的身份，才需要单独配对。
 
+## DSH 版本与自升级
+
+Hub 一键安装会 pin 一个**经测试**的 DSH 版本（见仓库根目录 `scripts/setup-deepseek-harness.sh` 里的 `DSH_VERSION`，或 Web 面板 Engine Management 的安装命令）。这个 pin **只影响新用户的一键安装**，运行时 Hub 只检查 PATH 上是否存在 `dsh` 命令，**不会**强制版本必须与 pin 一致。
+
+你可以随时自行升级本地 DSH，例如：
+
+```sh
+npm install -g @deepseek-ai/dsh@latest
+dsh --version
+```
+
+升级后 Hub 会直接使用新版 `dsh --profile shepaw` 启动实例。插件的 `@deepseek-ai/*` 是 peerDependencies（`*`），运行时从宿主 DSH 解析，**不捆绑固定版本的 DSH**。
+
+**兼容性预期：**
+
+- 同一大版本线内的 rc / patch 升级（如 `0.1.1-rc.2` → `0.1.1-rc.3`）通常可直接使用，无需更新插件。
+- 若 DSH 改了插件依赖的 API（`ctx.agents`、`approval/request`、`session/event` 等），可能需要等 `shepaw-dsh-plugin` 跟进更新。
+
+**自升级后若异常，按顺序排查：**
+
+```sh
+# 1. 确认 shepaw profile 仍挂载插件
+dsh --profile shepaw --dump-config | grep shepaw-bridge
+
+# 2. 若组合树里没有 shepaw-bridge，重新安装插件
+bash scripts/setup-deepseek-harness.sh
+# 或手动：
+#   dsh plugin --profile shepaw add file:.../implementations/dsh-shepaw-plugin
+
+# 3. 仍不行时，回退到 Hub 当前 pin 的版本（见 setup-deepseek-harness.sh 的 DSH_VERSION）
+npm install -g @deepseek-ai/dsh@<pin版本>
+```
+
+也可先用 `dsh web` 单独验证 API Key 和模型配置是否正常（`~/.dsh/settings.yaml` / `~/.dsh/.credentials.yaml` 会被 `shepaw` profile 共用）。
+
 ## 配置项
 
 | 键 | 默认 | 说明 |

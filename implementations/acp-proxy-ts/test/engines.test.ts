@@ -73,7 +73,7 @@ describe('engines', () => {
   it('resolves deepseek-harness to the official ACP demo bin', () => {
     const spec = getBuiltinEngineSpec('deepseek-harness');
     expect(spec.command).toBe('npx');
-    expect(spec.args).toEqual(['-y', '@deepseek-ai/dsh-acp-demo@0.1.0-rc.7']);
+    expect(spec.args).toEqual(['-y', '@deepseek-ai/dsh-acp-demo@0.1.1-rc.2']);
   });
 
   it('resolves custom engine via acp-command override', () => {

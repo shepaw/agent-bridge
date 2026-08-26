@@ -159,7 +159,7 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     // cordis.yml in the instance cwd (see Hub engine setup).
     // Pin to a known-good rc: the `latest` dist-tag still points at
     // 0.0.1-rc.1, whose peer-dependency tree fails to resolve (ERESOLVE).
-    args: ['-y', '@deepseek-ai/dsh-acp-demo@0.1.0-rc.7'],
+    args: ['-y', '@deepseek-ai/dsh-acp-demo@0.1.1-rc.2'],
     defaultAgentName: 'DeepSeek Harness',
   },
   'qwen-code': {
