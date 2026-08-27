@@ -117,13 +117,15 @@ npm install -g @deepseek-ai/dsh@<pin版本>
 | `agent.cancelTask` | `agent.cancel({ kind: 'user' })` |
 | DSH 权限审批（`approval/request`） | `sendActionConfirmation` + `waitForResponse` → `allowed-once`/`rejected` |
 | `agent.sessions.list` / `history` | `ctx.agents.list()` + `session.events` 重放 |
+| `agent.models.list` / `setCurrent` | `ctx.llm.listProviders()` + `listModels()`；运行时经 `installModelSelection` 切换 |
+| `agent.modes.list` / `setCurrent` | `ctx.permissionPresets`（`read-only` / `workspace-write` / `danger-full-access`） |
 
 ## 已知限制
 
 - **流式粒度**：按 `assistant/chunk`（token 级）回推，但 `onChat` 的收尾以 `turn/end` + `whenIdle()` 为准；一个 Shepaw turn 对应一个 DSH turn。
 - **会话持久化**：当前复用进程内 live agent（`ctx.agents.get`）；跨进程恢复历史需在 `ensureAgent` 里改走 `ctx.agents.resume`（要求 DSH 配置了 `dsh-session-persistence-jsonl`）。
 - **审批**：用 `waitForResponse`（阻塞式）桥接，超时/取消按 fail-closed 处理。
-- **模型路由**：默认读 `agentDefaultModel`；覆盖需同时给 `provider` + `model`。
+- **模型 wire 格式**：App 侧 `value` 为 `provider/model`（如 `deepseek-official/deepseek-v4-pro`）。
 
 ## 开发
 
