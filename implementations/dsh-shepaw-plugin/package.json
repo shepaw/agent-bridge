@@ -29,6 +29,7 @@
     "dev": "tsup --watch",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "clean": "rm -rf dist"
   },
   "keywords": [

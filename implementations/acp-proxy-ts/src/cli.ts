@@ -93,6 +93,17 @@ cli
   }) => {
     const engine = String(opts.engine);
 
+    if (engine === 'deepseek-harness' && (opts.acpCommand === undefined || opts.acpCommand.trim().length === 0)) {
+      console.error(
+        'DeepSeek Harness is a standalone ACP server (`dsh --profile shepaw`) and cannot run as a gateway upstream.\n' +
+          'Start it via Agent Hub instead:\n' +
+          '  shepaw-hub instance add --engine deepseek-harness --cwd <project>\n' +
+          '  shepaw-hub start <instance-id>\n' +
+          'Or run directly: dsh --profile shepaw',
+      );
+      process.exit(1);
+    }
+
     let spec;
     try {
       spec = resolveEngineSpec(engine, {

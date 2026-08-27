@@ -155,10 +155,9 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     id: 'deepseek-harness',
     displayName: 'DeepSeek Harness',
     command: 'npx',
-    // Official ACP stdio bin (`dsh-acp-demo`). Needs DEEPSEEK_API_KEY and a
-    // cordis.yml in the instance cwd (see Hub engine setup).
-    // Pin to a known-good rc: the `latest` dist-tag still points at
-    // 0.0.1-rc.1, whose peer-dependency tree fails to resolve (ERESOLVE).
+    // Legacy gateway upstream (`dsh-acp-demo`). Hub now spawns `dsh --profile
+    // shepaw` directly (shepaw-dsh-plugin). The gateway CLI rejects this engine
+    // unless --acp-command overrides it for debugging.
     args: ['-y', '@deepseek-ai/dsh-acp-demo@0.1.1-rc.2'],
     defaultAgentName: 'DeepSeek Harness',
   },

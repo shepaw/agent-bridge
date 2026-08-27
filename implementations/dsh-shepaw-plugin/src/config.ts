@@ -52,12 +52,12 @@ export function resolveShepawBridgeConfig(
   raw: Partial<ShepawBridgeConfig> | undefined,
 ): ResolvedShepawBridgeConfig {
   const c = raw ?? {};
-  // `SHEPAW_DSH_HOST`/`SHEPAW_DSH_PORT` let the Hub pin the bind address per
-  // instance (loopback + unique port) without rewriting the profile's
-  // cordis.patch.yml. The yaml config and the 0.0.0.0:8080 default are the
-  // fallback for standalone runs.
-  const host = c.host ?? process.env.SHEPAW_DSH_HOST ?? '0.0.0.0';
-  const port = c.port ?? envPort(process.env.SHEPAW_DSH_PORT) ?? 8080;
+  // Hub injects `SHEPAW_DSH_HOST` / `SHEPAW_DSH_PORT` per instance (loopback +
+  // unique port). Env wins over cordis.patch.yml defaults (which still ship
+  // 0.0.0.0:8080 for standalone `dsh --profile shepaw` runs).
+  const envHost = process.env.SHEPAW_DSH_HOST?.trim();
+  const host = envHost && envHost.length > 0 ? envHost : (c.host ?? '0.0.0.0');
+  const port = envPort(process.env.SHEPAW_DSH_PORT) ?? c.port ?? 8080;
   return {
     host,
     port,

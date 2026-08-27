@@ -56,7 +56,7 @@ shepaw-acp-peers add <base64-pubkey> --label "My iPhone"
 
 - 身份/白名单/配对码：自动读取 `SHEPAW_IDENTITY_PATH` / `SHEPAW_PEERS_PATH` / `SHEPAW_ENROLLMENTS_PATH`；Hub 启动实例时会注入这三个变量，指向 Hub 的**共享 peer 身份**。
 - 通道 inbox：自动读取 `PAW_ACP_MAILBOX_SERVER_URL` / `PAW_ACP_MAILBOX_CHANNEL_ID` / `PAW_ACP_MAILBOX_SECRET`，接入 Hub 的**共享 channel 隧道**（router 持有唯一设备隧道，实例走 loopback 收件箱）。
-- 监听地址：自动读取 `SHEPAW_DSH_HOST` / `SHEPAW_DSH_PORT`（Hub 按实例注入 loopback + 唯一端口）；独立运行时回退到 cordis.patch.yml 的 `host`/`port`，默认 `0.0.0.0:8080`。
+- 监听地址：Hub 启动实例时会注入 `SHEPAW_DSH_HOST` / `SHEPAW_DSH_PORT`（**优先于** cordis.patch.yml 里的 `host`/`port`）；独立运行时回退到 cordis.patch.yml 的默认值 `0.0.0.0:8080`。
 - 权限预设：自动读取 `DSH_PERMISSION_MODE`（Hub 把实例的 sessionMode 注入到这里，DSH 的 sandbox-policy 据此生效）。
 
 因此由 Hub 拉起的 DSH 实例共享同一套 peer 身份 + 白名单 + 通道，**app 只需对 peer 通道扫一次码**，无需再对该 DSH 实例单独扫码。独立运行（非 Hub 托管）时则是它自己的身份，才需要单独配对。

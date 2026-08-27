@@ -9,7 +9,7 @@
     - id: shepaw-bridge
       name: 'shepaw-dsh-plugin'
       config:
-        # LAN-reachable so the Shepaw app on the same Wi-Fi can connect.
+        # Standalone defaults (Hub overrides via SHEPAW_DSH_HOST / SHEPAW_DSH_PORT).
         host: 0.0.0.0
         port: 8080
         # Default workspace root for new DSH sessions (absolute path).

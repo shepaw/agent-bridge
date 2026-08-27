@@ -44,6 +44,7 @@ fi
 # ── 4. Configure the `shepaw` profile: `dsh plugin add` creates the profile on
 #      first use (dsh-base + the plugin bundle), installs the plugin, and
 #      auto-wires it into dsh.profile.bundles because it declares dsh.bundle.
+#      Re-run on every setup so the profile picks up rebuilt plugin dist/.
 say "Configuring dsh profile '${PROFILE}'…"
 dsh plugin --profile "${PROFILE}" add "file:${PLUGIN_DIR}"
 
