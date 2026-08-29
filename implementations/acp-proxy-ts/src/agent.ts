@@ -248,14 +248,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     this.sessionHistoryCache.invalidate(shepawSessionId);
 
     // Resume is NOT part of the conversation context — it lives in the pouch
-    // and is read on demand. The only per-turn hook: when this turn mentions
-    // the resume ("帮我改简历"), check whether the agent rewrote resume.md via
-    // `store write` last turn and adopt the new copy into the live card so
-    // the Hub's dispatch archive stays current. Gated on a cheap keyword hit;
-    // normal chats cost nothing.
-    if (mentionsResume(message)) {
-      void this.adoptExternalResumeEdits().catch(() => undefined);
-    }
+    // and is read on demand.
 
     // Group-task turns: artifacts land in the group runtime
     // (`runtime/<group>/<group>/artifacts/…`) so the whole group sees them.
@@ -349,6 +342,35 @@ export class AcpProxyAgent extends ACPAgentServer {
         },
       },
     );
+
+    // Turn end: the agent may have rewritten its own resume.md in the pouch
+    // this turn (`store write` on the card-advertised URI). Adopt unconditionally
+    // — the sha256 guard inside makes an unchanged document cost one meta call,
+    // and this removes the old keyword gate that missed silent self-edits.
+    // The gateway's own resume writes record `lastResumeSha`, so its own
+    // rebuilds are skipped here. Notify the app afterwards so it can pick up
+    // the fresh bio (She's roster reads from the app DB, not the pouch).
+    if (!isGroupTurn(groupContext)) {
+      const adopted = await this.adoptExternalResumeEdits().catch(() => false);
+      if (adopted) {
+        void this.notifyResumeChanged();
+      }
+    }
+  }
+
+  /**
+   * Push `agent.resume.changed` to all connected app clients so they re-pull
+   * the resume (card bio / pouch resume.md) without waiting for a rebuild or
+   * reconnect. Best-effort — failures are ignored.
+   */
+  private async notifyResumeChanged(): Promise<void> {
+    try {
+      await this.broadcastNotification('agent.resume.changed', {
+        agent_id: this.agentId,
+      });
+    } catch {
+      /* best-effort */
+    }
   }
 
   override async onCommandsList(_params: CommandsListParams): Promise<CommandsListResult> {
@@ -571,25 +593,27 @@ export class AcpProxyAgent extends ACPAgentServer {
    *
    * Cheap-guarded by the store's sha256 so an unchanged document costs one
    * meta call per chat turn. Best-effort: any failure is logged and ignored.
+   * Returns true when a new document was actually adopted (callers use that
+   * to decide whether to notify the app).
    */
-  private async adoptExternalResumeEdits(): Promise<void> {
-    if (!storeBackendConfigured(process.env)) return;
+  private async adoptExternalResumeEdits(): Promise<boolean> {
+    if (!storeBackendConfigured(process.env)) return false;
     try {
       const client = await resolveStoreClient(process.env, fetch);
-      if (client === undefined) return;
+      if (client === undefined) return false;
       const uri = resumeStoreUri(client.device, this.agentId);
       const meta = await client.meta({ uri });
-      if (!meta.ok) return;
+      if (!meta.ok) return false;
       const sha = (meta.data as { meta?: { sha256?: unknown } } | null | undefined)?.meta?.sha256;
       const shaHex = typeof sha === 'string' ? sha : undefined;
-      if (shaHex !== undefined && shaHex === this.lastResumeSha) return;
+      if (shaHex !== undefined && shaHex === this.lastResumeSha) return false;
 
       const md = await readResumeFromStore(client, uri);
-      if (md === null) return;
+      if (md === null) return false;
       this.lastResumeSha = shaHex;
       const summary = extractResumeSummary(md);
       const capabilities = extractResumeCapabilities(md);
-      if (summary === null && capabilities === null) return;
+      if (summary === null && capabilities === null) return false;
       this.resume = {
         ...this.resume,
         ...(summary !== null ? { summary } : {}),
@@ -601,11 +625,13 @@ export class AcpProxyAgent extends ACPAgentServer {
         summary !== null,
         capabilities?.length ?? 0,
       );
+      return true;
     } catch (err) {
       log(
         'external resume adoption failed: %s',
         err instanceof Error ? err.message : String(err),
       );
+      return false;
     }
   }
 
@@ -622,20 +648,6 @@ export class AcpProxyAgent extends ACPAgentServer {
     }
     return join(homedir(), '.config', GATEWAY_DIR_NAME);
   }
-}
-
-/**
- * Cheap gate for the per-turn resume-adoption check: does this user message
- * actually talk about the agent's resume (简历)? Normal chats — the vast
- * majority — must not spend a single store call on resume bookkeeping.
- * Deliberately narrow so store writes ABOUT files named "resume" don't
- * trigger it either (English "resume work" is a rare false positive and
- * harmless: worst case one extra meta call).
- */
-export function mentionsResume(message: string): boolean {
-  if (message.length > 2000) return false;
-  const text = message.toLowerCase();
-  return text.includes('简历') || text.includes('resume.md') || text.includes('résumé');
 }
 
 export {

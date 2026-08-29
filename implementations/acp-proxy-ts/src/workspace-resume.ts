@@ -128,6 +128,76 @@ export function extractResumeSummary(md: string): string | null {
 }
 
 /**
+ * Replace only the `## Summary` section body of an existing resume.md,
+ * preserving every other section (Workspace, Capabilities, Self Notes…).
+ * Used by the `agents.resume-set` shim path so a chat-driven resume update
+ * keeps the gateway-derived sections and the durable self-notes intact.
+ * When the document has no Summary section it is appended before the
+ * Self Notes markers (or at the end).
+ */
+export function replaceResumeSummarySection(md: string, summary: string): string {
+  const lines = md.split(/\r?\n/);
+  const out: string[] = [];
+  let i = 0;
+  let replaced = false;
+
+  while (i < lines.length) {
+    const line = lines[i] ?? '';
+    if (!replaced && /^##\s+Summary\s*$/.test(line)) {
+      out.push(line);
+      i += 1;
+      // Skip the old body up to the next `## ` heading.
+      while (i < lines.length && !/^##\s+/.test(lines[i] ?? '')) i += 1;
+      out.push('');
+      out.push(summary.trim());
+      out.push('');
+      replaced = true;
+      continue;
+    }
+    out.push(line);
+    i += 1;
+  }
+
+  if (!replaced) {
+    const block = ['', '## Summary', '', summary.trim(), ''];
+    // Insert before the Self Notes *heading* (the `## ` line owning the
+    // markers), not before the markers themselves — otherwise the new
+    // Summary section would swallow the notes into its body.
+    const notesStart = out.findIndex((l) => l === RESUME_NOTES_START);
+    if (notesStart >= 0) {
+      let at = notesStart;
+      while (at > 0 && !/^##\s+/.test(out[at - 1] ?? '')) at -= 1;
+      if (at > 0) {
+        // `at` now points just past the Self Notes heading; drop the blank
+        // line that separated it from the previous section (the block brings
+        // its own), then insert before that heading.
+        at -= 1;
+        while (at > 0 && (out[at - 1] ?? '').trim() === '') at -= 1;
+        out.splice(at, 0, ...block);
+        return out.join('\n');
+      }
+    }
+    out.push(...block);
+  }
+  return out.join('\n');
+}
+
+/** Minimal resume.md for a first `agents.resume-set` on an empty pouch. */
+export function renderSummaryOnlyResumeMd(agentName: string, summary: string): string {
+  return [
+    `# ${agentName || 'Agent'} — Agent Resume`,
+    '',
+    '## Summary',
+    summary.trim(),
+    '',
+    '## 自我补充 / Self Notes',
+    RESUME_NOTES_START,
+    '',
+    RESUME_NOTES_END,
+  ].join('\n');
+}
+
+/**
  * Parse the Capabilities bullet list out of a resume.md document. Returns
  * null when the section is missing or holds no bullets — callers then keep
  * the previous capability list.

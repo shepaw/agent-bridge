@@ -2411,10 +2411,25 @@ export class ACPAgentServer {
   protected async broadcastCommandsChanged(
     commands: SlashCommandInfo[],
   ): Promise<void> {
-    if (this.wsServer === undefined) return;
-    const msg = jsonrpcNotification('agent.commands.changed', {
+    await this.broadcastNotification('agent.commands.changed', {
       commands,
     } satisfies CommandsChangedParams as unknown as Record<string, unknown>);
+  }
+
+  /**
+   * Broadcast a JSON-RPC notification to all authenticated connections.
+   *
+   * Generic counterpart to `broadcastCommandsChanged` — lets concrete agents
+   * push their own push-style events (e.g. `agent.resume.changed`) without
+   * reaching into the private ws server. Per-client send failures are
+   * swallowed so one bad socket doesn't starve the others.
+   */
+  protected async broadcastNotification(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    if (this.wsServer === undefined) return;
+    const msg = jsonrpcNotification(method, params);
     for (const client of this.wsServer.clients) {
       const sws = client as ShepawWebSocket;
       if (sws.authorizedPeer === undefined) continue;

@@ -268,6 +268,76 @@ describe('shepaw-cli against mock store API', () => {
     expect(lastJson(io.out().lines).error).toMatch(/shepaw store …/);
   });
 
+  describe('context agents.resume-set / resume-get', () => {
+    const RESUME_KEY = 'agent-1/resume.md';
+
+    it('resume-set on an empty pouch seeds a minimal resume.md', async () => {
+      const io = makeIo({ NEXUSPOUCH_URL: base });
+      const code = await runShepawCli(
+        ['context', 'agents.resume-set', '--id', 'agent-1', '--text', '我负责测试'],
+        io.io,
+      );
+      expect(code).toBe(0);
+      const out = lastJson(io.out().lines);
+      expect(out).toMatchObject({ success: true, agent_id: 'agent-1', resume: '我负责测试' });
+      expect(files.get(RESUME_KEY)?.toString('utf8')).toContain('## Summary');
+    });
+
+    it('resume-set replaces only the Summary section, keeping Self Notes', async () => {
+      files.set(
+        RESUME_KEY,
+        Buffer.from(
+          [
+            '# agent-1 — Agent Resume',
+            '',
+            '## Workspace',
+            '- path: `/somewhere`',
+            '',
+            '## Summary',
+            '旧简历',
+            '',
+            '## 自我补充 / Self Notes',
+            '<!-- SHEPAW_RESUME_NOTES_START -->',
+            '手工沉淀，不许动',
+            '<!-- SHEPAW_RESUME_NOTES_END -->',
+          ].join('\n'),
+          'utf8',
+        ),
+      );
+      const io = makeIo({ NEXUSPOUCH_URL: base });
+      const code = await runShepawCli(
+        ['context', 'agents.resume-set', '--id', 'agent-1', '--text', '新简历'],
+        io.io,
+      );
+      expect(code).toBe(0);
+      const md = files.get(RESUME_KEY)?.toString('utf8') ?? '';
+      expect(md).toContain('新简历');
+      expect(md).not.toContain('旧简历');
+      expect(md).toContain('- path: `/somewhere`');
+      expect(md).toContain('手工沉淀，不许动');
+    });
+
+    it('resume-get returns the Summary as resume plus the full document', async () => {
+      const io = makeIo({ NEXUSPOUCH_URL: base });
+      const code = await runShepawCli(
+        ['context', 'agents.resume-get', '--id', 'agent-1'],
+        io.io,
+      );
+      expect(code).toBe(0);
+      const out = lastJson(io.out().lines);
+      expect(out).toMatchObject({ success: true, agent_id: 'agent-1', resume: '新简历' });
+      expect(out.resume_md).toContain('## 自我补充 / Self Notes');
+    });
+
+    it('missing --id / --text are JSON errors with exit 1', async () => {
+      const io = makeIo({ NEXUSPOUCH_URL: base });
+      expect(await runShepawCli(['context', 'agents.resume-set', '--text', 'x'], io.io)).toBe(1);
+      expect(lastJson(io.out().lines).error).toMatch(/--id/);
+      expect(await runShepawCli(['context', 'agents.resume-set', '--id', 'agent-1'], io.io)).toBe(1);
+      expect(lastJson(io.out().lines).error).toMatch(/--text/);
+    });
+  });
+
   it('group dispatch persists to the orchestration inbox', async () => {
     const io = makeIo({ NEXUSPOUCH_URL: base });
     const code = await runShepawCli(

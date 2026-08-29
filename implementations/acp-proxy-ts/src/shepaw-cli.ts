@@ -30,6 +30,14 @@ import {
 } from './store-tools.js';
 import { resolveHubStoreBase } from './hub-store-env.js';
 import { resolveStoreWriteScope } from './store-write-context.js';
+import {
+  extractResumeSummary,
+  readResumeFromStore,
+  renderSummaryOnlyResumeMd,
+  replaceResumeSummarySection,
+  resumeStoreUri,
+  writeResumeToStore,
+} from './workspace-resume.js';
 
 const DEFAULT_NEXUSPOUCH_URL = 'http://127.0.0.1:8787';
 
@@ -140,6 +148,15 @@ shepaw group — group orchestration (fallback when MCP tools are unavailable)
 Group commands persist the decision to the orchestration inbox the same way
 the store-MCP tools do (store://workspaces/<device>/group_<gid>/…/inbox/).
 
+shepaw context — agent self-context (resume)
+
+  shepaw context agents.resume-get --id <agent_id>
+  shepaw context agents.resume-set --id <agent_id> --text "..."
+      Writes the pouch resume.md at the fixed agent location and updates its
+      "## Summary" (what dispatchers see). Keep durable manual notes in the
+      "## 自我补充 / Self Notes" section — they survive rebuilds. The gateway
+      adopts the change at the end of this turn and notifies the app.
+
 Default write space is runtime:
   store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>
 Owner/channel fall back to SHEPAW_STORE_* env / store-context.json.
@@ -186,11 +203,17 @@ export async function runShepawCli(
   if (namespace === 'group' && command) {
     return runGroupCommand(command, flags, env, io);
   }
+  if (namespace === 'context' && command === 'agents.resume-get') {
+    return runResumeGet(flags, env, io);
+  }
+  if (namespace === 'context' && command === 'agents.resume-set') {
+    return runResumeSet(flags, env, io);
+  }
   if (namespace !== 'store' || !command) {
     return emit(io, {
       success: false,
       error:
-        "this shepaw shim implements 'shepaw store …' and 'shepaw group …'",
+        "this shepaw shim implements 'shepaw store …', 'shepaw group …' and 'shepaw context agents.resume-*'",
       usage: USAGE,
     });
   }
@@ -258,6 +281,105 @@ export async function runShepawCli(
       'Shared on write (local-first, synced in background). Cite the URI / reference verbatim.';
   }
   return emit(io, envelope);
+}
+
+/**
+ * `shepaw context agents.resume-get` — read the agent's resume.md Summary
+ * from the pouch (the same document the gateway derives / rebuilds into).
+ */
+async function runResumeGet(
+  flags: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+  io: ShepawCliIO,
+): Promise<number> {
+  const agentId = (flags.id ?? flags.agent_id ?? '').trim();
+  if (!agentId) {
+    return emit(io, {
+      success: false,
+      error: 'missing --id (agent id)',
+      usage: 'shepaw context agents.resume-get --id <agent_id>',
+    });
+  }
+  const client = await resolveStoreClient(env, io.fetchImpl ?? fetch);
+  if (!client) {
+    return emit(io, {
+      success: false,
+      error:
+        'no store backend configured (set NEXUSPOUCH_URL / NEXUSPOUCH_ROOT or SHEPAW_HUB_STORE_URL)',
+    });
+  }
+  const md = await readResumeFromStore(client, resumeStoreUri(client.device, agentId));
+  if (md === null) {
+    return emit(io, {
+      success: false,
+      error: `no resume.md in the pouch for agent ${agentId} (it is created on the gateway's first resume derivation)`,
+    });
+  }
+  return emit(io, {
+    success: true,
+    agent_id: agentId,
+    resume: extractResumeSummary(md) ?? md.trim(),
+    resume_md: md,
+    note: 'resume is the `## Summary` section (what others see); resume_md is the full document',
+  });
+}
+
+/**
+ * `shepaw context agents.resume-set` — update the agent's resume from chat.
+ *
+ * Writes the full resume.md into the pouch at the fixed agent location
+ * (`store://files/<device>/<agentId>/resume.md`), replacing only the
+ * `## Summary` section and leaving the gateway-derived sections and the
+ * durable Self Notes intact. The gateway's per-turn adoption picks the new
+ * document up when this turn ends and broadcasts `agent.resume.changed`, so
+ * the app (and She's roster) sees the fresh bio without a rebuild.
+ */
+async function runResumeSet(
+  flags: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+  io: ShepawCliIO,
+): Promise<number> {
+  const agentId = (flags.id ?? flags.agent_id ?? '').trim();
+  const text = (flags.text ?? '').trim();
+  if (!agentId) {
+    return emit(io, {
+      success: false,
+      error: 'missing --id (agent id)',
+      usage: 'shepaw context agents.resume-set --id <agent_id> --text "..."',
+    });
+  }
+  if (!text) {
+    return emit(io, {
+      success: false,
+      error: 'missing --text (the new resume text)',
+      usage: 'shepaw context agents.resume-set --id <agent_id> --text "..."',
+    });
+  }
+  const client = await resolveStoreClient(env, io.fetchImpl ?? fetch);
+  if (!client) {
+    return emit(io, {
+      success: false,
+      error:
+        'no store backend configured (set NEXUSPOUCH_URL / NEXUSPOUCH_ROOT or SHEPAW_HUB_STORE_URL)',
+    });
+  }
+  const uri = resumeStoreUri(client.device, agentId);
+  const existing = await readResumeFromStore(client, uri);
+  const name = (flags.name ?? '').trim();
+  const md =
+    existing !== null
+      ? replaceResumeSummarySection(existing, text)
+      : renderSummaryOnlyResumeMd(name, text);
+  await writeResumeToStore(client, agentId, md);
+
+  return emit(io, {
+    success: true,
+    agent_id: agentId,
+    uri,
+    resume: text,
+    note:
+      'Resume written to the pouch. The gateway adopts it at the end of this turn and pushes agent.resume.changed to the app.',
+  });
 }
 
 /**
