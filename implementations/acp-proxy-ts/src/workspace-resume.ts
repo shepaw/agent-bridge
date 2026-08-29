@@ -114,6 +114,61 @@ export function extractResumeNotes(md: string): string {
 }
 
 /**
+ * Parse the Summary section body out of a resume.md document. Used to adopt
+ * an externally-edited resume (the agent rewriting its own resume.md via
+ * `store write`) into the live agent card. Returns null when the section is
+ * missing or empty — callers then keep the previous description.
+ */
+export function extractResumeSummary(md: string): string | null {
+  const sections = splitMarkdownSections(md);
+  const body = sections.get('Summary');
+  if (body === undefined) return null;
+  const cleaned = body.trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/**
+ * Parse the Capabilities bullet list out of a resume.md document. Returns
+ * null when the section is missing or holds no bullets — callers then keep
+ * the previous capability list.
+ */
+export function extractResumeCapabilities(md: string): string[] | null {
+  const sections = splitMarkdownSections(md);
+  const body = sections.get('Capabilities');
+  if (body === undefined) return null;
+  const caps = body
+    .split(/\r?\n/)
+    .map((line) => {
+      const bullet = line.trim().match(/^[-*]\s+(.+)$/);
+      return bullet === null ? undefined : (bullet[1] ?? '').trim();
+    })
+    .filter((item): item is string => item !== undefined && item.length > 0);
+  return caps.length > 0 ? caps : null;
+}
+
+/** Split a markdown document into `heading → body` pairs (## level, first occurrence wins). */
+function splitMarkdownSections(md: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  let current: string | null = null;
+  const buffer: string[] = [];
+  const flush = (): void => {
+    if (current !== null && !sections.has(current)) sections.set(current, buffer.join('\n'));
+    buffer.length = 0;
+  };
+  for (const line of md.split(/\r?\n/)) {
+    const heading = line.match(/^##\s+(.+?)\s*$/);
+    if (heading !== null) {
+      flush();
+      current = heading[1] ?? '';
+      continue;
+    }
+    if (current !== null) buffer.push(line);
+  }
+  flush();
+  return sections;
+}
+
+/**
  * Combine a freshly derived resume with the previous document: the auto
  * sections come from the new scan; only the previous self-notes survive.
  */
@@ -381,17 +436,15 @@ export function composeAgentResume(
   version: string,
 ): AgentResume {
   const capabilities = buildCapabilities(profile);
-  return { version, capabilities, summary: buildSummary(input, profile, capabilities) };
+  return { version, capabilities, summary: buildSummary(input, profile) };
 }
 
 /** Minimal resume for the constructor — no I/O, never depends on the scan. */
 export function buildFallbackResume(input: AgentResumeInput): AgentResume {
   const capabilities = ['chat', 'streaming'];
   const summary = [
-    `${workspaceLabel(input.cwd)} — ${input.engineDisplayName} workspace agent (resume pending scan).`,
-    `Workspace: ${input.cwd}`,
-    `Agent: ${input.agentName}`,
-    `Capabilities: ${capabilities.join(', ')}`,
+    `我在 ${workspaceLabel(input.cwd)} 项目上工作，负责日常开发与维护（简历待首次扫描后生成）。`,
+    `工作区：${input.cwd}`,
   ].join('\n');
   return { version: PKG_VERSION_FALLBACK, capabilities, summary };
 }
@@ -1058,38 +1111,63 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-function buildSummary(
-  input: AgentResumeInput,
-  profile: WorkspaceProfile,
-  capabilities: string[],
-): string {
+/**
+ * Compose the card summary: what this agent can do *for this project*, not
+ * which engine backs it. Leads with the project and its description, then
+ * states concrete, workspace-grounded abilities (run the tests, keep the
+ * build green, ship releases) derived only from what the scan actually found.
+ */
+function buildSummary(input: AgentResumeInput, profile: WorkspaceProfile): string {
   const projectName = profile.projectName ?? workspaceLabel(input.cwd);
-  const language = profile.language ?? profile.languages[0] ?? 'unknown';
-  const tooling = [
-    profile.scripts.build ? 'build' : '',
-    profile.scripts.test ? 'test' : '',
-    profile.scripts.lint ? 'lint' : '',
-    profile.scripts.dev ? 'dev' : '',
-    profile.scripts.format ? 'format' : '',
-    profile.scripts.deploy ? 'deploy' : '',
-  ].filter((v): v is string => v.length > 0);
-  const agentLine =
-    input.agentName === input.engineDisplayName
-      ? input.agentName
-      : `${input.agentName} (${input.engineDisplayName})`;
-  // Lead with the work this agent owns in this workspace — the project and
-  // what it does — then environment, identity, and capabilities.
-  const lines = [
+  const language = profile.language ?? profile.languages[0];
+
+  // Capabilities phrased as promises to the project, gated on real signals.
+  const abilities: string[] = [];
+  if (profile.hasTests || profile.scripts.test) {
+    const cmd = testCommand(profile);
+    abilities.push(cmd === undefined ? '跑测试并修复失败用例' : `跑测试（\`${cmd}\`）并修复失败用例`);
+  }
+  if (profile.scripts.build) {
+    abilities.push('改动后保持构建通过');
+  }
+  if (profile.scripts.lint) {
+    abilities.push('按 lint 规则清理代码');
+  }
+  if (profile.scripts.format) {
+    abilities.push('统一代码风格');
+  }
+  if (profile.scripts.dev) {
+    abilities.push('本地起服务联调验证');
+  }
+  if (profile.scripts.deploy) {
+    abilities.push('走项目自带流程发布部署');
+  }
+
+  const lines: string[] = [
     profile.projectDescription
-      ? `${projectName} — ${profile.projectDescription}`
-      : `${projectName} — ${input.engineDisplayName} workspace agent.`,
-    `Workspace: ${input.cwd}`,
-    `Languages: ${language}`,
+      ? `我在 ${projectName} 项目上工作 — ${profile.projectDescription}`
+      : language === undefined
+        ? `我在 ${projectName} 项目上工作，负责日常开发与维护。`
+        : `我在 ${projectName} 项目上工作，主力语言 ${language}，负责日常开发与维护。`,
   ];
-  if (tooling.length > 0) lines.push(`Tooling: ${tooling.join(', ')}`);
-  lines.push(`Agent: ${agentLine}`);
-  lines.push(`Capabilities: ${capabilities.join(', ')}`);
+  if (abilities.length > 0) lines.push(`能做的事：${abilities.join('；')}。`);
+  if (language !== undefined && abilities.length === 0) {
+    lines.push(`熟悉 ${language} 代码库，可以读代码、改代码、查问题。`);
+  }
+  lines.push(`工作区：${input.cwd}`);
   return lines.join('\n');
+}
+
+/** Best-effort test command for the summary; undefined when unknown. */
+function testCommand(profile: WorkspaceProfile): string | undefined {
+  const pm = profile.packageManager;
+  if (pm === 'npm' || pm === 'pnpm' || pm === 'yarn' || pm === 'bun') return `${pm} test`;
+  if (pm === 'cargo') return 'cargo test';
+  if (pm === 'uv') return 'uv run pytest';
+  if (pm === 'poetry') return 'poetry run pytest';
+  if (pm === 'pipenv') return 'pipenv run pytest';
+  if (profile.makefileTargets.includes('test')) return 'make test';
+  return undefined;
 }
 
 function workspaceLabel(cwd: string): string {

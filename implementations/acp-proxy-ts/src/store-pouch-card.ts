@@ -64,7 +64,7 @@ export function buildStorePouchCard(opts: {
     : '';
   const resume = opts.resumeUri?.trim();
   const resumeLine = resume
-    ? `- 简历：\`${resume}\` — store read 读取 / store write 更新（重建时自动章节随扫描刷新，持久手工补充请写在 \`## 自我补充 / Self Notes\` 段内）`
+    ? `- 简历：\`${resume}\` — 仅在被要求查看/更新简历时用 store read / store write 读写；日常对话不要读取。修改时更新 \`## Summary\`（给分派者看的能力说明），持久手工补充写在 \`## 自我补充 / Self Notes\` 段内`
     : '';
 
   return [

@@ -10,7 +10,9 @@ import {
   agentResumeDir,
   buildFallbackResume,
   composeAgentResume,
+  extractResumeCapabilities,
   extractResumeNotes,
+  extractResumeSummary,
   isResumeRebuildForced,
   loadAgentResume,
   mergeResumeWithPrevious,
@@ -369,6 +371,64 @@ describe('resume notes merge / store URI', () => {
     expect(resumeStoreUri('abc123', 'acp_agent_deadbeef')).toBe(
       'store://files/abc123/acp_agent_deadbeef/resume.md',
     );
+  });
+});
+
+describe('external resume edit adoption', () => {
+  it('extractResumeSummary returns the Summary body verbatim', () => {
+    const md = [
+      '# Agent Resume',
+      '',
+      '## Workspace',
+      '- project: demo',
+      '',
+      '## Summary',
+      '我在 demo 项目上工作。',
+      '能做的事：跑测试并修复失败用例。',
+      '',
+      '## 自我补充 / Self Notes',
+      RESUME_NOTES_START,
+      'notes',
+      RESUME_NOTES_END,
+    ].join('\n');
+    expect(extractResumeSummary(md)).toBe(
+      '我在 demo 项目上工作。\n能做的事：跑测试并修复失败用例。',
+    );
+  });
+
+  it('extractResumeSummary returns null when the section is missing or empty', () => {
+    expect(extractResumeSummary('# no sections')).toBeNull();
+    expect(extractResumeSummary('## Summary\n\n## Other\nx')).toBeNull();
+  });
+
+  it('extractResumeCapabilities returns the bullet list', () => {
+    const md = [
+      '## Capabilities',
+      '- chat',
+      '- streaming',
+      '* lang:typescript',
+      '',
+      '## Summary',
+      'x',
+    ].join('\n');
+    expect(extractResumeCapabilities(md)).toEqual(['chat', 'streaming', 'lang:typescript']);
+  });
+
+  it('extractResumeCapabilities returns null when no bullets exist', () => {
+    expect(extractResumeCapabilities('## Capabilities\nnothing here')).toBeNull();
+    expect(extractResumeCapabilities('# none')).toBeNull();
+  });
+
+  it('parses a full rendered resume round-trip', () => {
+    const profile = buildTestProfile();
+    const md = renderResumeMarkdown(INPUT, profile, composeAgentResume(INPUT, profile, '0.1.7'));
+    expect(extractResumeSummary(md)).toContain('resume-demo');
+    expect(extractResumeCapabilities(md)).toContain('lang:typescript');
+  });
+
+  it('first occurrence of a repeated heading wins (notes section after Summary)', () => {
+    const md = ['## Summary', 'first', '## Summary', 'second'].join('\n');
+    expect(extractResumeSummary(md)).toBe('first');
   });
 });
 
