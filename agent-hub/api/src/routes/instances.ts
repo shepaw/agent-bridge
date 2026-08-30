@@ -2,7 +2,7 @@
  * Instances REST routes.
  *
  * GET    /api/instances               — list all instances with live status
- * GET    /api/instances/meta          — hub metadata: lastTunnelServerUrl + credential hints
+ * GET    /api/instances/meta          — hub metadata: lastTunnelServerUrl + credential hints + defaultResumePrompt
  * POST   /api/instances               — register a new instance (starts by default)
  * GET    /api/instances/:id           — get one instance + state
  * DELETE /api/instances/:id           — unregister (stops first if running)
@@ -79,6 +79,7 @@ import {
   stopInstance,
   updateHubMeta,
   updateInstance,
+  DEFAULT_RESUME_PROMPT,
   tryAuthorizePeerServiceOnInstance,
   type AgentEngine,
   type CredentialHint,
@@ -233,8 +234,9 @@ instancesRouter.get('/', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/instances/meta
- * Returns hub-level metadata: lastTunnelServerUrl and per-engine credential
- * hints (masked values only — encrypted blobs are never sent to the client).
+ * Returns hub-level metadata: lastTunnelServerUrl, per-engine credential
+ * hints (masked values only — encrypted blobs are never sent to the client),
+ * and the system-default resume prompt for the dashboard editor.
  */
 instancesRouter.get('/meta', (_req: Request, res: Response) => {
   const cfg = loadOrCreateHubConfig();
@@ -293,6 +295,7 @@ instancesRouter.get('/meta', (_req: Request, res: Response) => {
     lastTunnelServerUrl: cfg.lastTunnelServerUrl ?? null,
     lastTunnelSecretHint: cfg.lastTunnelSecretHint?.masked ?? null,
     credentialHints: hints,
+    defaultResumePrompt: DEFAULT_RESUME_PROMPT,
   });
 });
 
@@ -667,21 +670,20 @@ instancesRouter.post('/:id/resume/rebuild', async (req: Request, res: Response) 
 });
 
 /**
- * POST /api/instances/:id/resume/polish — AI resume polish. Drives one chat
- * turn that makes the agent rewrite its own Summary per the instance's
- * custom resume prompt, returning the adopted card text.
+ * POST /api/instances/:id/resume/polish — AI resume polish. First re-derives
+ * the workspace resume deterministically (fresh capability list from the
+ * current scan), then drives one chat turn that makes the agent rewrite its
+ * own Summary per the custom resume prompt. One button covers both facts
+ * refresh and AI rewrite — the standalone rebuild endpoint stays available
+ * for CLI / API callers.
  */
 instancesRouter.post('/:id/resume/polish', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const p = getInstance(cfg, req.params.id!);
-    const prompt = (p.resumePrompt ?? '').trim();
-    if (prompt.length === 0) {
-      res.status(400).json({
-        error: '未配置简历生成提示词：请先在简历页保存提示词，再使用 AI 润色。',
-      });
-      return;
-    }
+    // No custom prompt saved → polish against the system default (the same
+    // text the dashboard editor pre-fills), so polish works out of the box.
+    const prompt = (p.resumePrompt ?? '').trim() || DEFAULT_RESUME_PROMPT;
     // Fail fast on an offline gateway instead of hanging a 3-minute chat.
     const runtime = await probeInstanceRuntime(p);
     if (runtime.availability !== 'online' && runtime.availability !== 'degraded') {
@@ -691,6 +693,11 @@ instancesRouter.post('/:id/resume/polish', async (req: Request, res: Response) =
       });
       return;
     }
+    // Refresh the objective facts (capabilities, workspace, git) so the agent
+    // rewrites its Summary on top of a current scan. The rebuild preserves an
+    // AI-polished Summary while the prompt is unchanged, and the polish turn
+    // below replaces the Summary anyway.
+    await rebuildInstanceResume(p.id);
     const result = await polishInstanceResume(p.id, p.id, prompt, p.cwd, p.label);
     if (!result.ok) {
       res.status(502).json({ error: result.error ?? 'AI 润色失败。', reply: result.reply });

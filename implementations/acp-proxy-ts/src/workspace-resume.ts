@@ -23,6 +23,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { RESUME_PROMPT_MAX_LENGTH } from 'shepaw-acp-sdk';
+
 import type { StoreToolsClient } from './store-tools.js';
 
 // ── types ──────────────────────────────────────────────────────────
@@ -106,10 +108,6 @@ const RESUME_CONFIG_DIR_NAME = 'shepaw-acp-proxy-gateway';
  */
 export const RESUME_NOTES_START = '<!-- SHEPAW_RESUME_NOTES_START -->';
 export const RESUME_NOTES_END = '<!-- SHEPAW_RESUME_NOTES_END -->';
-
-/** Hard cap for a custom resume prompt — keeps resume.md and the polish
- * message bounded. Matches the hub-side config normalization. */
-export const RESUME_PROMPT_MAX_LENGTH = 8000;
 
 /**
  * Authorship marker stamped into an AI-polished `## Summary` section, keyed
@@ -1274,6 +1272,10 @@ function slugify(value: string): string {
  * which engine backs it. Leads with the project and its description, then
  * states concrete, workspace-grounded abilities (run the tests, keep the
  * build green, ship releases) derived only from what the scan actually found.
+ *
+ * This is the behavior the SDK's `DEFAULT_RESUME_PROMPT` describes — when
+ * changing the shape or tone of this template, update that text so the
+ * dashboard's default prompt stays truthful.
  */
 function buildSummary(input: AgentResumeInput, profile: WorkspaceProfile): string {
   const projectName = profile.projectName ?? workspaceLabel(input.cwd);

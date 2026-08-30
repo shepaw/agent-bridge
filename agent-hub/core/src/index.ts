@@ -49,7 +49,7 @@ export type {
   PeerServiceConfig,
   TunnelConfig,
 } from './config.js';
-export { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from './config.js';
+export { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT, DEFAULT_RESUME_PROMPT } from './config.js';
 
 // ── peer service (shepaw://peer responder + agent-host proxy) ──────
 export {

@@ -17,6 +17,10 @@
 
 export * from './types.js';
 export * from './jsonrpc.js';
+export {
+  DEFAULT_RESUME_PROMPT,
+  RESUME_PROMPT_MAX_LENGTH,
+} from './resume.js';
 export { ConversationManager } from './conversation.js';
 export type { ConversationManagerOptions } from './conversation.js';
 export { ACPDirectiveStreamParser } from './directive-parser.js';

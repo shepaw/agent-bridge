@@ -92,6 +92,7 @@ import type {
   GroupChatMember,
   ResumePromptSetParams,
   ResumeRebuildParams,
+  ResumeSummarySetParams,
 } from './types.js';
 import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS, deriveBusyLevel } from './types.js';
 import type { SlashProviders } from './slash/types.js';
@@ -1331,6 +1332,9 @@ export class ACPAgentServer {
         case 'agent.resume.promptSet':
           await this.handleResumePromptSet(ws, msgId, params);
           return;
+        case 'agent.resume.summarySet':
+          await this.handleResumeSummarySet(ws, msgId, params);
+          return;
         case 'agent.commands.list':
           await this.handleCommandsList(ws, msgId, params);
           return;
@@ -2239,6 +2243,31 @@ export class ACPAgentServer {
   }
 
   /**
+   * Handle `agent.resume.summarySet` — replace the resume `## Summary` text
+   * directly, no chat turn involved. Callers pass the new Summary; the
+   * implementation writes it into resume.md and returns the fresh card.
+   */
+  private async handleResumeSummarySet(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const card = await this.onResumeSummarySet(
+        ((params ?? {}) as unknown) as ResumeSummarySetParams,
+      );
+      await wsSend(ws, jsonrpcResponse(msgId, { result: card }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+        }),
+      );
+    }
+  }
+
+  /**
    * Override point for `agent.resume.rebuild`. Default: return the current
    * card unchanged. Rebuilding implementations must return the fresh card so
    * the caller can refresh its metadata immediately. An optional `prompt`
@@ -2256,6 +2285,15 @@ export class ACPAgentServer {
    */
   async onResumePromptSet(_params: ResumePromptSetParams): Promise<AgentCard> {
     return this.getAgentCard();
+  }
+
+  /**
+   * Override point for `agent.resume.summarySet`. Default: reject — only
+   * resume-writing implementations can place the Summary. Implementations
+   * must return the fresh card after adopting the text.
+   */
+  async onResumeSummarySet(_params: ResumeSummarySetParams): Promise<AgentCard> {
+    throw new Error('agent.resume.summarySet is not supported by this agent');
   }
 
   private async handleCommandsList(

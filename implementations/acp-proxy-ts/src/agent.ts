@@ -36,6 +36,7 @@ import {
   type TaskContext,
   type ResumePromptSetParams,
   type ResumeRebuildParams,
+  type ResumeSummarySetParams,
 } from 'shepaw-acp-sdk';
 
 import { AcpSubprocess } from './acp-subprocess.js';
@@ -81,6 +82,7 @@ import {
   preserveAiSummary,
   readResumeFromStore,
   renderResumeMarkdown,
+  renderSummaryOnlyResumeMd,
   replaceResumeSummarySection,
   resolveResumePersistenceDir,
   resolveResumePrompt,
@@ -632,6 +634,44 @@ export class AcpProxyAgent extends ACPAgentServer {
    */
   override async onResumePromptSet(params: ResumePromptSetParams): Promise<AgentCard> {
     this.resumePromptOverride = normalizeResumePrompt(params.prompt);
+    return this.getAgentCard();
+  }
+
+  /**
+   * ACP `agent.resume.summarySet` — write a new resume Summary directly,
+   * bypassing any chat turn. This is the AI-polish write path: the hub lets
+   * the agent *generate* the text in a chat turn, but the write itself lands
+   * here via RPC so no Bash tool call (and therefore no permission approval)
+   * is ever involved. The document in the pouch is patched in place — only
+   * `## Summary` changes, gateway-derived sections and Self Notes stay — and
+   * the live card adopts the text immediately.
+   */
+  override async onResumeSummarySet(params: ResumeSummarySetParams): Promise<AgentCard> {
+    const summary = params.summary.trim();
+    if (summary.length === 0) {
+      throw new Error('summary must be a non-empty string');
+    }
+    if (!storeBackendConfigured(process.env)) {
+      throw new Error('no store backend configured — cannot persist resume summary');
+    }
+    const client = await resolveStoreClient(process.env, fetch);
+    if (client === undefined) {
+      throw new Error('no store backend configured — cannot persist resume summary');
+    }
+    const uri = resumeStoreUri(client.device, this.agentId);
+    const existing = await readResumeFromStore(client, uri);
+    if (existing === null) {
+      // No document yet — derive once so the Summary lands on top of the
+      // gateway-generated sections instead of a bare stub.
+      await this.rebuildResume();
+    }
+    const current = (await readResumeFromStore(client, uri)) ?? renderSummaryOnlyResumeMd('', summary);
+    const md = replaceResumeSummarySection(current, summary);
+    await writeResumeToStore(client, this.agentId, md);
+    // Record our own write's sha so per-turn adoption skips it.
+    this.lastResumeSha = await sha256Hex(new TextEncoder().encode(md));
+    this.resume = { ...this.resume, summary };
+    await this.notifyResumeChanged();
     return this.getAgentCard();
   }
 

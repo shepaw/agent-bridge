@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { RESUME_PROMPT_MAX_LENGTH } from 'shepaw-acp-sdk';
+
 import {
-  RESUME_PROMPT_MAX_LENGTH,
   aiSummaryMarker,
   composeAgentResume,
   normalizeResumePrompt,

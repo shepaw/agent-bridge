@@ -20,21 +20,53 @@ type Props = {
 };
 
 export function ResumePanel({ instance, onChanged }: Props) {
+  // The prompt the operator last saved; '' = never customized (editor shows
+  // the system default instead, which is not itself persisted).
   const savedPrompt = instance.resumePrompt ?? '';
   const [promptDraft, setPromptDraft] = useState(savedPrompt);
+  const [defaultPrompt, setDefaultPrompt] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
-  const [rebuildBusy, setRebuildBusy] = useState(false);
   const [polishBusy, setPolishBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [polishReply, setPolishReply] = useState<string | null>(null);
 
-  // Reset the draft when the instance (or its saved prompt) changes.
+  // Reset the draft when the instance (or its saved prompt) changes. An empty
+  // saved prompt pre-fills the system default; the user's latest edit wins
+  // once they have saved a customization.
   useEffect(() => {
-    setPromptDraft(instance.resumePrompt ?? '');
-  }, [instance.id, instance.resumePrompt]);
+    setPromptDraft(savedPrompt);
+  }, [instance.id, savedPrompt]);
 
-  const dirty = promptDraft !== savedPrompt;
+  // Hub-level system default — fetched once, pre-filled into the editor when
+  // nothing is customized; polish falls back to it too.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .instances.meta()
+      .then((m) => {
+        if (!cancelled) setDefaultPrompt(m.defaultResumePrompt ?? '');
+      })
+      .catch(() => {
+        /* non-fatal: editor just shows an empty draft */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // The default arrives asynchronously — drop it into an untouched editor
+  // once fetched so the user can edit from it.
+  useEffect(() => {
+    if (savedPrompt.length === 0 && defaultPrompt.length > 0) {
+      setPromptDraft((d) => (d.length === 0 ? defaultPrompt : d));
+    }
+  }, [savedPrompt, defaultPrompt]);
+
+  /** What the editor should render when nothing is customized. */
+  const effectivePrompt = savedPrompt.length > 0 ? savedPrompt : defaultPrompt;
+
+  const dirty = promptDraft !== effectivePrompt;
   const offline = instance.card === null || instance.card === undefined;
 
   const run = async (fn: () => Promise<void>): Promise<void> => {
@@ -51,7 +83,10 @@ export function ResumePanel({ instance, onChanged }: Props) {
     run(async () => {
       setSaveBusy(true);
       try {
-        await api.instances.update(instance.id, { resumePrompt: promptDraft });
+        // Draft restored to the exact system default → drop the customization
+        // entirely (keeps "no custom prompt" = default generation semantics).
+        const toSave = promptDraft === defaultPrompt ? '' : promptDraft;
+        await api.instances.update(instance.id, { resumePrompt: toSave });
         setNotice(t('detail.promptSaved'));
         onChanged();
       } finally {
@@ -63,36 +98,27 @@ export function ResumePanel({ instance, onChanged }: Props) {
     run(async () => {
       setSaveBusy(true);
       try {
-        setPromptDraft('');
+        setPromptDraft(defaultPrompt);
         await api.instances.update(instance.id, { resumePrompt: '' });
-        setNotice(t('detail.promptCleared'));
+        setNotice(t('detail.promptReset'));
         onChanged();
       } finally {
         setSaveBusy(false);
       }
     });
 
-  const rebuild = (): Promise<void> =>
-    run(async () => {
-      setRebuildBusy(true);
-      try {
-        await api.instances.rebuildResume(instance.id);
-        onChanged();
-        setNotice(t('detail.rebuildDone', { time: new Date().toLocaleTimeString() }));
-      } finally {
-        setRebuildBusy(false);
-      }
-    });
-
   const polish = (): Promise<void> =>
     run(async () => {
-      if (promptDraft.trim().length === 0 && savedPrompt.trim().length === 0) {
+      if (promptDraft.trim().length === 0) {
         setError(t('detail.polishNeedsPrompt'));
         return;
       }
       setPolishBusy(true);
       setPolishReply(null);
       try {
+        // Unsaved draft edits are polished server-side from the saved prompt
+        // (or the system default); save first so the edit takes effect.
+        if (dirty) await api.instances.update(instance.id, { resumePrompt: promptDraft === defaultPrompt ? '' : promptDraft });
         const result = await api.instances.polishResume(instance.id);
         onChanged();
         setPolishReply(result.reply || null);
@@ -126,12 +152,16 @@ export function ResumePanel({ instance, onChanged }: Props) {
       {/* ── 提示词编辑器 ─────────────────────────────────────── */}
       <div style={card}>
         <div style={label}>{t('detail.resumePromptLabel')}</div>
-        <p style={hint}>{t('detail.resumePromptHint')}</p>
+        <p style={hint}>
+          {savedPrompt.length > 0
+            ? t('detail.resumePromptHintCustom')
+            : t('detail.resumePromptHint')}
+        </p>
         <textarea
           value={promptDraft}
           maxLength={RESUME_PROMPT_MAX_LENGTH}
           rows={8}
-          placeholder={t('detail.resumePromptPlaceholder')}
+          placeholder={defaultPrompt || t('detail.resumePromptPlaceholder')}
           onChange={(e) => setPromptDraft(e.target.value)}
           style={textarea}
         />
@@ -158,23 +188,9 @@ export function ResumePanel({ instance, onChanged }: Props) {
         </div>
       </div>
 
-      {/* ── 重新生成 ─────────────────────────────────────────── */}
+      {/* ── 重新生成（先重扫工作区刷新能力，再 AI 重写 Summary） ── */}
       <div style={card}>
         <div style={actionRow}>
-          <div style={{ flex: 1 }}>
-            <div style={label}>{t('detail.rebuildDeterministic')}</div>
-            <p style={hint}>{t('detail.rebuildDeterministicHint')}</p>
-          </div>
-          <button
-            type="button"
-            style={secondaryBtn}
-            disabled={rebuildBusy || offline}
-            onClick={() => void rebuild()}
-          >
-            {rebuildBusy ? t('detail.rebuilding') : t('detail.rebuildDeterministic')}
-          </button>
-        </div>
-        <div style={{ ...actionRow, borderTop: '1px solid #313244', paddingTop: 12 }}>
           <div style={{ flex: 1 }}>
             <div style={label}>{t('detail.polishResume')}</div>
             <p style={hint}>{t('detail.polishResumeHint')}</p>
@@ -182,7 +198,7 @@ export function ResumePanel({ instance, onChanged }: Props) {
           <button
             type="button"
             style={primaryBtn}
-            disabled={polishBusy || offline || (promptDraft.trim().length === 0 && savedPrompt.trim().length === 0)}
+            disabled={polishBusy || offline || promptDraft.trim().length === 0}
             onClick={() => void polish()}
           >
             {t('detail.polishResume')}

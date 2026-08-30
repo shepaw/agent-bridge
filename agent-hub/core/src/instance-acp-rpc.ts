@@ -378,24 +378,41 @@ export interface ResumePolishMessageInput {
 
 /**
  * Compose the single-turn instruction sent to the agent during
- * "AI 润色简历". The agent reads its current resume, rewrites only the
- * `## Summary` section per the operator's prompt, and writes it back through
- * the `agents.resume-set` shim — the gateway's turn-end adoption then picks
- * the new text up automatically.
+ * "AI 润色简历". The agent rewrites the `## Summary` section per the
+ * operator's prompt and outputs the new text between resume markers — it
+ * does NOT write anything itself. The hub then applies the text via the
+ * `agent.resume.summarySet` RPC, so the turn involves no tool calls and
+ * therefore no permission approvals (an approval mid-polish previously
+ * stalled the turn until the chat timeout).
  */
 export function buildResumePolishMessage(input: ResumePolishMessageInput): string {
   return [
     `你是实例「${input.label ?? input.agentId}」(agent_id: ${input.agentId})，工作区是 ${input.cwd}。`,
-    '请按以下步骤更新你自己的简历（只做这三步，不要做其他任何事）：',
-    `1. 运行 \`shepaw context agents.resume-get --id ${input.agentId}\` 读取你当前的简历。`,
-    '2. 严格根据下面的自定义提示词，重写简历的 `## Summary` 部分（保持基于工作区的真实事实，不要编造项目、技术栈或经历）。',
-    `3. 运行 \`shepaw context agents.resume-set --id ${input.agentId} --text "<重写后的 Summary 全文>"\` 完成写入。`,
+    '请根据下面的自定义提示词，重写你简历的 `## Summary` 部分（保持基于工作区的真实事实，不要编造项目、技术栈或经历）。',
+    '只输出重写后的 Summary 全文，用下面的标记包裹，不要运行任何命令、不要写任何文件：',
+    '',
+    RESUME_MARK_BEGIN,
+    '<重写后的 Summary 全文>',
+    RESUME_MARK_END,
     '',
     '【自定义提示词】',
     input.prompt,
-    '',
-    '完成后只需简短确认你写入的新 Summary 第一行。',
   ].join('\n');
+}
+
+/** Delimiters around the AI-generated Summary in the polish turn's reply. */
+const RESUME_MARK_BEGIN = '<<<RESUME_SUMMARY_BEGIN>>>';
+const RESUME_MARK_END = '<<<RESUME_SUMMARY_END>>>';
+
+/** Extract the Summary text between the polish markers from a chat reply. */
+export function extractPolishedSummary(reply: string): string | null {
+  const begin = reply.indexOf(RESUME_MARK_BEGIN);
+  const end = reply.indexOf(RESUME_MARK_END);
+  if (begin < 0 || end < 0 || end <= begin) return null;
+  const text = reply
+    .slice(begin + RESUME_MARK_BEGIN.length, end)
+    .trim();
+  return text.length > 0 ? text : null;
 }
 
 export interface ResumePolishResult {
@@ -408,10 +425,12 @@ export interface ResumePolishResult {
 }
 
 /**
- * AI resume polish: drive one chat turn that makes the agent rewrite its own
- * Summary per the custom prompt, then return the adopted card. The gateway
- * adopts the rewritten resume at turn end (before onDone resolves), so the
- * returned card already reflects the AI text.
+ * AI resume polish: drive one chat turn that makes the agent *draft* a new
+ * Summary per the custom prompt, then apply the drafted text via
+ * `agent.resume.summarySet`. The write is a direct RPC — no Bash tool call,
+ * no permission approval — so the turn can no longer stall on review.
+ * Falls back to the legacy chat-driven `agents.resume-set` shim flow when
+ * the connected gateway predates `summarySet`.
  */
 export async function polishInstanceResume(
   instanceId: string,
@@ -422,9 +441,9 @@ export async function polishInstanceResume(
   opts: { timeoutMs?: number } = {},
 ): Promise<ResumePolishResult> {
   const message = buildResumePolishMessage({ agentId, prompt, cwd, label });
-  // A full LLM turn (read + write + confirm) is far slower than the 60s chat
-  // probe — give it 3 minutes. The `hub-resume_` prefix keeps these sessions
-  // greppable by origin in session lists.
+  // A full LLM turn (draft-only, no tool calls) is still slower than the 60s
+  // chat probe — give it 3 minutes. The `hub-resume_` prefix keeps these
+  // sessions greppable by origin in session lists.
   const chat = await chatInstanceAcpRpc(instanceId, message, {
     timeoutMs: opts.timeoutMs ?? 180_000,
     sessionPrefix: 'hub-resume',
@@ -432,8 +451,23 @@ export async function polishInstanceResume(
   if (!chat.ok) {
     return { ok: false, summary: null, capabilities: [], reply: chat.reply, error: chat.error, elapsedMs: chat.elapsedMs };
   }
-  // The adoption happened inside the gateway during the turn; the card cache
-  // may predate it, so drop it and pull fresh.
+
+  const polished = extractPolishedSummary(chat.reply);
+  if (polished !== null) {
+    const applied = await withAcpClient(instanceId, (client) => client.resumeSummarySet(polished));
+    if (applied === undefined) {
+      return {
+        ok: false,
+        summary: null,
+        capabilities: [],
+        reply: chat.reply,
+        error: '网关不支持直接写入简历（agent.resume.summarySet），请升级实例网关后重试。',
+        elapsedMs: chat.elapsedMs,
+      };
+    }
+  }
+  // summarySet adopts the text inside the gateway; the card cache may predate
+  // it, so drop it and pull fresh. (Legacy shim flow adopted at turn end.)
   invalidateInstanceCardCache(instanceId);
   const card = await getInstanceAgentCard(instanceId);
   return {

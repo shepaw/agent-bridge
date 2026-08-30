@@ -18,6 +18,8 @@ export interface HubMeta {
   lastTunnelSecretHint: string | null;
   /** Per-engine, per-key masked credential hints (e.g. "sk-an***789") */
   credentialHints: Partial<Record<AgentEngine, Record<string, string>>>;
+  /** 系统默认简历生成提示词 — editor pre-fill when no custom prompt is saved. */
+  defaultResumePrompt?: string;
 }
 
 export interface InstanceStatus {

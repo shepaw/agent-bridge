@@ -17,7 +17,7 @@ import {
   normalizeResumePromptConfig,
   updateInstance,
 } from '../src/config.js';
-import { buildResumePolishMessage } from '../src/instance-acp-rpc.js';
+import { buildResumePolishMessage, extractPolishedSummary } from '../src/instance-acp-rpc.js';
 
 let home: string;
 let prevHome: string | undefined;
@@ -112,18 +112,40 @@ describe('instance resumePrompt persistence', () => {
 });
 
 describe('buildResumePolishMessage', () => {
-  it('interpolates agent id, cwd, label and the verbatim prompt with both shim commands', () => {
+  it('interpolates agent id, cwd, label and the verbatim prompt as a draft-only turn', () => {
     const msg = buildResumePolishMessage({
       agentId: 'acp_agent_x',
       prompt: '简洁中文，突出构建。',
       cwd: '/work/demo',
       label: '演示实例',
     });
-    expect(msg).toContain('agents.resume-get --id acp_agent_x');
-    expect(msg).toContain('agents.resume-set --id acp_agent_x');
+    // Draft-only: no shim commands, no writes — the hub applies the text via
+    // agent.resume.summarySet so no tool call (or approval) happens.
+    expect(msg).not.toContain('agents.resume-get');
+    expect(msg).not.toContain('agents.resume-set');
+    expect(msg).toContain('<<<RESUME_SUMMARY_BEGIN>>>');
+    expect(msg).toContain('<<<RESUME_SUMMARY_END>>>');
+    expect(msg).toContain('不要运行任何命令');
     expect(msg).toContain('/work/demo');
     expect(msg).toContain('演示实例');
     expect(msg).toContain('【自定义提示词】\n简洁中文，突出构建。');
+  });
+
+  it('extractPolishedSummary pulls the text between the markers and trims it', () => {
+    const reply = [
+      '好的，以下是我重写的 Summary：',
+      '<<<RESUME_SUMMARY_BEGIN>>>',
+      '  负责构建流水线与测试修复。  ',
+      '<<<RESUME_SUMMARY_END>>>',
+      '已按要求输出。',
+    ].join('\n');
+    expect(extractPolishedSummary(reply)).toBe('负责构建流水线与测试修复。');
+  });
+
+  it('extractPolishedSummary returns null when markers are missing or inverted', () => {
+    expect(extractPolishedSummary('no markers here')).toBeNull();
+    expect(extractPolishedSummary('<<<RESUME_SUMMARY_END>>>before<<<RESUME_SUMMARY_BEGIN>>>')).toBeNull();
+    expect(extractPolishedSummary('<<<RESUME_SUMMARY_BEGIN>>>\n<<<RESUME_SUMMARY_END>>>')).toBeNull();
   });
 
   it('falls back to the agent id when no label is given', () => {

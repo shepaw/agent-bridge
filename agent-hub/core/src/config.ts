@@ -32,6 +32,8 @@ import {
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
+import { RESUME_PROMPT_MAX_LENGTH } from 'shepaw-acp-sdk';
+
 import { resolveEngineAvailability } from './engine-setup.js';
 import {
   hubConfigPath,
@@ -1145,8 +1147,12 @@ function parseEnvVarsConfig(v: unknown): Record<string, string> {
   return out;
 }
 
-/** Hard cap for a custom resume prompt — keeps hub.json and resume.md bounded. */
-export const RESUME_PROMPT_MAX_LENGTH = 8000;
+/**
+ * Shared resume-prompt constants live in `shepaw-acp-sdk` (both this package
+ * and the gateway depend on it) so the dashboard default and the gateway's
+ * deterministic template stay in lockstep. Re-exported here for the hub API.
+ */
+export { DEFAULT_RESUME_PROMPT, RESUME_PROMPT_MAX_LENGTH } from 'shepaw-acp-sdk';
 
 /**
  * Shared normalization for `resumePrompt` (add / update / hub.json load):

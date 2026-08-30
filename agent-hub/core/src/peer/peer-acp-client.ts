@@ -670,6 +670,29 @@ export class PeerAcpClient {
     });
   }
 
+  /**
+   * Write a new resume Summary via `agent.resume.summarySet` — a direct RPC
+   * write, no chat turn and no tool-call approval involved. This is the
+   * AI-polish write path: the chat turn only *generates* the text. Resolves
+   * with the fresh card; undefined on timeout means the gateway predates the
+   * method (the caller falls back to the legacy chat-driven shim).
+   */
+  async resumeSummarySet(summary: string): Promise<Record<string, unknown> | undefined> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }, 15_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.resume.summarySet', params: { summary } });
+    });
+  }
+
   // ── internals ────────────────────────────────────────────────────
 
   private async ensureConnected(): Promise<void> {

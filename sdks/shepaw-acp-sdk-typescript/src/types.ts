@@ -430,6 +430,12 @@ export interface ResumePromptSetParams {
   prompt?: string;
 }
 
+/** `agent.resume.summarySet` params. */
+export interface ResumeSummarySetParams {
+  /** The new `## Summary` text. Empty/whitespace-only is rejected. */
+  summary: string;
+}
+
 // ── JSON-RPC envelopes (generic shapes) ────────────────────────────
 
 export interface JsonRpcRequest {

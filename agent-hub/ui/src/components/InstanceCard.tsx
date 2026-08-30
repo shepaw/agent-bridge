@@ -1,6 +1,6 @@
 import type { Instance } from '../api/types.js';
 import { api } from '../api/client.js';
-import { availabilityColor, busyColor, busyLabel, formatRuntimeSummary } from '../utils/runtimeStatus.js';
+import { availabilityColor, availabilityLabel, busyColor, busyLabel } from '../utils/runtimeStatus.js';
 import { EngineIcon } from './EngineIcon.js';
 import { useState } from 'react';
 import { useI18n } from '../i18n/index.js';
@@ -41,17 +41,18 @@ export function InstanceCard({ instance: p, onSelect, onReload }: InstanceCardPr
         <strong style={{ flex: 1, cursor: 'pointer' }} onClick={() => onSelect(p.id)}>
           {p.label}
         </strong>
-        {p.status.busyLevel !== null && p.status.availability === 'online' && (
-          <code style={{ ...badge, background: busyColor(p.status), color: '#1e1e2e' }}>
-            {busyLabel(p.status)}
-          </code>
-        )}
-        <code style={badge} title={t('card.engine')}>{p.engine}</code>
       </div>
 
       <div style={meta}>
-        <span>{formatRuntimeSummary(p.status)}</span>
-        <span>ID: <code>{p.id}</code></span>
+        <span style={statusChip(availabilityColor(p.status))}>
+          {availabilityLabel(p.status)}
+        </span>
+        {p.status.busyLevel !== null && p.status.availability === 'online' && (
+          <span style={statusChip(busyColor(p.status))}>
+            {busyLabel(p.status)}
+          </span>
+        )}
+        {p.status.probeError && <span>{p.status.probeError}</span>}
         <span>{t('card.bind')}: <code>{p.host}:{p.port}</code></span>
       </div>
 
@@ -97,13 +98,16 @@ const meta: React.CSSProperties = {
   gap: '6px 16px',
 };
 
-const badge: React.CSSProperties = {
-  fontSize: 11,
-  padding: '2px 6px',
-  background: '#313244',
-  borderRadius: 4,
-  color: '#cdd6f4',
-};
+function statusChip(color: string): React.CSSProperties {
+  return {
+    fontSize: 11,
+    padding: '2px 8px',
+    borderRadius: 999,
+    background: `${color}22`,
+    color,
+    border: `1px solid ${color}44`,
+  };
+}
 
 function dot(status: Instance['status']): React.CSSProperties {
   return {
