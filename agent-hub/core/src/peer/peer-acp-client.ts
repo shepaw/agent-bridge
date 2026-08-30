@@ -632,7 +632,7 @@ export class PeerAcpClient {
    * Resolves with the fresh card object (undefined on failure/timeout). The
    * timeout is generous — re-scanning the workspace can take a few seconds.
    */
-  async resumeRebuild(): Promise<Record<string, unknown> | undefined> {
+  async resumeRebuild(params?: { prompt?: string }): Promise<Record<string, unknown> | undefined> {
     await this.ensureConnected();
     const id = this.rpcId++;
     return new Promise((resolve) => {
@@ -644,7 +644,29 @@ export class PeerAcpClient {
         clearTimeout(timer);
         resolve(result);
       });
-      this.send({ jsonrpc: '2.0', id, method: 'agent.resume.rebuild', params: {} });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.resume.rebuild', params: params ?? {} });
+    });
+  }
+
+  /**
+   * Set/clear the agent's custom resume prompt via `agent.resume.promptSet`.
+   * A pure memory write on the gateway — 8 s timeout is plenty. Resolves with
+   * the (unchanged) card, or undefined on failure (e.g. an older gateway
+   * binary without the method — callers treat that as non-fatal).
+   */
+  async resumePromptSet(prompt: string): Promise<Record<string, unknown> | undefined> {
+    await this.ensureConnected();
+    const id = this.rpcId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(undefined);
+      }, 8_000);
+      this.pendingRequests.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+      this.send({ jsonrpc: '2.0', id, method: 'agent.resume.promptSet', params: { prompt } });
     });
   }
 

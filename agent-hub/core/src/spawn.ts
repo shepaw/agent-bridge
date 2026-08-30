@@ -305,6 +305,11 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       ...(instance.sessionMode !== undefined && instance.sessionMode.length > 0
         ? { PAW_ACP_SESSION_MODE: instance.sessionMode }
         : {}),
+      // Custom resume prompt (dashboard 简历生成提示词). Multi-line by
+      // nature — travels as env, never as an extraArg (space-split).
+      ...(instance.resumePrompt !== undefined && instance.resumePrompt.trim().length > 0
+        ? { SHEPAW_RESUME_PROMPT: instance.resumePrompt }
+        : {}),
     };
     if (instance.engine === 'zcode') {
       childEnv = sanitizeZcodeHubEnv(childEnv, ownedEngineEnv);

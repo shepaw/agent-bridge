@@ -54,6 +54,8 @@ export interface Instance {
   tunnel?: TunnelConfig;
   /** Native ACP session mode for this engine (e.g. auto, agent, acceptEdits). */
   sessionMode?: string;
+  /** 自定义简历生成提示词 (custom resume-generation prompt). Absent → none. */
+  resumePrompt?: string;
   /** Only key names are exposed — values are never returned by the API. */
   envVarKeys: string[];
   status: InstanceStatus;
@@ -352,6 +354,20 @@ export interface UpdateInstanceInput {
   envVars?: Record<string, string>;
   clearEnvVars?: boolean;
   sessionMode?: string;
+  /** 自定义简历生成提示词；'' clears. */
+  resumePrompt?: string;
+}
+
+/** Response of POST /api/instances/:id/resume/polish (AI resume polish). */
+export interface ResumePolishResult {
+  ok: boolean;
+  /** Adopted agent-card description (the new AI-written Summary); null when unavailable. */
+  summary: string | null;
+  capabilities: string[];
+  /** What the agent said during the polish turn (for the disclosure preview). */
+  reply: string;
+  error: string | null;
+  elapsedMs: number;
 }
 
 /** Directory entry from GET /api/fs/browse. */

@@ -16,6 +16,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -76,6 +77,14 @@ export interface AgentResumeInput {
   readonly engineDisplayName: string;
   readonly agentName: string;
   readonly cwd: string;
+  /**
+   * Operator-authored instructions for how this agent's resume should read
+   * (dashboard "简历生成提示词"). Rendered verbatim into resume.md under
+   * "## 自定义要求 / Custom Instructions" and used to decide whether an
+   * AI-polished Summary survives a deterministic rebuild. Absent → the
+   * gateway derives the resume exactly as before.
+   */
+  readonly resumePrompt?: string;
 }
 
 export interface PersistAgentResumeMeta {
@@ -98,9 +107,60 @@ const RESUME_CONFIG_DIR_NAME = 'shepaw-acp-proxy-gateway';
 export const RESUME_NOTES_START = '<!-- SHEPAW_RESUME_NOTES_START -->';
 export const RESUME_NOTES_END = '<!-- SHEPAW_RESUME_NOTES_END -->';
 
+/** Hard cap for a custom resume prompt — keeps resume.md and the polish
+ * message bounded. Matches the hub-side config normalization. */
+export const RESUME_PROMPT_MAX_LENGTH = 8000;
+
+/**
+ * Authorship marker stamped into an AI-polished `## Summary` section, keyed
+ * by the first 8 hex chars of sha256(normalized prompt). A deterministic
+ * rebuild preserves an AI-authored Summary only when this hash matches the
+ * prompt currently in effect — change the prompt and the summary reverts to
+ * the deterministic template on the next rebuild.
+ */
+export function aiSummaryMarker(promptSha8: string): string {
+  return `<!-- SHEPAW_RESUME_AI:${promptSha8} -->`;
+}
+
+const AI_SUMMARY_MARKER_RE = /<!--\s*SHEPAW_RESUME_AI:([0-9a-f]{8})\s*-->/;
+
 /** Fixed pouch location for an agent's resume document. */
 export function resumeStoreUri(device: string, agentId: string): string {
   return `store://files/${device}/${agentId}/resume.md`;
+}
+
+/**
+ * Normalize an operator-supplied resume prompt: trim, drop empty, cap length.
+ * Returns `undefined` when nothing usable remains — callers treat that as
+ * "no custom prompt" and keep the default behavior.
+ */
+export function normalizeResumePrompt(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.length > RESUME_PROMPT_MAX_LENGTH
+    ? trimmed.slice(0, RESUME_PROMPT_MAX_LENGTH)
+    : trimmed;
+}
+
+/** sha256(prompt) first 8 hex chars — stable id for the AI-authorship marker. */
+export function resumePromptFingerprint(prompt: string): string {
+  return createHash('sha256').update(prompt, 'utf8').digest('hex').slice(0, 8);
+}
+
+/**
+ * Markdown lines for the "自定义要求 / Custom Instructions" section — the
+ * operator's prompt rendered verbatim so the agent reads its own instructions
+ * on every future self-edit. Only emitted when a prompt is set.
+ */
+export function renderCustomPromptSection(prompt: string): string[] {
+  return [
+    '## 自定义要求 / Custom Instructions',
+    aiSummaryMarker(resumePromptFingerprint(prompt)),
+    '',
+    prompt,
+    '',
+  ];
 }
 
 /** Extract the durable self-notes between the markers; '' when absent. */
@@ -585,6 +645,7 @@ export function renderResumeMarkdown(
     '## Capabilities',
     ...resume.capabilities.map((c) => `- ${c}`),
     '',
+    ...(input.resumePrompt !== undefined ? renderCustomPromptSection(input.resumePrompt) : []),
     '## Summary',
     resume.summary,
     '',
@@ -692,6 +753,33 @@ export async function loadAgentResume(dir: string, agentId: string): Promise<Age
 export function isResumeRebuildForced(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = (env.SHEPAW_RESUME_REBUILD ?? '').trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
+}
+
+/**
+ * Spawn-time fallback for the custom resume prompt (set by the hub from the
+ * instance config). Live updates arrive via `agent.resume.promptSet` instead.
+ */
+export function resolveResumePrompt(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return normalizeResumePrompt(env.SHEPAW_RESUME_PROMPT);
+}
+
+/**
+ * Deterministic-rebuild Summary policy: when the previous document's Summary
+ * was authored by the AI-polish flow under the *same* prompt that is currently
+ * in effect, keep that text — the operator asked for it and the prompt hasn't
+ * changed. Otherwise (no marker, or the prompt changed) the fresh
+ * deterministic summary wins.
+ */
+export function preserveAiSummary(
+  previousMd: string,
+  freshSummary: string,
+  promptSha8: string,
+): string {
+  const previous = extractResumeSummary(previousMd);
+  if (previous === null) return freshSummary;
+  const marker = AI_SUMMARY_MARKER_RE.exec(previous);
+  if (marker === null || marker[1] !== promptSha8) return freshSummary;
+  return previous;
 }
 
 // ── workspace scanning internals ───────────────────────────────────

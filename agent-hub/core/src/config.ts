@@ -206,6 +206,15 @@ export interface InstanceConfig {
    */
   readonly sessionMode?: string;
   /**
+   * 自定义简历生成提示词 — operator-authored instructions for how this agent's
+   * resume should read. Rendered into the agent's resume.md under
+   * "## 自定义要求 / Custom Instructions" and used by the AI-polish flow.
+   * Deliberately stored plaintext (it is an instruction, not a credential)
+   * so the dashboard can read it back. Injected as `SHEPAW_RESUME_PROMPT`
+   * at spawn; absent → gateway default behavior.
+   */
+  readonly resumePrompt?: string;
+  /**
    * Per-instance engine credentials (API keys, auth tokens, base URLs).
    * Values are stored AES-256-GCM encrypted via `crypto.ts`; they are
    * decrypted only at process-spawn time and injected as env vars into the
@@ -614,6 +623,7 @@ export function addInstance(
   const normalized: InstanceConfig = {
     ...rest,
     ...(sessionMode !== undefined && { sessionMode }),
+    ...normalizeResumePromptConfig(rest.resumePrompt),
     cwd,
     ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
     envVars: plainEnvVars && Object.keys(plainEnvVars).length > 0
@@ -805,6 +815,8 @@ export function updateInstance(
     ...rest,
     // Normalize cwd if changed so relative paths resolve consistently.
     cwd: nextCwd,
+    // Empty string → key removed (no prompt); valid string → trimmed.
+    ...(rest.resumePrompt !== undefined ? normalizeResumePromptConfig(rest.resumePrompt) : {}),
     envVars,
   };
   if (nextAdditional.length > 0) {
@@ -978,6 +990,7 @@ function loadExisting(path: string): HubConfig {
       tunnel: parseTunnelConfig(p.tunnel),
       ...(typeof p.sessionMode === 'string' && p.sessionMode.trim().length > 0
         && { sessionMode: p.sessionMode.trim() }),
+      ...normalizeResumePromptConfig(p.resumePrompt),
       // Backwards compat: old instances without envVars default to empty.
       envVars: parseEnvVarsConfig(p.envVars),
       ...(p.enabled === false && { enabled: false as const }),
@@ -1130,6 +1143,30 @@ function parseEnvVarsConfig(v: unknown): Record<string, string> {
     if (typeof val === 'string') out[k] = val;
   }
   return out;
+}
+
+/** Hard cap for a custom resume prompt — keeps hub.json and resume.md bounded. */
+export const RESUME_PROMPT_MAX_LENGTH = 8000;
+
+/**
+ * Shared normalization for `resumePrompt` (add / update / hub.json load):
+ * non-string or whitespace-only → omitted (key absent = no prompt); longer
+ * than the cap → rejected loudly (the operator should trim, not lose text
+ * silently).
+ */
+export function normalizeResumePromptConfig(
+  value: unknown,
+): { resumePrompt: string } | Record<string, never> {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'string') {
+    throw new Error('"resumePrompt" must be a string.');
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return {};
+  if (trimmed.length > RESUME_PROMPT_MAX_LENGTH) {
+    throw new Error(`"resumePrompt" is too long (max ${RESUME_PROMPT_MAX_LENGTH} characters).`);
+  }
+  return { resumePrompt: trimmed };
 }
 
 function parseTunnelConfig(v: unknown): TunnelConfig | undefined {

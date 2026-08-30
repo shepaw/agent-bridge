@@ -236,13 +236,35 @@ export async function getInstanceAgentCard(instanceId: string): Promise<Instance
  * and refresh the cached card immediately. Returns `null` when the gateway is
  * offline or the agent doesn't support re-derivation.
  */
-export async function rebuildInstanceResume(instanceId: string): Promise<InstanceAgentCard | null> {
+export async function rebuildInstanceResume(
+  instanceId: string,
+  prompt?: string,
+): Promise<InstanceAgentCard | null> {
   try {
-    const card = parseAgentCard(await withAcpClient(instanceId, (client) => client.resumeRebuild()));
+    const card = parseAgentCard(
+      await withAcpClient(instanceId, (client) => client.resumeRebuild(prompt !== undefined ? { prompt } : undefined)),
+    );
     if (card !== null) cardCache.set(instanceId, { at: Date.now(), card });
     return card;
   } catch {
     cardCache.delete(instanceId);
+    return null;
+  }
+}
+
+/**
+ * Live-apply a custom resume prompt to a running gateway
+ * (`agent.resume.promptSet`) without rebuilding. Best-effort: returns the
+ * fresh card, or `null` when the gateway is offline / the binary predates
+ * the method (the spawn-time env fallback still applies next start).
+ */
+export async function setInstanceResumePrompt(
+  instanceId: string,
+  prompt: string,
+): Promise<InstanceAgentCard | null> {
+  try {
+    return parseAgentCard(await withAcpClient(instanceId, (client) => client.resumePromptSet(prompt)));
+  } catch {
     return null;
   }
 }
@@ -261,12 +283,12 @@ export interface InstanceChatTestResult {
 export async function chatInstanceAcpRpc(
   instanceId: string,
   message: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; sessionPrefix?: string } = {},
 ): Promise<InstanceChatTestResult> {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const started = Date.now();
   const taskId = randomUUID();
-  const sessionId = `hub-test_${taskId}`;
+  const sessionId = `${opts.sessionPrefix ?? 'hub-test'}_${taskId}`;
 
   try {
     const reply = await withAcpClient(instanceId, async (client) => {
@@ -343,4 +365,88 @@ export async function getInstanceConversationHistory(
 ): Promise<SessionHistoryMessage[]> {
   const raw = await withAcpClient(instanceId, (client) => client.sessionHistory(sessionId));
   return raw.map(parseHistoryMessage).filter((message): message is SessionHistoryMessage => message !== null);
+}
+
+// ── resume AI polish ───────────────────────────────────────────────
+
+export interface ResumePolishMessageInput {
+  readonly agentId: string;
+  readonly prompt: string;
+  readonly cwd: string;
+  readonly label?: string;
+}
+
+/**
+ * Compose the single-turn instruction sent to the agent during
+ * "AI 润色简历". The agent reads its current resume, rewrites only the
+ * `## Summary` section per the operator's prompt, and writes it back through
+ * the `agents.resume-set` shim — the gateway's turn-end adoption then picks
+ * the new text up automatically.
+ */
+export function buildResumePolishMessage(input: ResumePolishMessageInput): string {
+  return [
+    `你是实例「${input.label ?? input.agentId}」(agent_id: ${input.agentId})，工作区是 ${input.cwd}。`,
+    '请按以下步骤更新你自己的简历（只做这三步，不要做其他任何事）：',
+    `1. 运行 \`shepaw context agents.resume-get --id ${input.agentId}\` 读取你当前的简历。`,
+    '2. 严格根据下面的自定义提示词，重写简历的 `## Summary` 部分（保持基于工作区的真实事实，不要编造项目、技术栈或经历）。',
+    `3. 运行 \`shepaw context agents.resume-set --id ${input.agentId} --text "<重写后的 Summary 全文>"\` 完成写入。`,
+    '',
+    '【自定义提示词】',
+    input.prompt,
+    '',
+    '完成后只需简短确认你写入的新 Summary 第一行。',
+  ].join('\n');
+}
+
+export interface ResumePolishResult {
+  readonly ok: boolean;
+  readonly summary: string | null;
+  readonly capabilities: readonly string[];
+  readonly reply: string;
+  readonly error: string | null;
+  readonly elapsedMs: number;
+}
+
+/**
+ * AI resume polish: drive one chat turn that makes the agent rewrite its own
+ * Summary per the custom prompt, then return the adopted card. The gateway
+ * adopts the rewritten resume at turn end (before onDone resolves), so the
+ * returned card already reflects the AI text.
+ */
+export async function polishInstanceResume(
+  instanceId: string,
+  agentId: string,
+  prompt: string,
+  cwd: string,
+  label?: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<ResumePolishResult> {
+  const message = buildResumePolishMessage({ agentId, prompt, cwd, label });
+  // A full LLM turn (read + write + confirm) is far slower than the 60s chat
+  // probe — give it 3 minutes. The `hub-resume_` prefix keeps these sessions
+  // greppable by origin in session lists.
+  const chat = await chatInstanceAcpRpc(instanceId, message, {
+    timeoutMs: opts.timeoutMs ?? 180_000,
+    sessionPrefix: 'hub-resume',
+  });
+  if (!chat.ok) {
+    return { ok: false, summary: null, capabilities: [], reply: chat.reply, error: chat.error, elapsedMs: chat.elapsedMs };
+  }
+  // The adoption happened inside the gateway during the turn; the card cache
+  // may predate it, so drop it and pull fresh.
+  invalidateInstanceCardCache(instanceId);
+  const card = await getInstanceAgentCard(instanceId);
+  return {
+    ok: true,
+    summary: card?.description ?? null,
+    capabilities: card?.capabilities ?? [],
+    reply: chat.reply,
+    error: null,
+    elapsedMs: chat.elapsedMs,
+  };
+}
+
+/** Drop the cached agent card for an instance (next read re-pulls). */
+export function invalidateInstanceCardCache(instanceId: string): void {
+  cardCache.delete(instanceId);
 }

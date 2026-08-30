@@ -90,6 +90,8 @@ import type {
   ChatToolDef,
   GroupChatContext,
   GroupChatMember,
+  ResumePromptSetParams,
+  ResumeRebuildParams,
 } from './types.js';
 import { DEFAULT_CAPABILITIES, DEFAULT_PROTOCOLS, deriveBusyLevel } from './types.js';
 import type { SlashProviders } from './slash/types.js';
@@ -1324,7 +1326,10 @@ export class ACPAgentServer {
           await this.handleGetCard(ws, msgId);
           return;
         case 'agent.resume.rebuild':
-          await this.handleResumeRebuild(ws, msgId);
+          await this.handleResumeRebuild(ws, msgId, params);
+          return;
+        case 'agent.resume.promptSet':
+          await this.handleResumePromptSet(ws, msgId, params);
           return;
         case 'agent.commands.list':
           await this.handleCommandsList(ws, msgId, params);
@@ -2193,9 +2198,35 @@ export class ACPAgentServer {
    * Default implementation is a no-op that returns the current card; gateway
    * implementations override `onResumeRebuild` to actually re-scan.
    */
-  private async handleResumeRebuild(ws: WebSocket, msgId: string | number): Promise<void> {
+  private async handleResumeRebuild(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
     try {
-      const card = await this.onResumeRebuild();
+      const card = await this.onResumeRebuild(params as ResumeRebuildParams | undefined);
+      await wsSend(ws, jsonrpcResponse(msgId, { result: card }));
+    } catch (err) {
+      await wsSend(
+        ws,
+        jsonrpcResponse(msgId, {
+          error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+        }),
+      );
+    }
+  }
+
+  /**
+   * Handle `agent.resume.promptSet` — set/clear the custom resume prompt on a
+   * running agent without rebuilding. Empty/missing prompt clears.
+   */
+  private async handleResumePromptSet(
+    ws: WebSocket,
+    msgId: string | number,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    try {
+      const card = await this.onResumePromptSet((params ?? {}) as ResumePromptSetParams);
       await wsSend(ws, jsonrpcResponse(msgId, { result: card }));
     } catch (err) {
       await wsSend(
@@ -2210,9 +2241,20 @@ export class ACPAgentServer {
   /**
    * Override point for `agent.resume.rebuild`. Default: return the current
    * card unchanged. Rebuilding implementations must return the fresh card so
-   * the caller can refresh its metadata immediately.
+   * the caller can refresh its metadata immediately. An optional `prompt`
+   * param carries the custom resume prompt to apply before the rebuild.
    */
-  async onResumeRebuild(): Promise<AgentCard> {
+  async onResumeRebuild(_params?: ResumeRebuildParams): Promise<AgentCard> {
+    return this.getAgentCard();
+  }
+
+  /**
+   * Override point for `agent.resume.promptSet`. Default: no-op returning the
+   * current card. Prompt-aware implementations store the prompt (or clear it
+   * on an empty value) and return the card unchanged — the resume text itself
+   * is only rewritten on the next rebuild or AI polish.
+   */
+  async onResumePromptSet(_params: ResumePromptSetParams): Promise<AgentCard> {
     return this.getAgentCard();
   }
 

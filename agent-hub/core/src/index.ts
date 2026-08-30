@@ -248,16 +248,25 @@ export type { InstanceSessionEntry } from './sessions.js';
 
 export {
   applyInstanceSessionMode,
+  buildResumePolishMessage,
   chatInstanceAcpRpc,
   closeInstanceAcpRpcClient,
   getInstanceAgentCard,
   getInstanceConversationHistory,
+  invalidateInstanceCardCache,
   InstanceGatewayOfflineError,
   listInstanceConversations,
   pingInstanceAcpRpc,
+  polishInstanceResume,
   rebuildInstanceResume,
+  setInstanceResumePrompt,
 } from './instance-acp-rpc.js';
-export type { InstanceAgentCard, InstanceChatTestResult } from './instance-acp-rpc.js';
+export type {
+  InstanceAgentCard,
+  InstanceChatTestResult,
+  ResumePolishMessageInput,
+  ResumePolishResult,
+} from './instance-acp-rpc.js';
 
 export {
   BUILTIN_ENGINE_ACP_COMMANDS,

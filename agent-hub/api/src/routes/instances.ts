@@ -6,7 +6,7 @@
  * POST   /api/instances               — register a new instance (starts by default)
  * GET    /api/instances/:id           — get one instance + state
  * DELETE /api/instances/:id           — unregister (stops first if running)
- * PATCH  /api/instances/:id           — update label/host/cwd/baseUrl/extraArgs
+ * PATCH  /api/instances/:id           — update label/host/cwd/baseUrl/extraArgs/resumePrompt
  * POST   /api/instances/:id/start     — start the gateway process
  * POST   /api/instances/:id/stop      — stop the gateway process
  * POST   /api/instances/restart-all   — restart all running instances
@@ -26,6 +26,8 @@
  * GET    /api/instances/:id/attachments — list peer-attachments on disk
  * DELETE /api/instances/:id/attachments — clear all peer-attachments
  * DELETE /api/instances/:id/attachments/:name — delete one peer-attachment by filename
+ * POST   /api/instances/:id/resume/rebuild — re-derive the workspace resume
+ * POST   /api/instances/:id/resume/polish  — AI resume polish (chat-driven)
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -53,7 +55,9 @@ import {
   listInstanceConversations,
   getInstanceConversationHistory,
   getInstanceAgentCard,
+  polishInstanceResume,
   rebuildInstanceResume,
+  setInstanceResumePrompt,
   InstanceGatewayOfflineError,
   closeInstanceAcpRpcClient,
   applyInstanceSessionMode,
@@ -480,12 +484,19 @@ instancesRouter.patch('/:id', async (req: Request, res: Response) => {
   try {
     const cfg = loadOrCreateHubConfig();
     const existing = getInstance(cfg, req.params.id!);
-    const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars, sessionMode, additionalDirectories } = req.body as Record<string, unknown>;
+    const { label, host, baseUrl, cwd, extraArgs, tunnel, clearTunnel, envVars, clearEnvVars, sessionMode, additionalDirectories, resumePrompt } = req.body as Record<string, unknown>;
     const patch: Parameters<typeof updateInstance>[2] = {};
     let nextSessionMode: string | undefined;
     if (typeof label === 'string') patch.label = label;
     if (typeof host === 'string') patch.host = host;
     if (typeof cwd === 'string') patch.cwd = cwd;
+    if (resumePrompt !== undefined) {
+      if (typeof resumePrompt !== 'string') {
+        res.status(400).json({ error: '"resumePrompt" must be a string.' });
+        return;
+      }
+      patch.resumePrompt = resumePrompt;
+    }
     if (additionalDirectories !== undefined) {
       if (!Array.isArray(additionalDirectories)) {
         res.status(400).json({ error: '"additionalDirectories" must be an array of strings.' });
@@ -548,6 +559,22 @@ instancesRouter.patch('/:id', async (req: Request, res: Response) => {
           console.warn(
             `[shepaw-hub] saved sessionMode="${nextSessionMode}" for ${updated.id} ` +
               `but live apply failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
+
+    // Live-apply a resume-prompt change to a running gateway so the next
+    // rebuild/polish uses it without a restart. Offline → skip silently; the
+    // spawn-time SHEPAW_RESUME_PROMPT env fallback still applies on next start.
+    if (patch.resumePrompt !== undefined) {
+      const runtime = await probeInstanceRuntime(updated);
+      if (runtime.availability === 'online' || runtime.availability === 'degraded') {
+        const applied = await setInstanceResumePrompt(updated.id, updated.resumePrompt ?? '');
+        if (applied === null) {
+          console.warn(
+            `[shepaw-hub] saved resumePrompt for ${updated.id} but live apply failed ` +
+              '(gateway may predate agent.resume.promptSet); env fallback applies on next start.',
           );
         }
       }
@@ -621,7 +648,8 @@ instancesRouter.post('/:id/resume/rebuild', async (req: Request, res: Response) 
   try {
     const cfg = loadOrCreateHubConfig();
     const p = getInstance(cfg, req.params.id!);
-    const card = await rebuildInstanceResume(p.id);
+    // Always pass the config prompt so a stale gateway override can't win.
+    const card = await rebuildInstanceResume(p.id, p.resumePrompt ?? '');
     if (card === null) {
       res.status(502).json({
         error: 'Resume rebuild failed: gateway offline or agent does not support agent.resume.rebuild.',
@@ -629,6 +657,46 @@ instancesRouter.post('/:id/resume/rebuild', async (req: Request, res: Response) 
       return;
     }
     res.json({ ok: true, card });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+/**
+ * POST /api/instances/:id/resume/polish — AI resume polish. Drives one chat
+ * turn that makes the agent rewrite its own Summary per the instance's
+ * custom resume prompt, returning the adopted card text.
+ */
+instancesRouter.post('/:id/resume/polish', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    const p = getInstance(cfg, req.params.id!);
+    const prompt = (p.resumePrompt ?? '').trim();
+    if (prompt.length === 0) {
+      res.status(400).json({
+        error: '未配置简历生成提示词：请先在简历页保存提示词，再使用 AI 润色。',
+      });
+      return;
+    }
+    // Fail fast on an offline gateway instead of hanging a 3-minute chat.
+    const runtime = await probeInstanceRuntime(p);
+    if (runtime.availability !== 'online' && runtime.availability !== 'degraded') {
+      closeInstanceAcpRpcClient(p.id);
+      res.status(502).json({
+        error: runtime.probeError ?? '网关离线，无法进行 AI 润色。请先启动实例。',
+      });
+      return;
+    }
+    const result = await polishInstanceResume(p.id, p.id, prompt, p.cwd, p.label);
+    if (!result.ok) {
+      res.status(502).json({ error: result.error ?? 'AI 润色失败。', reply: result.reply });
+      return;
+    }
+    res.json(result);
   } catch (err) {
     if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });

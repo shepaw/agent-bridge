@@ -415,6 +415,21 @@ export interface ModesSetCurrentResult {
   display_name?: string;
 }
 
+// ── resume (workspace-grounded agent self-description) ─────────────
+
+/** `agent.resume.rebuild` params — all optional. */
+export interface ResumeRebuildParams {
+  /** Custom resume prompt (dashboard 简历生成提示词) to apply before the
+   * rebuild. Empty string clears the prompt. Omitted → keep the current one. */
+  prompt?: string;
+}
+
+/** `agent.resume.promptSet` params. */
+export interface ResumePromptSetParams {
+  /** The new custom resume prompt. Empty string clears the override. */
+  prompt?: string;
+}
+
 // ── JSON-RPC envelopes (generic shapes) ────────────────────────────
 
 export interface JsonRpcRequest {

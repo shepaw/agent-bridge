@@ -37,6 +37,7 @@ import type {
   StoreWriteResult,
   SystemVersion,
   RestartAllResult,
+  ResumePolishResult,
 } from './types.js';
 
 const BASE = '/api';
@@ -177,6 +178,10 @@ export const api = {
     /** Re-derive the agent's workspace resume on the running gateway. */
     rebuildResume: (id: string): Promise<{ ok: boolean; card?: Instance['card'] }> =>
       request(`/instances/${id}/resume/rebuild`, { method: 'POST' }),
+
+    /** AI resume polish — one chat turn rewriting the Summary per the custom prompt. */
+    polishResume: (id: string): Promise<ResumePolishResult> =>
+      request(`/instances/${id}/resume/polish`, { method: 'POST' }),
 
     restartAll: (): Promise<{
       restarted: number;

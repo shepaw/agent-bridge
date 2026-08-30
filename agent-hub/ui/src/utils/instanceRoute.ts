@@ -6,6 +6,7 @@ export type InstanceDetailTab =
   | 'logs'
   | 'devices'
   | 'attachments'
+  | 'resume'
   | 'config';
 
 const INSTANCE_TABS: InstanceDetailTab[] = [
@@ -14,6 +15,7 @@ const INSTANCE_TABS: InstanceDetailTab[] = [
   'logs',
   'devices',
   'attachments',
+  'resume',
   'config',
 ];
 
@@ -41,7 +43,7 @@ export function parseInstanceHash(hash: string): InstanceRoute | null {
   }
 
   const withTab = hash.match(
-    /^#instance\/([^/]+)\/(overview|sessions|logs|devices|attachments|config)$/,
+    /^#instance\/([^/]+)\/(overview|sessions|logs|devices|attachments|resume|config)$/,
   );
   if (withTab) {
     return {

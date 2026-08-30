@@ -34,6 +34,8 @@ import {
   type SessionStoreOptions,
   type SlashCommandInfo,
   type TaskContext,
+  type ResumePromptSetParams,
+  type ResumeRebuildParams,
 } from 'shepaw-acp-sdk';
 
 import { AcpSubprocess } from './acp-subprocess.js';
@@ -74,10 +76,15 @@ import {
   loadAgentResume,
   loadAgentResumeMarkdown,
   mergeResumeWithPrevious,
+  normalizeResumePrompt,
   persistAgentResume,
+  preserveAiSummary,
   readResumeFromStore,
   renderResumeMarkdown,
+  replaceResumeSummarySection,
   resolveResumePersistenceDir,
+  resolveResumePrompt,
+  resumePromptFingerprint,
   resumeStoreUri,
   writeResumeToStore,
   type AgentResume,
@@ -127,6 +134,9 @@ export class AcpProxyAgent extends ACPAgentServer {
 
   /** Workspace-grounded self-description, built in init() (fallback until then). */
   private resume: AgentResume;
+  /** Live custom-resume-prompt override (agent.resume.promptSet); env is the
+   * spawn-time fallback. undefined = no prompt in effect. */
+  private resumePromptOverride: string | undefined;
 
   /** sha256 of the pouch resume.md at the gateway's own last write — lets the
    * per-turn adoption skip unchanged documents (external edit = different sha). */
@@ -523,7 +533,16 @@ export class AcpProxyAgent extends ACPAgentServer {
       engineDisplayName: this.engineDisplayName,
       agentName: this.name,
       cwd: this.cwd,
+      resumePrompt: this.effectiveResumePrompt(),
     };
+  }
+
+  /**
+   * The custom resume prompt currently in effect: a live override (set via
+   * `agent.resume.promptSet`) wins, else the spawn-time env fallback.
+   */
+  private effectiveResumePrompt(): string | undefined {
+    return normalizeResumePrompt(this.resumePromptOverride ?? resolveResumePrompt(process.env));
   }
 
   /**
@@ -555,10 +574,24 @@ export class AcpProxyAgent extends ACPAgentServer {
             previousMd !== null
               ? mergeResumeWithPrevious(input, profile, resume, previousMd)
               : renderResumeMarkdown(input, profile, resume);
-          await writeResumeToStore(client, this.agentId, md);
+          // An AI-polished Summary (stamped with the prompt hash) survives a
+          // deterministic rebuild while the prompt stays the same — the
+          // operator asked for that wording; capabilities still refresh.
+          const finalMd =
+            input.resumePrompt !== undefined && previousMd !== null
+              ? replaceResumeSummarySection(
+                  md,
+                  preserveAiSummary(
+                    previousMd,
+                    resume.summary,
+                    resumePromptFingerprint(input.resumePrompt),
+                  ),
+                )
+              : md;
+          await writeResumeToStore(client, this.agentId, finalMd);
           // Record the sha of our own write so per-turn adoption skips
           // documents the gateway itself just produced.
-          this.lastResumeSha = await sha256Hex(new TextEncoder().encode(md));
+          this.lastResumeSha = await sha256Hex(new TextEncoder().encode(finalMd));
           log('workspace resume synced to %s (agent %s)', uri, this.agentId);
         }
       } catch (err) {
@@ -577,11 +610,28 @@ export class AcpProxyAgent extends ACPAgentServer {
 
   /**
    * ACP `agent.resume.rebuild` — external trigger to re-derive the workspace
-   * resume on a running gateway. Returns the fresh card (description/bio
+   * resume on a running gateway. An optional `prompt` param updates the
+   * custom resume prompt before the rebuild so the hub can push config and
+   * regenerate in one round trip. Returns the fresh card (description/bio
    * updated immediately for getCard consumers).
    */
-  override async onResumeRebuild(): Promise<AgentCard> {
+  override async onResumeRebuild(params?: ResumeRebuildParams): Promise<AgentCard> {
+    if (params?.prompt !== undefined) {
+      this.resumePromptOverride = normalizeResumePrompt(params.prompt);
+    }
     await this.rebuildResume();
+    return this.getAgentCard();
+  }
+
+  /**
+   * ACP `agent.resume.promptSet` — set or clear the custom resume prompt on a
+   * running gateway without rebuilding. An empty/missing prompt clears the
+   * override (falling back to the spawn-time env, if any). Returns the card
+   * unchanged — the resume text itself is untouched until the next rebuild
+   * or AI polish.
+   */
+  override async onResumePromptSet(params: ResumePromptSetParams): Promise<AgentCard> {
+    this.resumePromptOverride = normalizeResumePrompt(params.prompt);
     return this.getAgentCard();
   }
 

@@ -7,6 +7,7 @@ import { EnrollModal } from './EnrollModal.js';
 import { SessionResumeModal } from './SessionResumeModal.js';
 import { SessionsPanel } from './SessionsPanel.js';
 import { AttachmentsPanel } from './AttachmentsPanel.js';
+import { ResumePanel } from './ResumePanel.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { maskSecret } from '../utils/maskSecret.js';
@@ -33,7 +34,7 @@ interface InstanceDetailProps {
   onOpenStore?: (uri: string) => void;
 }
 
-const NAV_TAB_IDS: InstanceDetailTab[] = ['overview', 'sessions', 'logs', 'devices', 'attachments', 'config'];
+const NAV_TAB_IDS: InstanceDetailTab[] = ['overview', 'sessions', 'logs', 'devices', 'attachments', 'resume', 'config'];
 
 const NAV_LABEL_KEYS = {
   overview: 'detail.overview',
@@ -41,8 +42,9 @@ const NAV_LABEL_KEYS = {
   logs: 'detail.logs',
   devices: 'detail.devices',
   attachments: 'detail.attachments',
+  resume: 'detail.resumeTab',
   config: 'detail.config',
-} as const satisfies Record<InstanceDetailTab, 'detail.overview' | 'detail.sessions' | 'detail.logs' | 'detail.devices' | 'detail.attachments' | 'detail.config'>;
+} as const satisfies Record<InstanceDetailTab, 'detail.overview' | 'detail.sessions' | 'detail.logs' | 'detail.devices' | 'detail.attachments' | 'detail.resumeTab' | 'detail.config'>;
 
 export function InstanceDetail({
   instanceId,
@@ -493,6 +495,9 @@ export function InstanceDetail({
                     >
                       {rebuildBusy ? t('detail.rebuilding') : `↻ ${t('detail.rebuildResume')}`}
                     </button>
+                    <button type="button" style={rebuildBtn} onClick={() => onTabChange('resume')}>
+                      {t('detail.overviewEditResume')}
+                    </button>
                   </div>
                   <p style={resumeText}>
                     {instance.card.description || instance.card.bio || '—'}
@@ -852,6 +857,18 @@ export function InstanceDetail({
                 </div>
               </div>
               <AttachmentsPanel instanceId={instanceId} />
+            </section>
+          )}
+
+          {activeTab === 'resume' && (
+            <section>
+              <div style={panelHeaderRow}>
+                <div>
+                  <h3 style={{ ...panelTitle, margin: 0 }}>{t('detail.resumeTitle')}</h3>
+                  <p style={{ ...panelHint, margin: '4px 0 0' }}>{t('detail.resumeHint')}</p>
+                </div>
+              </div>
+              <ResumePanel instance={instance} onChanged={load} />
             </section>
           )}
 
