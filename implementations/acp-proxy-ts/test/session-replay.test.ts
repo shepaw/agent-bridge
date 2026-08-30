@@ -52,4 +52,47 @@ describe('discardLoadReplayUpdates', () => {
 
     expect(count).toBe(1);
   });
+
+  it('keeps waiting through the warm-up before the first replay chunk', async () => {
+    // Resume path: the engine answers the request first and the first replay
+    // chunk lags behind the idle window. Like the real AsyncQueue, the update
+    // is delivered once to whichever nextUpdate() call is pending.
+    const session = mockSession([
+      { kind: 'update', update: { sessionUpdate: 'agent_message_chunk' } },
+    ]);
+    const inner = session.nextUpdate.bind(session);
+    let firstCall = true;
+    session.nextUpdate = async () => {
+      if (firstCall) {
+        firstCall = false;
+        await new Promise((r) => setTimeout(r, 150)); // replay lag > idleMs
+      }
+      return inner();
+    };
+
+    const count = await discardLoadReplayUpdates(session as never, {
+      idleMs: 50,
+      pollMs: 20,
+      maxMs: 2000,
+      warmupMs: 300,
+    });
+
+    expect(count).toBe(1);
+  });
+
+  it('ends quickly when no replay ever arrives despite warm-up', async () => {
+    const session = { nextUpdate: () => new Promise(() => {}) };
+
+    const started = Date.now();
+    const count = await discardLoadReplayUpdates(session as never, {
+      idleMs: 50,
+      pollMs: 20,
+      maxMs: 400,
+      warmupMs: 200,
+    });
+
+    expect(count).toBe(0);
+    // warmup + idle, bounded by maxMs — never the full maxMs when idle ends it.
+    expect(Date.now() - started).toBeLessThan(500);
+  });
 });

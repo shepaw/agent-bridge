@@ -1316,9 +1316,17 @@ export class AcpSubprocess {
           });
           const session = attachActiveSession(agent, storedId, response);
           this.rememberConfigOptions(shepawSessionId, response.configOptions);
+          // Engines replay the prior transcript as queued session/updates after
+          // resume, exactly like after session/load. Without discarding it here,
+          // the next turn's drainUpdates consumed the replayed agent chunks and
+          // streamed the PREVIOUS answer to the app as the reply to the new
+          // message. Warm-up 1000ms: resume replies first, replay chunks may
+          // lag the response by more than the bare idle window.
+          const discarded = await discardLoadReplayUpdates(session, { warmupMs: 1000 });
           log(
-            'resumed ACP session %s (mcp=%d, additionalDirs=%d)',
+            'resumed ACP session %s (discarded %d replay updates, mcp=%d, additionalDirs=%d)',
             storedId,
+            discarded,
             servers.length,
             additionalDirectories?.length ?? 0,
           );
@@ -1345,7 +1353,7 @@ export class AcpSubprocess {
           });
           const session = attachActiveSession(agent, storedId, response);
           this.rememberConfigOptions(shepawSessionId, response.configOptions);
-          const discarded = await discardLoadReplayUpdates(session);
+          const discarded = await discardLoadReplayUpdates(session, { warmupMs: 1000 });
           log(
             'loaded ACP session %s (discarded %d replay updates, mcp=%d, additionalDirs=%d)',
             storedId,

@@ -62,6 +62,12 @@ export interface DiscardReplayOptions {
   maxMs?: number;
   /** Per-read timeout when waiting for the next update. Default 100. */
   pollMs?: number;
+  /**
+   * Grace before the idle window starts. Replay engines commonly answer
+   * resume/load before their first replay chunk; without a warm-up the 400 ms
+   * idle window can elapse before replay even begins. Default 0.
+   */
+  warmupMs?: number;
 }
 
 function isReplayUpdate(update: acp.SessionUpdate): boolean {
@@ -84,8 +90,15 @@ function isReplayUpdate(update: acp.SessionUpdate): boolean {
 }
 
 /**
- * Drain history replay emitted after session/load. Uses idle detection so short
- * replays finish quickly while long histories get up to maxMs.
+ * Drain history replay emitted after session/load or session/resume. Uses idle
+ * detection so short replays finish quickly while long histories get up to
+ * maxMs.
+ *
+ * Applied to BOTH restore paths: engines replay the transcript as
+ * `session/update` notifications after resume just as after load. Skipping
+ * this on resume made the replayed chunks flow into the next turn's
+ * `drainUpdates`, which streamed the previous answer to the app as the reply
+ * to the new message.
  */
 export async function discardLoadReplayUpdates(
   session: acp.ActiveSession,
@@ -94,6 +107,7 @@ export async function discardLoadReplayUpdates(
   const idleMs = opts.idleMs ?? 400;
   const maxMs = opts.maxMs ?? 15_000;
   const pollMs = opts.pollMs ?? 100;
+  const warmupMs = opts.warmupMs ?? 0;
 
   const startedAt = Date.now();
   let lastAt = startedAt;
@@ -111,6 +125,10 @@ export async function discardLoadReplayUpdates(
     }
 
     if (pending === undefined) {
+      // Warm-up: keep waiting for the first replay chunk before the idle
+      // countdown starts, but only within the hard maxMs cap.
+      const elapsed = Date.now() - startedAt;
+      if (discarded === 0 && elapsed < warmupMs) continue;
       if (Date.now() - lastAt >= idleMs) break;
       continue;
     }
