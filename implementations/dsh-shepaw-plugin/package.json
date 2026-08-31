@@ -1,6 +1,6 @@
 {
   "name": "shepaw-dsh-plugin",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Shepaw bridge as a DeepSeek Harness (DSH) cordis plugin: mount a Shepaw ACP v2.1 server inside DSH and route chats into DSH Agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -47,7 +47,7 @@
     "directory": "implementations/dsh-shepaw-plugin"
   },
   "dependencies": {
-    "shepaw-acp-sdk": "^0.1.7"
+    "shepaw-acp-sdk": "^0.1.8"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

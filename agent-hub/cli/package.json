@@ -1,6 +1,6 @@
 {
   "name": "shepaw-agent-hub",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "CLI + Web supervisor for Shepaw ACP agents — manage multiple projects from the command line or a web dashboard",
   "type": "module",
   "bin": {
@@ -37,14 +37,14 @@
     "url": "https://github.com/shepaw/agent-bridge/issues"
   },
   "dependencies": {
-    "@shepaw/agent-hub-api": "^0.1.7",
-    "@shepaw/agent-hub-core": "^0.1.7",
-    "@shepaw/agent-hub-ui": "^0.1.7",
+    "@shepaw/agent-hub-api": "^0.1.8",
+    "@shepaw/agent-hub-core": "^0.1.8",
+    "@shepaw/agent-hub-ui": "^0.1.8",
     "cac": "^6.7.14",
     "open": "^10.1.0",
     "qrcode-terminal": "^0.12.0",
-    "shepaw-acp-proxy-gateway": "^0.1.7",
-    "shepaw-acp-sdk": "^0.1.7"
+    "shepaw-acp-proxy-gateway": "^0.1.8",
+    "shepaw-acp-sdk": "^0.1.8"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
