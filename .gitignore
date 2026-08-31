@@ -19,6 +19,7 @@ venv/
 
 # Node.js
 node_modules/
+.npm-cache/
 
 # IDE
 .DS_Store
