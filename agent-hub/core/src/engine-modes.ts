@@ -127,6 +127,23 @@ const QWEN_MODES: EngineSessionModeCatalog = {
   ],
 };
 
+/**
+ * CodeBuddy Code permission modes, advertised over ACP as both
+ * `modes.availableModes` and a `category:"mode"` configOption. Applied at
+ * runtime via `session/set_config_option` — the CLI's `--permission-mode`
+ * flag is accepted but ignored in `--acp` mode.
+ * @see https://www.codebuddy.cn/cli/
+ */
+const CODEBUDDY_MODES: EngineSessionModeCatalog = {
+  defaultModeId: 'default',
+  modes: [
+    { id: 'default', name: 'Default', description: '首次使用每个工具前确认' },
+    { id: 'acceptEdits', name: 'Accept Edits', description: '自动接受文件编辑，命令仍需确认' },
+    { id: 'plan', name: 'Plan', description: '只规划，不改代码' },
+    { id: 'bypassPermissions', name: 'Bypass Permissions', description: '跳过所有权限确认（仅隔离环境）' },
+  ],
+};
+
 const EMPTY_CATALOG: EngineSessionModeCatalog = {
   defaultModeId: undefined,
   modes: [],
@@ -140,7 +157,7 @@ const BY_ENGINE: Record<string, EngineSessionModeCatalog> = {
   openclaw: EMPTY_CATALOG,
   hermes: EMPTY_CATALOG,
   kimi: EMPTY_CATALOG,
-  codebuddy: EMPTY_CATALOG,
+  codebuddy: CODEBUDDY_MODES,
   zcode: ZCODE_MODES,
   'deepseek-harness': DEEPSEEK_HARNESS_MODES,
   'qwen-code': QWEN_MODES,

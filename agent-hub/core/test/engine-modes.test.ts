@@ -34,10 +34,14 @@ describe('engine session mode catalogs', () => {
     expect(getEngineSessionCatalog('qwen-code').modes.map((m) => m.id)).toEqual([
       'plan', 'default', 'auto-edit', 'auto', 'yolo',
     ]);
+    expect(getEngineSessionCatalog('codebuddy').defaultModeId).toBe('default');
+    expect(getEngineSessionCatalog('codebuddy').modes.map((m) => m.id)).toEqual([
+      'default', 'acceptEdits', 'plan', 'bypassPermissions',
+    ]);
   });
 
-  it('leaves CodeBuddy / Hermes / Kimi / OpenClaw without a native catalog', () => {
-    for (const id of ['codebuddy', 'hermes', 'kimi', 'openclaw']) {
+  it('leaves Hermes / Kimi / OpenClaw without a native catalog', () => {
+    for (const id of ['hermes', 'kimi', 'openclaw']) {
       expect(getEngineSessionCatalog(id).modes).toEqual([]);
       expect(defaultSessionModeId(id)).toBeUndefined();
     }
@@ -75,8 +79,9 @@ describe('parseSessionMode', () => {
   });
 
   it('forwards arbitrary ids for engines without a catalog', () => {
-    expect(parseSessionMode('codebuddy', 'whatever')).toBe('whatever');
     expect(parseSessionMode('my-cli', 'custom-mode')).toBe('custom-mode');
+    expect(() => parseSessionMode('codebuddy', 'whatever')).toThrow(/Unknown session mode/);
+    expect(parseSessionMode('codebuddy', 'acceptEdits')).toBe('acceptEdits');
   });
 
   it('allowUnknown forwards live-advertised ids for catalogued engines', () => {
@@ -88,6 +93,7 @@ describe('parseSessionMode', () => {
     expect(isKnownSessionMode('cursor', 'auto-review')).toBe(true);
     expect(isKnownSessionMode('cursor', 'agent')).toBe(false);
     expect(isKnownSessionMode('codebuddy', 'agent')).toBe(false);
+    expect(isKnownSessionMode('codebuddy', 'bypassPermissions')).toBe(true);
   });
 });
 
@@ -108,10 +114,11 @@ describe('catalogModesWire', () => {
     expect(catalogModesWire('codex').current).toBe('on-request');
     expect(catalogModesWire('deepseek-harness').current).toBe('workspace-write');
     expect(catalogModesWire('qwen-code').current).toBe('auto');
+    expect(catalogModesWire('codebuddy').current).toBe('default');
   });
 
   it('leaves engines without a catalog empty', () => {
-    expect(catalogModesWire('codebuddy').modes).toEqual([]);
-    expect(catalogModesWire('codebuddy').current).toBeUndefined();
+    expect(catalogModesWire('hermes').modes).toEqual([]);
+    expect(catalogModesWire('hermes').current).toBeUndefined();
   });
 });
