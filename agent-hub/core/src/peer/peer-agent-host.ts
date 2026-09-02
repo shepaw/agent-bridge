@@ -6,15 +6,51 @@
  * `agent_list_resp` builder.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { isInstanceEnabled, loadOrCreateHubConfig } from '../config.js';
 import {
   GENERIC_DEFAULT_AVATAR,
   defaultAvatarForEngine,
   loadEngineAvatarPayload,
 } from '../engine-avatars.js';
-import { instancePaths } from '../paths.js';
+import { instancePaths, peerStoreRoot } from '../paths.js';
 import { isAlive, readState } from '../spawn.js';
 import { hubStoreDeviceId, workspaceStoreUri } from './agent-store-mapping.js';
+
+/** Parse the `## Summary` section body out of a resume.md document. Pure. */
+export function parseResumeSummary(md: string): string {
+  const m = md.match(/^##\s+Summary\s*\r?\n/m);
+  if (!m || m.index === undefined) return '';
+  const rest = md.slice(m.index + m[0].length);
+  const end = rest.search(/\r?\n##\s/);
+  const body = end === -1 ? rest : rest.slice(0, end);
+  return body.trim();
+}
+
+/**
+ * Read a managed instance's workspace-grounded resume Summary from the hub
+ * store mirror (`store/<device-id>/files/<instance-id>/resume.md`, written by
+ * the instance's acp-proxy gateway). Advertised to paired apps as the agent's
+ * bio so the Shepaw app shows a real resume instead of an engine label.
+ * Returns '' when no resume has been derived/mirrored yet.
+ */
+export function resumeBioForInstance(instanceId: string): string {
+  try {
+    const deviceId = hubStoreDeviceId();
+    const resumePath = join(
+      peerStoreRoot(),
+      deviceId,
+      'files',
+      instanceId,
+      'resume.md',
+    );
+    if (!existsSync(resumePath)) return '';
+    return parseResumeSummary(readFileSync(resumePath, 'utf8'));
+  } catch {
+    return '';
+  }
+}
 
 export interface AgentListEntry {
   readonly id: string;
@@ -76,7 +112,9 @@ export function listAgents(): AgentListEntry[] {
       enabled: isInstanceEnabled(i),
       manageable: true,
       capabilities: ['chat'],
-      bio: i.engine,
+      // 广播真实工作区简历（hub store 里网关镜像的 resume.md Summary），
+      // 未生成简历的实例回退到引擎名，避免 app 把引擎当简历展示。
+      bio: resumeBioForInstance(i.id) || i.engine,
       // Engine logos ship with agent-hub; peers persist avatar_data locally.
       // Shepaw keeps a local override when the user changes the avatar.
       avatar: payload?.avatar ?? defaultAvatarForEngine(i.engine) ?? GENERIC_DEFAULT_AVATAR,
