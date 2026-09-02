@@ -308,6 +308,11 @@ export async function drivePeerConnection(opts: {
     const instance = getInstance(cfg, agentId);
     const instanceIdentity = loadOrCreateIdentity({ path: instancePaths(instance.id).identityPath });
     client = new PeerAcpClient(peerIdentity, instance, instanceIdentity, log);
+    // Agent rewrote its own resume → push a fresh agent list so this app's
+    // cached bio catches up without waiting for a reconnect/restart.
+    client.onResumeChanged = () => {
+      if (!closed && ws.readyState === ws.OPEN) send(currentAgentListPayload());
+    };
     acpClients.set(agentId, client);
     return client;
   };

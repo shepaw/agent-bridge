@@ -110,6 +110,13 @@ export class PeerAcpClient {
   }
 
   /**
+   * Fired when the gateway broadcasts `agent.resume.changed` (the agent rewrote
+   * its own workspace resume.md → card bio). Not task-scoped. The hub uses it
+   * to push a fresh agent list so paired apps' cached bios catch up promptly.
+   */
+  onResumeChanged: (() => void) | undefined;
+
+  /**
    * Request cancellation of a running turn. The 300ms cancelTimer forwards
    * `agent.cancelTask` to the proxy. Called via the peer-level turn registry
    * (works from any live connection — the registry owns request_id ↔ taskId).
@@ -776,6 +783,12 @@ export class PeerAcpClient {
         return;
       }
       const params = (obj.params as Record<string, unknown> | undefined) ?? {};
+      // Agent rewrote its own resume — not task-scoped. Tell the caller so it
+      // can re-broadcast the agent list (the app's cached bio follows).
+      if (method === 'agent.resume.changed') {
+        this.onResumeChanged?.();
+        return;
+      }
       const taskId = params.task_id as string | undefined;
       // Every notification we route is task-scoped; ignore anything without one.
       if (taskId === undefined) return;
