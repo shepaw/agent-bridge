@@ -14,7 +14,11 @@ import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { getInstance, loadOrCreateHubConfig, updateInstance } from '../config.js';
 import { catalogModesWire, parseSessionMode } from '../engine-modes.js';
 import { instancePaths } from '../paths.js';
-import { isInstanceRunning, listAgents } from './peer-agent-host.js';
+import {
+  isInstanceRunning,
+  listAgents,
+  resumeBioForInstance,
+} from './peer-agent-host.js';
 import {
   currentAgentListPayload,
   handleAgentManage,
@@ -589,6 +593,123 @@ export async function drivePeerConnection(opts: {
     });
   };
 
+  // ── Resume relay (agent_resume_*_req) ─────────────────────────────
+  // The workspace resume's authoritative source is the instance's acp-proxy
+  // gateway (resume.md → card bio/description). The hub relays the app's
+  // resume read/write/rebuild onto the gateway, mirroring the app host's
+  // peer_agent_host_service. Every branch answers — an unanswered relay leaves
+  // the app's resume editor spinning until its client-side timeout.
+
+  /** Pull the resume text out of a gateway AgentCard (`bio` → `description`). */
+  const cardResumeOf = (card: Record<string, unknown> | undefined): string | undefined => {
+    if (card === undefined) return undefined;
+    const bio = card['bio'];
+    const desc = card['description'];
+    if (typeof bio === 'string' && bio.trim().length > 0) return bio;
+    if (typeof desc === 'string' && desc.trim().length > 0) return desc;
+    return undefined;
+  };
+
+  const resumeRespBase = (
+    type: string,
+    agentId: string,
+    requestId: unknown,
+  ): Record<string, unknown> => ({
+    type,
+    agent_id: agentId,
+    ...(typeof requestId === 'string' && requestId.length > 0
+      ? { request_id: requestId }
+      : {}),
+  });
+
+  /** agent_resume_get_req { agent_id, request_id? } → agent_resume_get_resp */
+  const handleAgentResumeGetReq = async (
+    params: Record<string, unknown>,
+  ): Promise<void> => {
+    const agentId = typeof params.agent_id === 'string' ? params.agent_id : '';
+    const base = resumeRespBase('agent_resume_get_resp', agentId, params.request_id);
+    if (agentId.length === 0) {
+      send({ ...base, ok: false, error: 'missing_agent_id' });
+      return;
+    }
+    // Live-first when the gateway is up (freshest card), else the store mirror
+    // the agent list already advertises. Editable — the hub writes via ACP.
+    let resume = resumeBioForInstance(agentId);
+    if (isInstanceRunning(agentId)) {
+      try {
+        const card = await getAcpClient(agentId).card();
+        const live = cardResumeOf(card);
+        if (live !== undefined) resume = live.trim();
+      } catch (err) {
+        log(`agent_resume_get req card failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    send({ ...base, ok: true, resume, editable: true });
+  };
+
+  /** agent_resume_set_req { agent_id, resume, request_id? } → agent_resume_set_resp */
+  const handleAgentResumeSetReq = async (
+    params: Record<string, unknown>,
+  ): Promise<void> => {
+    const agentId = typeof params.agent_id === 'string' ? params.agent_id : '';
+    const resume = typeof params.resume === 'string' ? params.resume : '';
+    const base = resumeRespBase('agent_resume_set_resp', agentId, params.request_id);
+    if (agentId.length === 0) {
+      send({ ...base, ok: false, error: 'missing_agent_id' });
+      return;
+    }
+    try {
+      getInstance(loadOrCreateHubConfig(), agentId);
+    } catch {
+      send({ ...base, ok: false, error: 'not_found' });
+      return;
+    }
+    const trimmed = resume.trim();
+    try {
+      const card = await getAcpClient(agentId).resumeSummarySet(trimmed);
+      if (card === undefined) {
+        send({ ...base, ok: false, error: 'timeout' });
+        return;
+      }
+      send({ ...base, ok: true, resume: cardResumeOf(card) ?? trimmed });
+    } catch (err) {
+      log(`agent_resume_set req failed: ${err instanceof Error ? err.message : String(err)}`);
+      send({ ...base, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  /** agent_resume_rebuild_req { agent_id, prompt?, request_id? } → agent_resume_rebuild_resp */
+  const handleAgentResumeRebuildReq = async (
+    params: Record<string, unknown>,
+  ): Promise<void> => {
+    const agentId = typeof params.agent_id === 'string' ? params.agent_id : '';
+    const prompt = typeof params.prompt === 'string' ? params.prompt.trim() : '';
+    const base = resumeRespBase('agent_resume_rebuild_resp', agentId, params.request_id);
+    if (agentId.length === 0) {
+      send({ ...base, ok: false, error: 'missing_agent_id' });
+      return;
+    }
+    try {
+      getInstance(loadOrCreateHubConfig(), agentId);
+    } catch {
+      send({ ...base, ok: false, error: 'not_found' });
+      return;
+    }
+    try {
+      const card = await getAcpClient(agentId).resumeRebuild(
+        prompt.length > 0 ? { prompt } : {},
+      );
+      if (card === undefined) {
+        send({ ...base, ok: false, error: 'timeout' });
+        return;
+      }
+      send({ ...base, ok: true, resume: cardResumeOf(card) ?? '' });
+    } catch (err) {
+      log(`agent_resume_rebuild req failed: ${err instanceof Error ? err.message : String(err)}`);
+      send({ ...base, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   const catalogModesForAgent = (agentId: string): ReturnType<typeof catalogModesWire> => {
     try {
       const instance = getInstance(loadOrCreateHubConfig(), agentId);
@@ -1066,6 +1187,15 @@ export async function drivePeerConnection(opts: {
           break;
         case 'agent_memory_req':
           send(handleAgentMemoryReq(peerId, obj));
+          break;
+        case 'agent_resume_get_req':
+          void handleAgentResumeGetReq(obj);
+          break;
+        case 'agent_resume_set_req':
+          void handleAgentResumeSetReq(obj);
+          break;
+        case 'agent_resume_rebuild_req':
+          void handleAgentResumeRebuildReq(obj);
           break;
         case 'agent_chat':
           void handleAgentChat(obj as Record<string, unknown>);
