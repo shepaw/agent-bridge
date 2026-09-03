@@ -28,7 +28,7 @@ import {
 } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { createHash } from 'node:crypto';
-import { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT, loadOrCreateHubConfig } from '../config.js';
+import { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT, loadOrCreateHubConfig, resolvePeerDeviceName } from '../config.js';
 import type { PeerServiceConfig } from '../config.js';
 import { authorizePeerServiceOnAllInstances } from './peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
@@ -231,10 +231,19 @@ export class PeerServer {
     const active = readActivePairingFile();
     const codeOk = active !== undefined && constantTimeEquals(code, active.code);
 
+    // Resolve the name advertised to the app. Read config fresh per handshake
+    // so a dashboard/CLI rename applies without restarting the daemon.
+    const cfg = loadOrCreateHubConfig();
+    const configuredName = cfg.peer?.deviceName?.trim();
+
     if (!codeOk) {
+      // Rejections may reach an unauthenticated phone — only echo an
+      // operator-set friendly name, never the raw OS hostname.
       const resp = {
         accepted: false,
-        device_name: 'shepaw-hub',
+        device_name: configuredName !== undefined && configuredName.length > 0
+          ? configuredName
+          : 'shepaw-hub',
         device_id: this.identity.fingerprint,
         peer_id: '',
         reject_reason: 'Invalid or expired pairing code',
@@ -252,10 +261,10 @@ export class PeerServer {
     // over the tunnel can persist the hub's remote URL for reconnect.
     const peerId = randomUUID();
     const localEndpoint = resolveLocalEndpoint(this.port, this.host);
-    const channelEndpoint = resolvePeerChannelEndpoint(loadOrCreateHubConfig());
+    const channelEndpoint = resolvePeerChannelEndpoint(cfg);
     const resp = {
       accepted: true,
-      device_name: 'shepaw-hub',
+      device_name: resolvePeerDeviceName(cfg),
       device_id: this.identity.fingerprint,
       peer_id: peerId,
       local_endpoint: localEndpoint,

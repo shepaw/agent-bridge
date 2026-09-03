@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isAlive, type StopResult } from '../spawn.js';
-import { loadOrCreateHubConfig, setHubPeer, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
+import { loadOrCreateHubConfig, resolvePeerDeviceName, setHubPeer, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
 import { authorizePeerServiceOnAllInstances } from './peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import {
@@ -159,6 +159,8 @@ export function peerServiceStatus(): {
   port: number;
   host: string;
   startedAt: string | null;
+  /** Device name advertised when a phone pairs (custom or hostname default). */
+  deviceName: string;
 } {
   const state = readPeerState();
   const running = state !== undefined && state.pid > 0 && isAlive(state.pid);
@@ -168,6 +170,7 @@ export function peerServiceStatus(): {
     port: state?.port ?? DEFAULT_PEER_PORT,
     host: state?.host ?? DEFAULT_PEER_HOST,
     startedAt: state?.startedAt ?? null,
+    deviceName: resolvePeerDeviceName(loadOrCreateHubConfig()),
   };
 }
 

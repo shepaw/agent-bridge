@@ -197,6 +197,15 @@ export const en = {
   'settings.tokenTitle': 'Dashboard auth token',
   'settings.tokenHint':
     'When Hub is started with SHEPAW_HUB_TOKEN, the browser must store the same token to call Peer / Channel APIs. The token stays in localStorage on this machine.',
+  'settings.deviceNameTitle': 'Device name',
+  'settings.deviceNameHint':
+    'Name the Shepaw App shows for this machine after pairing. Defaults to this machine’s hostname; clear and save to restore the default.',
+  'settings.deviceNamePlaceholder': 'e.g. office-mac',
+  'settings.deviceNameSave': 'Save',
+  'settings.deviceNameReset': 'Reset to default',
+  'settings.deviceNameSaved': 'Saved. Takes effect on the next pairing.',
+  'settings.deviceNameEmpty': 'Enter a name, or reset to the default.',
+  'settings.deviceNameTooLong': 'Device name must be 64 characters or fewer.',
   'settings.enginesTitle': 'Engine management',
   'settings.enginesHint': 'Manage built-in and custom engines, and default environment variables per engine.',
   'settings.peerTitle': 'Pair device',

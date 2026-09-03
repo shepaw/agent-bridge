@@ -1,3 +1,4 @@
+import { DeviceNamePanel } from './DeviceNamePanel.js';
 import { EngineManager } from './EngineManager.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
@@ -32,6 +33,11 @@ export function SettingsPage({
             <h3 style={cardTitle}>{t('settings.tokenTitle')}</h3>
             <p style={cardHint}>{t('settings.tokenHint')}</p>
             <HubAuthTokenPanel onSaved={onAuthTokenSaved} />
+          </section>
+          <section style={card}>
+            <h3 style={cardTitle}>{t('settings.deviceNameTitle')}</h3>
+            <p style={cardHint}>{t('settings.deviceNameHint')}</p>
+            <DeviceNamePanel />
           </section>
           <VersionPanel />
         </div>

@@ -203,6 +203,8 @@ export interface PeerServiceStatus {
   port: number;
   host: string;
   startedAt: string | null;
+  /** Device name advertised when a phone pairs (custom or hostname default). */
+  deviceName: string;
 }
 
 /** A device paired with the hub via the shepaw://peer flow. */

@@ -365,6 +365,9 @@ export const api = {
 
     removeDevice: (fingerprint: string): Promise<{ ok: boolean; devices: PairedPeer[] }> =>
       request(`/peer/devices/${fingerprint}`, { method: 'DELETE' }),
+
+    setDeviceName: (deviceName: string): Promise<{ ok: boolean; deviceName: string }> =>
+      request('/peer/device-name', { method: 'PUT', body: JSON.stringify({ deviceName }) }),
   },
 
   fs: {

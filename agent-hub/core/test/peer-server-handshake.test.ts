@@ -5,7 +5,7 @@
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
@@ -20,7 +20,7 @@ import {
   NOISE_PROLOGUE,
 } from 'shepaw-acp-sdk';
 
-import { addInstance, loadOrCreateHubConfig, saveHubConfig, setHubGateway, type HubConfig } from '../src/config.js';
+import { addInstance, loadOrCreateHubConfig, saveHubConfig, setHubGateway, setHubPeer, type HubConfig } from '../src/config.js';
 import { PeerServer } from '../src/peer/peer-server.js';
 import { loadOrCreatePeerIdentity } from '../src/peer/peer-identity.js';
 import { PAIRING_TTL_MS, writePairingFile } from '../src/peer/peer-pairing.js';
@@ -209,6 +209,19 @@ describe('peer pairing handshake', () => {
     expect(payload.accepted).toBe(true);
     expect(payload.local_endpoint).toMatch(/^ws:\/\//);
     expect(payload.channel_endpoint).toBe('wss://channel.example.com/proxy/ch_peer/peer/ws');
+  });
+
+  it('advertises the machine hostname as device_name by default', async () => {
+    const { payload } = await pairOverWs(`ws://127.0.0.1:${peerPort}/peer/ws`, 'ABC234');
+    expect(payload.accepted).toBe(true);
+    expect(payload.device_name).toBe(hostname());
+  });
+
+  it('advertises a custom device name when peer.deviceName is configured', async () => {
+    setHubPeer(loadOrCreateHubConfig(), { deviceName: 'office-mac' });
+    const { payload } = await pairOverWs(`ws://127.0.0.1:${peerPort}/peer/ws`, 'ABC234');
+    expect(payload.accepted).toBe(true);
+    expect(payload.device_name).toBe('office-mac');
   });
 
   it('accepts pairing through the tunnel router /peer/ws dispatch', async () => {

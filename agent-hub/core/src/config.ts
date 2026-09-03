@@ -30,6 +30,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { RESUME_PROMPT_MAX_LENGTH } from 'shepaw-acp-sdk';
@@ -278,6 +279,13 @@ export interface PeerServiceConfig {
   readonly host: string;
   /** Listen port for `/peer/ws`. Default 18792 (matches the app). */
   readonly port: number;
+  /**
+   * Device name advertised to the Shepaw app when it pairs with this hub
+   * (the app's `device_name` in the PairingResponse). Defaults to the OS
+   * machine hostname when unset. Set via the dashboard「全局」settings, the
+   * `peer set-name` CLI command, or editing `hub.json`.
+   */
+  readonly deviceName?: string;
 }
 
 export interface HubConfig {
@@ -382,18 +390,41 @@ export function setHubGateway(
   return next;
 }
 
-/** Persist the peer service bind (host/port) after auto-relocation. */
+/** Persist the peer service bind (host/port) and/or the advertised device name. */
 export function setHubPeer(
   config: HubConfig,
-  patch: { host?: string; port?: number },
+  patch: {
+    host?: string;
+    port?: number;
+    /** Set a custom device name, or `null` to clear back to the hostname default. */
+    deviceName?: string | null;
+  },
 ): HubConfig {
   const peer = {
     host: patch.host ?? config.peer?.host ?? DEFAULT_PEER_HOST,
     port: patch.port ?? config.peer?.port ?? DEFAULT_PEER_PORT,
+    ...(patch.deviceName === undefined
+      ? (config.peer?.deviceName !== undefined && { deviceName: config.peer!.deviceName })
+      : patch.deviceName === null || patch.deviceName.trim().length === 0
+        ? {}
+        : { deviceName: patch.deviceName.trim() }),
   };
   const next: HubConfig = { ...config, peer };
   persist(next.path, next.instances, hubPersistMeta(next));
   return next;
+}
+
+/**
+ * Effective device name this hub advertises when a phone pairs. Prefers an
+ * operator-set `peer.deviceName`; otherwise falls back to the OS machine
+ * hostname (`'shepaw-hub'` when the hostname is empty or just "localhost").
+ */
+export function resolvePeerDeviceName(config?: HubConfig): string {
+  const cfg = config ?? loadOrCreateHubConfig();
+  const custom = cfg.peer?.deviceName?.trim();
+  if (custom !== undefined && custom.length > 0) return custom;
+  const hn = hostname().trim();
+  return hn.length > 0 && hn.toLowerCase() !== 'localhost' ? hn : 'shepaw-hub';
 }
 
 /**
@@ -1019,7 +1050,10 @@ function parsePeerConfig(v: unknown): PeerServiceConfig | undefined {
   const o = v as Record<string, unknown>;
   const host = typeof o.host === 'string' && o.host.length > 0 ? o.host : DEFAULT_PEER_HOST;
   const port = typeof o.port === 'number' && Number.isInteger(o.port) && o.port > 0 ? o.port : DEFAULT_PEER_PORT;
-  return { host, port };
+  const deviceName = typeof o.deviceName === 'string' && o.deviceName.trim().length > 0
+    ? o.deviceName.trim()
+    : undefined;
+  return { host, port, ...(deviceName !== undefined && { deviceName }) };
 }
 
 function parseGatewayConfig(v: unknown): GatewayConfig | undefined {

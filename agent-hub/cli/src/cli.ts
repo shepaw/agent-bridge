@@ -25,6 +25,7 @@
  *
  *   pair                           Mint a shepaw://peer pairing QR (scan in the Shepaw app)
  *   peer pair                      Same as pair
+ *   peer set-name [name]           Set the device name advertised on pairing (default: hostname)
  *   gateway pair [id]              Legacy ACP/gateway pairing QR (hub-wide or one instance)
  *   enroll <id>                    Alias for `gateway pair <id>`
  *   enroll-list <id>               List this instance's outstanding codes
@@ -108,6 +109,8 @@ import { runTest } from './test-cmd.js';
 import {
   DEFAULT_ROUTER_PORT,
   setHubGateway,
+  setHubPeer,
+  resolvePeerDeviceName,
   startGatewayRouter,
   stopGatewayRouter,
   readGatewayState,
@@ -1316,12 +1319,31 @@ cli
       console.log(`Peer service: ${st.running ? 'running' : 'stopped'}`);
       if (st.running) console.log(`  pid:        ${st.pid}`);
       console.log(`  bind:       ${st.host}:${st.port}/peer/ws`);
+      console.log(`  device name: ${st.deviceName}`);
       if (st.startedAt) console.log(`  started at: ${st.startedAt}`);
       const devices = loadPairedPeers();
       console.log(`  paired:     ${devices.length} device(s)`);
       for (const d of devices) {
         console.log(`    ${d.fingerprint}  ${d.deviceName}  (paired ${d.pairedAt})`);
       }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('peer-set-name [name]', 'Set the device name shown when a phone pairs (default: machine hostname). Omit name to restore the default')
+  .action((name?: string) => {
+    try {
+      const trimmed = name?.trim() ?? '';
+      if (trimmed.length > 64) throw new Error('Device name must be at most 64 characters');
+      const cfg = loadOrCreateHubConfig();
+      setHubPeer(cfg, { deviceName: trimmed.length > 0 ? trimmed : null });
+      console.log(
+        trimmed.length > 0
+          ? `Device name set to "${trimmed}". Takes effect on the next pairing.`
+          : `Device name reset to the machine hostname default (${resolvePeerDeviceName(loadOrCreateHubConfig())}).`,
+      );
     } catch (err) {
       exitWithError(err);
     }

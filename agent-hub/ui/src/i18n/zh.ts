@@ -198,6 +198,15 @@ export const zh: Record<MessageKey, string> = {
   'settings.tokenTitle': 'Dashboard 鉴权 Token',
   'settings.tokenHint':
     '当 Hub 以 SHEPAW_HUB_TOKEN 启动时，浏览器需保存同一 Token，才能访问 Peer / Channel 等 API。Token 仅存于本机 localStorage。',
+  'settings.deviceNameTitle': '设备名称（机器名称）',
+  'settings.deviceNameHint':
+    '手机 Shepaw App 配对后显示的这台机器的名称。默认取机器主机名；清空并保存可恢复默认。',
+  'settings.deviceNamePlaceholder': '例如 office-mac',
+  'settings.deviceNameSave': '保存',
+  'settings.deviceNameReset': '恢复默认',
+  'settings.deviceNameSaved': '已保存，下次配对时生效。',
+  'settings.deviceNameEmpty': '请输入名称，或恢复默认。',
+  'settings.deviceNameTooLong': '设备名称不能超过 64 个字符。',
   'settings.enginesTitle': '引擎管理',
   'settings.enginesHint': '管理内置与自定义引擎，配置每个引擎的默认环境变量。',
   'settings.peerTitle': '扫码配对',

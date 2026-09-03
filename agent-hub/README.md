@@ -152,6 +152,7 @@ pair the phone under **扫码配对**.
 |---------|-------------|
 | `shepaw-hub pair` | Mint a `shepaw://peer` pairing QR (scan in the Shepaw app Device Pairing) |
 | `shepaw-hub peer pair` | Same as `pair` |
+| `shepaw-hub peer set-name [name]` | Set the device name shown when a phone pairs (default: machine hostname; omit name to restore the default) |
 | `shepaw-hub gateway pair [id]` | Legacy ACP/gateway pairing QR (hub-wide, or one instance) |
 | `shepaw-hub enroll <id>` | Alias for `gateway pair <id>` |
 | `shepaw-hub enroll list <id>` | Show outstanding pairing codes |

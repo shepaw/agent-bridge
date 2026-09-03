@@ -26,6 +26,7 @@ export {
   removeCustomEngineFromHub,
   removeInstance,
   resolveEngineEnvVars,
+  resolvePeerDeviceName,
   saveHubConfig,
   setEngineEnvVar,
   setEngineOverride,

@@ -7,15 +7,19 @@
  * POST   /api/peer/pair            — mint a shepaw://peer pairing code + QR
  * GET    /api/peer/devices         — list paired devices
  * DELETE /api/peer/devices/:fp     — revoke a paired device
+ * PUT    /api/peer/device-name     — set the advertised device name ('' clears → hostname)
  */
 
 import { Router, type Request, type Response } from 'express';
 import {
   isPeerServiceRunning,
+  loadOrCreateHubConfig,
   loadPairedPeers,
   mintPairingQr,
   peerServiceStatus,
   removePairedPeer,
+  resolvePeerDeviceName,
+  setHubPeer,
   startPeerService,
   stopPeerService,
 } from '@shepaw/agent-hub-core';
@@ -74,6 +78,32 @@ peerRouter.delete('/devices/:fp', (req: Request, res: Response) => {
     res.json({ ok: true, devices: remaining });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+/** PUT /api/peer/device-name — set the name advertised when a phone pairs. */
+peerRouter.put('/device-name', (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const raw = body.deviceName;
+    let name: string | null = null; // default: clear → hostname default
+    if (raw !== undefined && raw !== null) {
+      if (typeof raw !== 'string') {
+        res.status(400).json({ error: 'deviceName must be a string' });
+        return;
+      }
+      const trimmed = raw.trim();
+      if (trimmed.length > 64) {
+        res.status(400).json({ error: 'deviceName must be at most 64 characters' });
+        return;
+      }
+      name = trimmed.length > 0 ? trimmed : null;
+    }
+    const cfg = loadOrCreateHubConfig();
+    setHubPeer(cfg, { deviceName: name });
+    res.json({ ok: true, deviceName: resolvePeerDeviceName(loadOrCreateHubConfig()) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
