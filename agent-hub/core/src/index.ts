@@ -36,6 +36,7 @@ export {
   updateCustomEngineInHub,
   updateHubMeta,
   updateInstance,
+  validateReverseProxyInput,
 } from './config.js';
 export type {
   AgentEngine,
@@ -48,9 +49,21 @@ export type {
   LoadHubOptions,
   InstanceConfig,
   PeerServiceConfig,
+  ReverseProxyConfig,
   TunnelConfig,
 } from './config.js';
 export { DEFAULT_PEER_HOST, DEFAULT_PEER_PORT, DEFAULT_RESUME_PROMPT } from './config.js';
+
+// ── gateway exposure endpoint derivation ───────────────────────────
+export {
+  gatewayAcpWsBase,
+  hasGatewayExposure,
+  peerChannelWsUrl,
+  reverseProxyPeerWsUrl,
+  reverseProxyWsBase,
+  tunnelAcpWsBase,
+  wsScheme,
+} from './gateway-endpoints.js';
 
 // ── peer service (shepaw://peer responder + agent-host proxy) ──────
 export {

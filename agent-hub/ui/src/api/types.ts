@@ -312,13 +312,31 @@ export interface GatewayRouterStatus {
   lastResult: string | null;
 }
 
+/** Self-managed reverse-proxy entry (nginx / self-built) from GET /api/gateway. */
+export interface ReverseProxyInfo {
+  publicBaseUrl: string;
+  pathPrefix: string | null;
+  /** Peer WS endpoint this exposure fronts (`<publicBaseUrl><prefix>/peer/ws`). */
+  peerWs: string | null;
+}
+
 /** Gateway (shared channel + router) config from GET /api/gateway. */
 export interface GatewayInfo {
   routerHost: string;
   routerPort: number;
   /** Shared Channel Service tunnel; `secretSet` indicates a secret is stored. */
   channel: { serverUrl: string; channelId: string; secretSet: boolean } | null;
+  /** Self-managed reverse-proxy entry; null when not configured. */
+  reverseProxy: ReverseProxyInfo | null;
   status: GatewayRouterStatus;
+}
+
+/** PUT /api/gateway/reverse-proxy request body. */
+export interface SetReverseProxyInput {
+  publicBaseUrl: string;
+  pathPrefix?: string;
+  routerHost?: string;
+  routerPort?: number;
 }
 
 export interface CreateInstanceInput {

@@ -38,6 +38,7 @@ import type {
   SystemVersion,
   RestartAllResult,
   ResumePolishResult,
+  SetReverseProxyInput,
 } from './types.js';
 
 const BASE = '/api';
@@ -335,12 +336,19 @@ export const api = {
       serverUrl: string;
       channelId: string;
       secret: string;
+      routerHost?: string;
       routerPort?: number;
     }): Promise<{ ok: boolean }> =>
       request('/gateway/channel', { method: 'PUT', body: JSON.stringify(input) }),
 
     clearChannel: (): Promise<{ ok: boolean }> =>
       request('/gateway/channel', { method: 'DELETE' }),
+
+    setReverseProxy: (input: SetReverseProxyInput): Promise<{ ok: boolean }> =>
+      request('/gateway/reverse-proxy', { method: 'PUT', body: JSON.stringify(input) }),
+
+    clearReverseProxy: (): Promise<{ ok: boolean }> =>
+      request('/gateway/reverse-proxy', { method: 'DELETE' }),
 
     start: (): Promise<{ pid: number; alreadyRunning: boolean; status: GatewayRouterStatus }> =>
       request('/gateway/start', { method: 'POST' }),

@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { loadOrCreateHubConfig } from './config.js';
+import { hasGatewayExposure } from './gateway-endpoints.js';
 import { startGatewayRouter, stopGatewayRouter } from './gateway-process.js';
 import { closeInstanceAcpRpcClient } from './instance-acp-rpc.js';
 import { dashboardStatePath, restartLogFile, restartLogsDir, restartStatePath } from './paths.js';
@@ -337,8 +338,10 @@ export async function runRestartOrchestrator(plan: RestartPlan = {}): Promise<Re
   // ── 5. gateway (shared tunnel router) ──────────────────────────────
   if (p.gateway) {
     const cfg = loadOrCreateHubConfig();
-    if (cfg.gateway?.tunnel === undefined) {
-      push('gateway', 'skipped', 'no shared tunnel configured');
+    // The router is the dispatch backend for a shared Channel AND a
+    // self-managed reverse proxy, so restart whenever either is configured.
+    if (!hasGatewayExposure(cfg)) {
+      push('gateway', 'skipped', 'no remote exposure configured');
     } else {
       try {
         const stop = await stopGatewayRouter(); // no-op when not running

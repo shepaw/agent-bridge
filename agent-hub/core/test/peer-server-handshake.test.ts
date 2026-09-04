@@ -230,6 +230,29 @@ describe('peer pairing handshake', () => {
     expect(payload.channel_endpoint).toBe('wss://channel.example.com/proxy/ch_peer/peer/ws');
   });
 
+  it('accepts pairing through a reverse-proxy prefix forwarded unstripped', async () => {
+    // A self-managed proxy may send the full public path (prefix kept) to the
+    // router. Switch the exposure from tunnel → reverse proxy, and make the
+    // router re-read hub.json so it learns the path prefix to peel.
+    await router!.stop();
+    router = new GatewayTunnelRouter({
+      routerPort,
+      loadConfig: () => loadOrCreateHubConfig(),
+      onLog: () => undefined,
+    });
+    await router.start();
+
+    const cfg = setHubGateway(loadOrCreateHubConfig(), {
+      tunnel: null,
+      reverseProxy: { publicBaseUrl: 'https://agents.example.com', pathPrefix: '/hub-a' },
+    });
+    saveHubConfig(cfg.path, cfg);
+
+    const { payload } = await pairOverWs(`ws://127.0.0.1:${routerPort}/hub-a/peer/ws`, 'ABC234');
+    expect(payload.accepted).toBe(true);
+    expect(payload.channel_endpoint).toBe('wss://agents.example.com/hub-a/peer/ws');
+  });
+
   it('pushes agent_list_resp on reconnect after pairing (app flow)', async () => {
     writePairingFile({
       code: 'XYZ789',

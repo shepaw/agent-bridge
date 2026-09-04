@@ -177,6 +177,29 @@ export class GatewayTunnelRouter {
     this.agentIdCache = undefined;
   }
 
+  /** Reverse-proxy path prefix from config, if a self-managed exposure is set. */
+  private reverseProxyPathPrefix(): string | undefined {
+    const rp = this.loadConfig().gateway?.reverseProxy;
+    const prefix = rp?.pathPrefix;
+    return prefix !== undefined && prefix.length > 0 ? prefix : undefined;
+  }
+
+  /**
+   * A self-managed reverse proxy may forward the whole public path (with the
+   * configured prefix) straight to the router — e.g. `/hub-a/peer/ws` — or the
+   * proxy may strip the prefix itself. Peel the prefix here when present so the
+   * rest of the router only ever sees `/peer`, `/p/<id>`, `/health` … paths.
+   */
+  private stripReverseProxyPrefix(rawUrl: string): string {
+    const prefix = this.reverseProxyPathPrefix();
+    if (prefix === undefined) return rawUrl;
+    const url = new URL(rawUrl, 'http://localhost');
+    const path = url.pathname;
+    if (path !== prefix && !path.startsWith(`${prefix}/`)) return rawUrl;
+    const rest = path.slice(prefix.length) || '/';
+    return `${rest}${url.search}`;
+  }
+
   private parseRoute(rawUrl: string): ParsedRoute {
     const url = new URL(rawUrl, 'http://localhost');
     const path = url.pathname;
@@ -305,8 +328,8 @@ export class GatewayTunnelRouter {
   // ── HTTP forwarding ──────────────────────────────────────────────
 
   private async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const rawUrl = req.url ?? '/';
-    const url = new URL(rawUrl, 'http://localhost');
+    const requestUrl = this.stripReverseProxyPrefix(req.url ?? '/');
+    const url = new URL(requestUrl, 'http://localhost');
 
     // Router-local health check (also reachable via the tunnel as /health).
     if (url.pathname === '/health') {
@@ -322,7 +345,7 @@ export class GatewayTunnelRouter {
       return;
     }
 
-    const { target, localPath } = this.resolveTarget(rawUrl);
+    const { target, localPath } = this.resolveTarget(requestUrl);
     if (target === undefined) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'No agent matched the routing key.' }));
@@ -368,7 +391,7 @@ export class GatewayTunnelRouter {
     socket: Duplex,
     head: Buffer,
   ): void {
-    const { target, localPath } = this.resolveTarget(req.url ?? '/');
+    const { target, localPath } = this.resolveTarget(this.stripReverseProxyPrefix(req.url ?? '/'));
     if (target === undefined) {
       this.log(`[Router] ws upgrade rejected — no agent for '${req.url}'`);
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');

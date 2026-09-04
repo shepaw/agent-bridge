@@ -123,3 +123,58 @@ describe('pairing URLs with a shared gateway channel', () => {
     expect(catalog[0]!.wsUrl).not.toContain('/proxy/');
   });
 });
+
+describe('pairing URLs with a self-managed reverse-proxy exposure', () => {
+  const RP = { publicBaseUrl: 'https://agents.example.com', pathPrefix: '/hub-a' };
+
+  it('catalog WS URLs route through <publicBase><prefix>/p/<instanceId>/acp/ws', () => {
+    seedInstance('alpha');
+    seedInstance('beta');
+    const cfg = setHubGateway(loadOrCreateHubConfig(), { reverseProxy: RP });
+    saveHubConfig(cfg.path, cfg);
+
+    const catalog = listHubAgentCatalog(loadOrCreateHubConfig());
+    expect(catalog).toHaveLength(2);
+    for (const entry of catalog) {
+      expect(entry.wsUrl).toContain(
+        `wss://agents.example.com/hub-a/p/${entry.instanceId}/acp/ws`,
+      );
+      expect(entry.wsUrl).toContain(`agentId=${entry.agentId}`);
+      expect(entry.wsUrl).toContain(`#fp=${entry.fingerprint}`);
+    }
+  });
+
+  it('bootstrap pair URL uses the reverse-proxy base', () => {
+    seedInstance('solo');
+    const cfg = setHubGateway(loadOrCreateHubConfig(), { reverseProxy: RP });
+    saveHubConfig(cfg.path, cfg);
+
+    const result = createHubPairing({ label: 'test device' });
+    expect(result.pairUrl).toContain('wss://agents.example.com/hub-a/p/');
+    expect(result.pairUrl).toContain('/acp/ws');
+    expect(result.agents).toHaveLength(1);
+  });
+
+  it('shared Channel wins over reverse proxy when both are configured', () => {
+    seedInstance('solo');
+    const cfg = setHubGateway(loadOrCreateHubConfig(), { tunnel: TUNNEL, reverseProxy: RP });
+    saveHubConfig(cfg.path, cfg);
+
+    const catalog = listHubAgentCatalog(loadOrCreateHubConfig());
+    expect(catalog[0]!.wsUrl).toContain('wss://channel.example.com/proxy/ch_abc123/p/');
+    expect(catalog[0]!.wsUrl).not.toContain('agents.example.com');
+  });
+
+  it('round-trips a reverse-proxy entry independent of the shared tunnel', () => {
+    let cfg = setHubGateway(loadOrCreateHubConfig(), { tunnel: TUNNEL, reverseProxy: RP });
+    saveHubConfig(cfg.path, cfg);
+    expect(loadOrCreateHubConfig().gateway?.reverseProxy).toEqual(RP);
+
+    cfg = setHubGateway(loadOrCreateHubConfig(), { reverseProxy: null });
+    saveHubConfig(cfg.path, cfg);
+    const gateway = loadOrCreateHubConfig().gateway!;
+    expect(gateway.reverseProxy).toBeUndefined();
+    // Clearing the reverse proxy must not disturb the shared tunnel.
+    expect(gateway.tunnel).toEqual(TUNNEL);
+  });
+});

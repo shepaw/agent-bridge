@@ -54,4 +54,29 @@ describe('peer pairing channel endpoint', () => {
     expect(qr).toContain('channel=wss%3A%2F%2Fchannel.example.com%2Fproxy%2Fch_peer%2Fpeer%2Fws');
     expect(qr).toContain('local=ws%3A%2F%2F192.168.1.5%3A18793%2Fpeer%2Fws');
   });
+
+  it('builds the peer WS URL from a reverse-proxy exposure', () => {
+    const cfg = setHubGateway(loadOrCreateHubConfig(), {
+      reverseProxy: { publicBaseUrl: 'https://agents.example.com', pathPrefix: '/hub-a' },
+    });
+    saveHubConfig(cfg.path, cfg);
+    expect(resolvePeerChannelEndpoint(loadOrCreateHubConfig())).toBe(
+      'wss://agents.example.com/hub-a/peer/ws',
+    );
+  });
+
+  it('prefers the shared tunnel over a reverse proxy for the peer WS URL', () => {
+    const cfg = setHubGateway(loadOrCreateHubConfig(), {
+      tunnel: {
+        serverUrl: 'https://channel.example.com',
+        channelId: 'ch_peer',
+        secret: 'secret',
+      },
+      reverseProxy: { publicBaseUrl: 'https://agents.example.com', pathPrefix: '/hub-a' },
+    });
+    saveHubConfig(cfg.path, cfg);
+    expect(resolvePeerChannelEndpoint(loadOrCreateHubConfig())).toBe(
+      'wss://channel.example.com/proxy/ch_peer/peer/ws',
+    );
+  });
 });

@@ -246,13 +246,13 @@ export const zh: Record<MessageKey, string> = {
   'peer.section': 'Peer 服务',
   'peer.hint':
     '仪表盘启动时会自动拉起 Peer。打开本页即显示配对二维码，用 App 的「Device Pairing」扫描即可。',
-  'peer.channelWarn': '已配置 Channel 但隧道路由器未运行。远程配对需先启动路由器。',
+  'peer.remoteWarn': '已配置远程访问（共享 Channel 或反向代理），但隧道路由器未运行。远程配对需先启动路由器。',
   'peer.statusBooting': 'Peer 服务：启动中…',
   'peer.statusRunning': 'Peer 服务：运行中 (pid {pid})',
   'peer.statusStopped': 'Peer 服务：已停止',
   'peer.port': '端口 {port}',
   'peer.scanHint': '用 Shepaw app 的「Device Pairing / Scan to Connect」扫描下方二维码。',
-  'peer.qrBoth': ' 二维码包含局域网与 Channel 远程入口。',
+  'peer.qrBoth': ' 二维码包含局域网与远程入口。',
   'peer.qrLanOnly': ' 手机与本机需在同一 Wi-Fi / 局域网。',
   'peer.preparingQr': '正在准备配对二维码…',
   'peer.mint': '生成配对二维码',
@@ -261,6 +261,7 @@ export const zh: Record<MessageKey, string> = {
   'peer.expired': '已过期',
   'peer.lan': '局域网：{endpoint}',
   'peer.channel': 'Channel：{endpoint}',
+  'peer.remote': '远程：{endpoint}',
   'peer.linkLabel': '配对链接（无摄像头可粘贴此链接到 app「Device Pairing → 输入」）',
   'peer.emulatorHint':
     'Android 模拟器：把链接里的 192.168.x.x 改成 10.0.2.2；iOS 模拟器可用 localhost。',
@@ -269,6 +270,9 @@ export const zh: Record<MessageKey, string> = {
   'peer.channelCollapsed':
     'Hub 运行在内网（局域网 / VPN）时，默认仅同一网络内的设备可扫码连接。若希望外网（如手机移动网络）也能访问，可借助共享 Channel 代理，将加密流量安全转发到本机，无需对公网开放 Agent 端口。',
   'peer.channelProxy': '共享 Channel 代理',
+  'peer.reverseProxyTitle': '反向代理（远程访问）',
+  'peer.reverseProxyCollapsed':
+    '不想用 Channel？把自建的 nginx / 反向代理指到 Hub 路由器，局域网外的设备即可通过它配对与连接。',
   'peer.devicesTitle': '已配对设备（{count}）',
   'peer.noDevices': '尚未配对设备。',
   'peer.openStore': '打开储物袋',
@@ -294,6 +298,22 @@ export const zh: Record<MessageKey, string> = {
   'gateway.channelId': 'Channel ID',
   'gateway.secret': 'Secret',
   'gateway.secretPlaceholder': 'HMAC-SHA256 secret',
+
+  'gateway.revHint':
+    '通过自建的公网反向代理（nginx / Caddy / 自建）对外暴露本 Hub。填写公网地址，将下方路径前缀转发到 Hub 路由端口，再启动路由器即可，无需 Channel Service 或 HMAC 密钥。',
+  'gateway.revPublicBase': '公网基础 URL',
+  'gateway.revPathPrefix': '路径前缀',
+  'gateway.revPathPrefixHint':
+    '（可选）例如多个 Hub 共用同一域名时填 /hub-a；代理需将该前缀转发到路由器。',
+  'gateway.revSave': '保存反向代理',
+  'gateway.revRemove': '移除反向代理',
+  'gateway.revRemoved': '已移除反向代理。',
+  'gateway.revRequired': '公网基础 URL 为必填。',
+  'gateway.revPathPrefixSlash': '路径前缀须以 "/" 开头，例如 /hub-a。',
+  'gateway.revBadScheme':
+    '公网地址必须是 http(s) URL，例如 https://agents.example.com —— 不接受 ws:// 与 wss://。',
+  'gateway.revPeerEntry': '设备配对入口',
+  'gateway.revTunnelWins': '已同时配置共享 Channel——配对与 Agent 地址将优先使用 Channel。',
 
   'detail.overview': '概览',
   'detail.sessions': '会话',

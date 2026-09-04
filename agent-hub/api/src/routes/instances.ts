@@ -94,6 +94,7 @@ import {
   hubStoreDeviceId,
   workspaceStoreUri,
   agentPrivateStoreUri,
+  gatewayAcpWsBase,
 } from '@shepaw/agent-hub-core';
 
 export const instancesRouter = Router();
@@ -887,10 +888,21 @@ instancesRouter.post('/:id/enroll', (req: Request, res: Response) => {
     const pkEncoded = encodeURIComponent(pkB64);
     const fragmentParams = `fp=${identity.fingerprint}&pk=${pkEncoded}`;
 
-    const base = (typeof baseUrl === 'string' ? baseUrl : '') || p.baseUrl;
+    // Priority mirrors pairing.ts: explicit --base-url → gateway exposure
+    // (shared Channel `/proxy/<channelId>` or reverse proxy `/p/<id>`) →
+    // legacy per-instance baseUrl → LAN loopback. Routing by `/p/<instanceId>`
+    // through the tunnel router means Channel / reverse-proxy machines no
+    // longer fall back to a LAN address the phone can't reach.
+    const explicitBase = typeof baseUrl === 'string' && baseUrl.length > 0 ? baseUrl : undefined;
+    const gatewayBase = gatewayAcpWsBase(cfg);
     let pairUrl: string;
-    if (base) {
-      const clean = base.replace(/\/$/, '');
+    if (explicitBase) {
+      const clean = explicitBase.replace(/\/$/, '');
+      pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+    } else if (gatewayBase) {
+      pairUrl = `${gatewayBase}/p/${encodeURIComponent(p.id)}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
+    } else if (p.baseUrl) {
+      const clean = p.baseUrl.replace(/\/$/, '');
       pairUrl = `${clean}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
     } else {
       const host = resolvePublicHost(p.host);

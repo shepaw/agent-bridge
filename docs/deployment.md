@@ -197,7 +197,63 @@ shepaw-hub gateway-start
 
 重新执行 `shepaw-hub peer-pair`（或仪表盘生成配对码），二维码将同时包含局域网入口（`local=`）与 Channel 远程入口（`channel=`）。
 
-### 3. Web 仪表盘（管理界面）
+### 3. 普通反向代理对外暴露（nginx / 自建代理，可选）
+
+不想依赖 Channel Service 时，可让 Hub 通过**自己管理的公网反向代理**
+（nginx / Caddy / 自建）对外暴露。原理相同：隧道路由器在本地分发
+`/p/<instanceId>/acp/ws`（Add Agent）与 `/peer/ws`（Device Pairing），
+你的反向代理只需把某个**路径前缀**转发到该路由器的本地端口即可，全程无需
+HMAC 密钥与云端中继。
+
+**Web**：**扫码配对** → 展开 **反向代理（远程访问）**，填写公网基础 URL
+（如 `https://agents.example.com`）与可选的路径前缀（如 `/hub-a`），保存后
+会自动启动隧道路由器。
+
+**CLI**：
+
+```bash
+shepaw-hub gateway-set-reverse-proxy \
+  --public-base https://agents.example.com \
+  --path-prefix /hub-a            # 可选：多 Hub 共用同一域名时
+
+# `shepaw-hub web` 会自动启动路由器；仅 CLI 场景才需要：
+shepaw-hub gateway-start
+shepaw-hub gateway-show           # 查看派生的 peer / ACP 入口
+```
+
+**nginx 示例**（把前缀原样转发给路由器，路由器会自行剥离前缀）：
+
+```nginx
+# /etc/nginx/conf.d/agents.conf
+server {
+  listen 443 ssl;
+  server_name agents.example.com;
+  # ssl_certificate / ssl_certificate_key ...
+
+  location /hub-a/ {
+    proxy_pass http://127.0.0.1:18789;      # 保留路径原样转发
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;
+  }
+}
+```
+
+也可用 `proxy_pass http://127.0.0.1:18789/;`（末尾加 `/`）让 nginx 先剥掉前缀再
+转发——两种方式路由器都支持。若路径前缀留空，则把整个域名转发给路由器即可。
+
+配置后重新生成配对码，App 即可通过以下入口访问：
+
+- Peer 配对：`wss://agents.example.com/hub-a/peer/ws`（二维码的 `channel=`）
+- Add Agent：`wss://agents.example.com/hub-a/p/<instanceId>/acp/ws`
+
+> **注意**：共享 Channel 与反向代理可同时配置，两者都会拉起同一台隧道路由器；
+> 但配对/Agent 地址优先使用共享 Channel。反向代理仅在前缀路径确实被转发到本机
+> 路由器时可用；公网建议启用 HTTPS（`wss://`），纯 HTTP（`ws://`）仅适合内网测试。
+
+### 4. Web 仪表盘（管理界面）
 
 `shepaw-hub web` 会同时拉起 Peer；若已配置共享 Channel，也会拉起隧道路由器。
 

@@ -142,4 +142,34 @@ describe('GatewayTunnelRouter dispatch', () => {
     expect(await roundtrip(`${base}/peer/ws`)).toBe('peer-ok');
     peer.close();
   });
+
+  it('strips a configured reverse-proxy path prefix from WS and HTTP paths', async () => {
+    const peer = await mockAgent(() => 'peer-pfx');
+    const cfg: HubConfig = {
+      path: '/tmp/hub.json',
+      instances: [instance('alpha', agentA.port)],
+      customEngines: [],
+      peer: { host: '127.0.0.1', port: peer.port },
+      gateway: {
+        reverseProxy: { publicBaseUrl: 'https://agents.example.com', pathPrefix: '/hub-a' },
+        routerHost: '127.0.0.1',
+        routerPort,
+      },
+    };
+    await router.stop();
+    router = new GatewayTunnelRouter({
+      routerPort,
+      loadConfig: () => cfg,
+      onLog: () => undefined,
+    });
+    await router.start();
+    const base = `ws://127.0.0.1:${routerPort}`;
+    // A proxy that forwards the full public path (prefix kept) must still work.
+    expect(await roundtrip(`${base}/hub-a/p/alpha/acp/ws?agentId=x`)).toBe('A');
+    expect(await roundtrip(`${base}/hub-a/peer/ws`)).toBe('peer-pfx');
+    // Router-local health is reachable behind the prefix too.
+    const resp = await fetch(`http://127.0.0.1:${routerPort}/hub-a/health`);
+    expect(resp.status).toBe(200);
+    peer.close();
+  });
 });

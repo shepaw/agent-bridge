@@ -250,14 +250,14 @@ export const en = {
   'peer.section': 'Peer service',
   'peer.hint':
     'The dashboard starts Peer automatically. This page shows a pairing QR — scan it with the app’s Device Pairing.',
-  'peer.channelWarn':
-    'A Channel is configured but the tunnel router is not running. Remote pairing needs the router first.',
+  'peer.remoteWarn':
+    'Remote access is configured (shared Channel or reverse proxy) but the tunnel router is not running. Remote pairing needs the router first.',
   'peer.statusBooting': 'Peer service: starting…',
   'peer.statusRunning': 'Peer service: running (pid {pid})',
   'peer.statusStopped': 'Peer service: stopped',
   'peer.port': 'Port {port}',
   'peer.scanHint': 'Scan the QR below with Shepaw app Device Pairing / Scan to Connect.',
-  'peer.qrBoth': ' The QR includes LAN and Channel remote endpoints.',
+  'peer.qrBoth': ' The QR includes LAN and remote endpoints.',
   'peer.qrLanOnly': ' Phone and this machine must be on the same Wi-Fi / LAN.',
   'peer.preparingQr': 'Preparing pairing QR…',
   'peer.mint': 'Generate pairing QR',
@@ -266,6 +266,7 @@ export const en = {
   'peer.expired': 'Expired',
   'peer.lan': 'LAN: {endpoint}',
   'peer.channel': 'Channel: {endpoint}',
+  'peer.remote': 'Remote: {endpoint}',
   'peer.linkLabel': 'Pairing link (paste into the app: Device Pairing → Enter, if there is no camera)',
   'peer.emulatorHint':
     'Android emulator: change 192.168.x.x in the link to 10.0.2.2; iOS simulator can use localhost.',
@@ -274,6 +275,9 @@ export const en = {
   'peer.channelCollapsed':
     'On a LAN or VPN, only devices on the same network can scan by default. For cellular / other networks, a shared Channel proxy forwards encrypted traffic to this machine without exposing Agent ports.',
   'peer.channelProxy': 'shared Channel proxy',
+  'peer.reverseProxyTitle': 'Reverse proxy (remote access)',
+  'peer.reverseProxyCollapsed':
+    'No Channel Service? Point your own nginx / reverse proxy at the hub router, and devices off the LAN can pair and connect through it.',
   'peer.devicesTitle': 'Paired devices ({count})',
   'peer.noDevices': 'No paired devices yet.',
   'peer.openStore': 'Open Nexus Pouch',
@@ -300,6 +304,23 @@ export const en = {
   'gateway.channelId': 'Channel ID',
   'gateway.secret': 'Secret',
   'gateway.secretPlaceholder': 'HMAC-SHA256 secret',
+
+  'gateway.revHint':
+    'Expose this hub through your own public reverse proxy (nginx / Caddy / self-built). Enter the public origin, make the proxy forward the path prefix below to the tunnel router port, then start the router. No Channel Service or HMAC secret is needed.',
+  'gateway.revPublicBase': 'Public base URL',
+  'gateway.revPathPrefix': 'Path prefix',
+  'gateway.revPathPrefixHint':
+    '(optional) e.g. /hub-a when several hubs share one domain; the proxy must forward it to the router.',
+  'gateway.revSave': 'Save Reverse Proxy',
+  'gateway.revRemove': 'Remove Reverse Proxy',
+  'gateway.revRemoved': 'Reverse proxy entry removed.',
+  'gateway.revRequired': 'Public base URL is required.',
+  'gateway.revPathPrefixSlash': 'Path prefix must start with "/", e.g. /hub-a.',
+  'gateway.revBadScheme':
+    'Public base must be an http(s) URL such as https://agents.example.com — ws:// and wss:// are not accepted.',
+  'gateway.revPeerEntry': 'Device pairing entry',
+  'gateway.revTunnelWins':
+    'A shared Channel is also configured — it takes precedence for pairing and agent URLs.',
 
   'detail.overview': 'Overview',
   'detail.sessions': 'Sessions',

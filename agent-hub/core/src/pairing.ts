@@ -26,6 +26,7 @@ import {
 
 import type { HubConfig, InstanceConfig } from './config.js';
 import { loadOrCreateHubConfig } from './config.js';
+import { gatewayAcpWsBase } from './gateway-endpoints.js';
 import { hubEnrollmentsPath, instancePaths } from './paths.js';
 import { ensureInstanceDir, isAlive, readState } from './spawn.js';
 import { resolvePublicHost } from './network.js';
@@ -86,23 +87,6 @@ export interface FanOutPeerOptions {
   enrollmentCode: string;
 }
 
-/**
- * Derive the `wss://<server>/proxy/<channelId>` base for the shared,
- * gateway-level channel. Returns undefined when no gateway tunnel is set.
- * The Channel Service also accepts `/c/<alias>` routing, but the alias is
- * resolved at runtime by the tunnel router, so pairing URLs use the always-
- * valid `/proxy/<channelId>` form.
- */
-function gatewayChannelWsBase(cfg: HubConfig): string | undefined {
-  const t = cfg.gateway?.tunnel;
-  if (t === undefined) return undefined;
-  const wsBase = t.serverUrl
-    .replace(/\/+$/, '')
-    .replace(/^https:\/\//, 'wss://')
-    .replace(/^http:\/\//, 'ws://');
-  return `${wsBase}/proxy/${t.channelId}`;
-}
-
 function buildWsPairUrl(
   instance: InstanceConfig,
   identity: { agentId: string; fingerprint: string; staticPublicKey: Uint8Array },
@@ -158,7 +142,7 @@ function pickBootstrapInstance(cfg: HubConfig, preferredId?: string): InstanceCo
 
 /** List every managed agent with connection metadata for the Shepaw app. */
 export function listHubAgentCatalog(cfg: HubConfig = loadOrCreateHubConfig()): HubAgentCatalogEntry[] {
-  const gatewayBase = gatewayChannelWsBase(cfg);
+  const gatewayBase = gatewayAcpWsBase(cfg);
   let workspaceDeviceId: string | undefined;
   try {
     workspaceDeviceId = hubStoreDeviceId();
@@ -232,7 +216,7 @@ export function createHubPairing(opts: CreateHubPairingOptions = {}): HubPairing
   }
 
   const bootstrapIdentity = loadOrCreateIdentity({ path: instancePaths(bootstrap.id).identityPath });
-  const gatewayBase = gatewayChannelWsBase(cfg);
+  const gatewayBase = gatewayAcpWsBase(cfg);
   const pairUrl = buildWsPairUrl(bootstrap, bootstrapIdentity, { baseUrl: opts.baseUrl, gatewayBase });
   const qrPayload = `shepaw://pair?url=${encodeURIComponent(pairUrl)}&code=${encodeURIComponent(token.code)}`;
 

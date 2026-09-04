@@ -114,6 +114,37 @@ export interface TunnelConfig {
   readonly secret: string;
 }
 
+/**
+ * Optional self-managed public reverse-proxy entry for this hub.
+ *
+ * Lets an operator front the hub with their own nginx / public reverse proxy
+ * (no Shepaw Channel Service). When set, the tunnel router's dispatch server is
+ * expected to be reachable at `<publicBaseUrl><pathPrefix>` through the proxy,
+ * and the hub advertises:
+ *   - peer pairing   → `wss://<publicBaseUrl><prefix>/peer/ws`
+ *   - Add-Agent ACP  → `wss://<publicBaseUrl><prefix>/p/<instanceId>/acp/ws`
+ *
+ * `tunnel` and `reverseProxy` may coexist; when both are present the shared
+ * Channel (`tunnel`) takes precedence for everything derived at runtime. The
+ * proxy only needs to forward to the local tunnel router — no Shepaw cloud
+ * relay is involved (and no `PAW_ACP_MAILBOX_*` inbox: reverse-proxy agents are
+ * online/real-time only).
+ */
+export interface ReverseProxyConfig {
+  /**
+   * Public origin the operator's proxy fronts, e.g. "https://agents.example.com"
+   * or "https://agents.example.com/base". Scheme is http/https only (never
+   * ws/wss — the hub converts to wss/ws internally); trailing `/` is stripped.
+   */
+  readonly publicBaseUrl: string;
+  /**
+   * Optional prefix distinguishing this hub when several share one origin,
+   * e.g. "/hub-a". Must start with `/`; no `?` / `#` / whitespace; trailing
+   * `/` is stripped. Empty/omitted → the origin root.
+   */
+  readonly pathPrefix?: string;
+}
+
 /** Default loopback host the tunnel router binds its dispatch server to. */
 export const DEFAULT_ROUTER_HOST = '127.0.0.1';
 /** Default local port the tunnel router listens on for dispatch. */
@@ -141,6 +172,11 @@ export const DEFAULT_PEER_PORT = 18793;
 export interface GatewayConfig {
   /** Shared Channel Service tunnel. Omitted when running LAN-only. */
   readonly tunnel?: TunnelConfig;
+  /**
+   * Self-managed public reverse-proxy entry (nginx / own proxy). May coexist
+   * with `tunnel`; the shared Channel takes precedence when both are set.
+   */
+  readonly reverseProxy?: ReverseProxyConfig;
   /** Loopback host the dispatch server binds to. Default `127.0.0.1`. */
   readonly routerHost: string;
   /** Local port the dispatch server (and the tunnel's local target) uses. */
@@ -359,14 +395,17 @@ export function saveHubConfig(path: string, config: Pick<HubConfig, 'instances' 
 }
 
 /**
- * Set or update the gateway-level (device-wide) config. Pass `tunnel: null`
- * to remove the shared channel; pass a `TunnelConfig` to set it. `routerHost`
- * / `routerPort` default to the built-in loopback values when first created.
+ * Set or update the gateway-level (device-wide) config. Pass `tunnel: null` to
+ * remove the shared channel, `reverseProxy: null` to remove the self-managed
+ * reverse-proxy entry; pass a config object to set either. Each field is
+ * independent — setting one never clears the other. `routerHost` / `routerPort`
+ * default to the built-in loopback values when first created.
  */
 export function setHubGateway(
   config: HubConfig,
   patch: {
     tunnel?: TunnelConfig | null;
+    reverseProxy?: ReverseProxyConfig | null;
     routerHost?: string;
     routerPort?: number;
   },
@@ -380,8 +419,17 @@ export function setHubGateway(
   } else {
     tunnel = existing?.tunnel;
   }
+  let reverseProxy: ReverseProxyConfig | undefined;
+  if (patch.reverseProxy === null) {
+    reverseProxy = undefined;
+  } else if (patch.reverseProxy !== undefined) {
+    reverseProxy = patch.reverseProxy;
+  } else {
+    reverseProxy = existing?.reverseProxy;
+  }
   const gateway: GatewayConfig = {
     ...(tunnel !== undefined && { tunnel }),
+    ...(reverseProxy !== undefined && { reverseProxy }),
     routerHost: patch.routerHost ?? existing?.routerHost ?? DEFAULT_ROUTER_HOST,
     routerPort: patch.routerPort ?? existing?.routerPort ?? DEFAULT_ROUTER_PORT,
   };
@@ -1060,6 +1108,7 @@ function parseGatewayConfig(v: unknown): GatewayConfig | undefined {
   if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
   const obj = v as Record<string, unknown>;
   const tunnel = parseTunnelConfig(obj.tunnel);
+  const reverseProxy = parseReverseProxyConfig(obj.reverseProxy);
   const routerHost = typeof obj.routerHost === 'string' && obj.routerHost.length > 0
     ? obj.routerHost
     : DEFAULT_ROUTER_HOST;
@@ -1068,6 +1117,7 @@ function parseGatewayConfig(v: unknown): GatewayConfig | undefined {
     : DEFAULT_ROUTER_PORT;
   return {
     ...(tunnel !== undefined && { tunnel }),
+    ...(reverseProxy !== undefined && { reverseProxy }),
     routerHost,
     routerPort,
   };
@@ -1217,6 +1267,104 @@ function parseTunnelConfig(v: unknown): TunnelConfig | undefined {
   if (typeof obj.channelId !== 'string' || obj.channelId.length === 0) return undefined;
   if (typeof obj.secret !== 'string' || obj.secret.length === 0) return undefined;
   return { serverUrl: obj.serverUrl, channelId: obj.channelId, secret: obj.secret };
+}
+
+/**
+ * Strict validation for reverse-proxy user input (CLI `--public-base` /
+ * `--path-prefix`, REST `PUT /gateway/reverse-proxy`, dashboard form). Returns
+ * the normalized config or throws an Error carrying a `code` the UI can map to
+ * an i18n string (`gateway.required` / `gateway.revBadScheme`).
+ */
+export function validateReverseProxyInput(input: {
+  publicBaseUrl?: unknown;
+  pathPrefix?: unknown;
+}): ReverseProxyConfig {
+  if (
+    input.publicBaseUrl === undefined || input.publicBaseUrl === null
+    || typeof input.publicBaseUrl !== 'string' || input.publicBaseUrl.trim().length === 0
+  ) {
+    throw reverseProxyError('gateway.required', '"publicBaseUrl" is required.');
+  }
+  const publicBaseUrl = normalizePublicBaseUrl(input.publicBaseUrl);
+  if (publicBaseUrl === undefined) {
+    throw reverseProxyError(
+      'gateway.revBadScheme',
+      '"publicBaseUrl" must be an http(s) URL, e.g. https://agents.example.com (ws:// and wss:// are not accepted).',
+    );
+  }
+
+  let pathPrefix: string | undefined;
+  if (
+    input.pathPrefix !== undefined && input.pathPrefix !== null
+    && String(input.pathPrefix).trim().length > 0
+  ) {
+    const trimmed = String(input.pathPrefix).trim();
+    if (!trimmed.startsWith('/')) {
+      throw reverseProxyError(
+        'gateway.revBadScheme',
+        '"pathPrefix" must start with "/", e.g. /hub-a.',
+      );
+    }
+    if (/[?#\s]/.test(trimmed)) {
+      throw reverseProxyError(
+        'gateway.revBadScheme',
+        '"pathPrefix" must not contain "?", "#", or whitespace.',
+      );
+    }
+    pathPrefix = cleanPathPrefix(trimmed);
+  }
+
+  return { publicBaseUrl, ...(pathPrefix !== undefined && { pathPrefix }) };
+}
+
+/**
+ * Lenient parse of the gateway `reverseProxy` block from hub.json (mirrors
+ * {@link parseTunnelConfig}). Malformed entries drop the whole block so a hand
+ * edit / stale value never blocks load — strict validation lives on the write
+ * paths only. Tolerant of a missing leading `/` on `pathPrefix`.
+ */
+export function parseReverseProxyConfig(v: unknown): ReverseProxyConfig | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  if (typeof obj.publicBaseUrl !== 'string') return undefined;
+  const publicBaseUrl = normalizePublicBaseUrl(obj.publicBaseUrl);
+  if (publicBaseUrl === undefined) return undefined;
+  let pathPrefix: string | undefined;
+  if (typeof obj.pathPrefix === 'string' && obj.pathPrefix.trim().length > 0) {
+    const trimmed = obj.pathPrefix.trim();
+    if (!/[?#\s]/.test(trimmed)) {
+      pathPrefix = cleanPathPrefix(trimmed.startsWith('/') ? trimmed : `/${trimmed}`);
+    }
+  }
+  return { publicBaseUrl, ...(pathPrefix !== undefined && { pathPrefix }) };
+}
+
+/** http/https origin check + strip trailing `/`. Returns undefined when invalid. */
+function normalizePublicBaseUrl(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return undefined;
+  try {
+    const u = new URL(trimmed);
+    if (u.hostname.length === 0) return undefined;
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+  } catch {
+    return undefined;
+  }
+  return trimmed.replace(/\/+$/, '');
+}
+
+/**
+ * Strip trailing slashes from a path prefix that already starts with `/`.
+ * Returns undefined for an empty or root-only ("/") prefix.
+ */
+function cleanPathPrefix(raw: string): string | undefined {
+  const noTrailing = raw.replace(/\/+$/, '');
+  if (noTrailing.length === 0 || noTrailing === '/') return undefined;
+  return noTrailing;
+}
+
+function reverseProxyError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code });
 }
 
 function formatErr(err: unknown): string {

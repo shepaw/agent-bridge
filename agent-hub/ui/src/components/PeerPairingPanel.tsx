@@ -4,6 +4,7 @@ import { api } from '../api/client.js';
 import type { GatewayInfo, PairedPeer, PeerPairingResult, PeerServiceStatus } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 import { ChannelSettingsPanel } from './GatewaySettingsModal.js';
+import { ReverseProxyPanel } from './ReverseProxyPanel.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 
 /**
@@ -22,6 +23,7 @@ export function PeerPairingPanel() {
   const [copied, setCopied] = useState(false);
   const [booting, setBooting] = useState(true);
   const [channelExpanded, setChannelExpanded] = useState(false);
+  const [reverseProxyExpanded, setReverseProxyExpanded] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoQrDone = useRef(false);
 
@@ -49,13 +51,13 @@ export function PeerPairingPanel() {
           ({ peerStatus, gateway: gw } = await load());
         }
         if (cancelled) return;
-        if (gw?.channel && !gw.status.running) {
+        if ((gw?.channel || gw?.reverseProxy) && !gw.status.running) {
           try {
             await api.gateway.start();
             if (cancelled) return;
             ({ peerStatus, gateway: gw } = await load());
           } catch {
-            /* channel misconfigured — pairing tab still works on LAN */
+            /* remote access misconfigured — pairing tab still works on LAN */
           }
         }
         if (cancelled) return;
@@ -84,10 +86,11 @@ export function PeerPairingPanel() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pairing]);
 
-  // Already configured — keep the section open so operators can manage it.
+  // Already configured — keep the sections open so operators can manage them.
   useEffect(() => {
     if (gateway?.channel) setChannelExpanded(true);
-  }, [gateway?.channel]);
+    if (gateway?.reverseProxy) setReverseProxyExpanded(true);
+  }, [gateway?.channel, gateway?.reverseProxy]);
 
   const start = async () => {
     setBusy(true); setErr(null);
@@ -123,6 +126,7 @@ export function PeerPairingPanel() {
   };
 
   const running = status?.running ?? false;
+  const hasRemoteExposure = Boolean(gateway?.channel || gateway?.reverseProxy);
 
   return (
     <>
@@ -155,9 +159,9 @@ export function PeerPairingPanel() {
         <p style={priorityHint}>
           {t('peer.hint')}
         </p>
-        {gateway?.channel && !gateway.status.running && (
+        {hasRemoteExposure && !gateway?.status.running && (
           <p style={warn}>
-            {t('peer.channelWarn')}
+            {t('peer.remoteWarn')}
           </p>
         )}
         <div style={statusRow}>
@@ -180,7 +184,7 @@ export function PeerPairingPanel() {
         </div>
         <p style={hint}>
           {t('peer.scanHint')}
-          {gateway?.channel ? t('peer.qrBoth') : t('peer.qrLanOnly')}
+          {hasRemoteExposure ? t('peer.qrBoth') : t('peer.qrLanOnly')}
         </p>
 
         {booting && !pairing ? (
@@ -201,7 +205,9 @@ export function PeerPairingPanel() {
               {pairing.channelEndpoint && (
                 <>
                   <br />
-                  {t('peer.channel', { endpoint: pairing.channelEndpoint })}
+                  {gateway?.channel
+                    ? t('peer.channel', { endpoint: pairing.channelEndpoint })
+                    : t('peer.remote', { endpoint: pairing.channelEndpoint })}
                 </>
               )}
             </p>
@@ -255,7 +261,31 @@ export function PeerPairingPanel() {
             {t('peer.channelCollapsed')}
           </p>
         )}
-        {channelExpanded && <ChannelSettingsPanel />}
+        {channelExpanded && <ChannelSettingsPanel onChanged={() => void load()} />}
+      </div>
+
+      <div style={section}>
+        <button
+          type="button"
+          style={collapseHeader}
+          aria-expanded={reverseProxyExpanded}
+          onClick={() => setReverseProxyExpanded((v) => !v)}
+        >
+          <span style={collapseTitleRow}>
+            <span style={chevron}>{reverseProxyExpanded ? '▾' : '▸'}</span>
+            <span style={sectionTitleInline}>{t('peer.reverseProxyTitle')}</span>
+            {gateway?.reverseProxy && !reverseProxyExpanded && (
+              <span style={configuredBadge}>{t('common.configured')}</span>
+            )}
+          </span>
+          <span style={collapseAction}>{reverseProxyExpanded ? t('common.collapse') : t('common.expand')}</span>
+        </button>
+        {!reverseProxyExpanded && (
+          <p style={channelCollapsedHint}>
+            {t('peer.reverseProxyCollapsed')}
+          </p>
+        )}
+        {reverseProxyExpanded && <ReverseProxyPanel onChanged={() => void load()} />}
       </div>
 
       <div style={section}>

@@ -27,6 +27,9 @@
  *   peer pair                      Same as pair
  *   peer set-name [name]           Set the device name advertised on pairing (default: hostname)
  *   gateway pair [id]              Legacy ACP/gateway pairing QR (hub-wide or one instance)
+ *   gateway set-reverse-proxy      Expose via your own nginx / reverse proxy (no Channel)
+ *   gateway clear-reverse-proxy    Remove the reverse-proxy exposure
+ *   gateway show                   Show channel / reverse proxy + router config
  *   enroll <id>                    Alias for `gateway pair <id>`
  *   enroll-list <id>               List this instance's outstanding codes
  *   enroll-revoke <id> <code>      Cancel an unused code
@@ -71,6 +74,7 @@ import {
   parseSessionMode,
   resolvePublicHost,
   type InstanceConfig,
+  type ReverseProxyConfig,
   type TunnelConfig,
   CustomEngineExistsError,
   CustomEngineInUseError,
@@ -107,7 +111,13 @@ import {
 import { runQuickstart } from './quickstart.js';
 import { runTest } from './test-cmd.js';
 import {
+  DEFAULT_ROUTER_HOST,
   DEFAULT_ROUTER_PORT,
+  gatewayAcpWsBase,
+  hasGatewayExposure,
+  peerChannelWsUrl,
+  reverseProxyPeerWsUrl,
+  reverseProxyWsBase,
   setHubGateway,
   setHubPeer,
   resolvePeerDeviceName,
@@ -122,6 +132,7 @@ import {
   loadPairedPeers,
   removePairedPeer,
   tryAuthorizePeerServiceOnInstance,
+  validateReverseProxyInput,
 } from '@shepaw/agent-hub-core';
 
 // ── multi-word dispatch ────────────────────────────────────────────
@@ -811,9 +822,10 @@ function runPair(
   const pkEncoded = encodeURIComponent(pkB64);
   const fragmentParams = `fp=${identity.fingerprint}&pk=${pkEncoded}`;
 
-  // Priority: explicit --base-url > shared gateway channel > legacy instance
-  // baseUrl > loopback. The shared channel routes by /p/<instanceId>.
-  const gatewayBase = gatewayChannelWsBase(cfg);
+  // Priority: explicit --base-url > gateway exposure (shared Channel or
+  // reverse proxy) > legacy instance baseUrl > loopback. Both exposure types
+  // route by /p/<instanceId> through the tunnel router.
+  const gatewayBase = gatewayAcpWsBase(cfg);
   let pairUrl: string;
   if (opts.baseUrl) {
     pairUrl = `${opts.baseUrl.replace(/\/$/, '')}/acp/ws?agentId=${identity.agentId}#${fragmentParams}`;
@@ -845,8 +857,10 @@ function runPair(
       console.log(`  LAN URL derived from bind host ${instance.host} → ${publicHost}.`);
       console.log(`  Phone must be on the same Wi-Fi; bind with --host 0.0.0.0 for LAN reachability.`);
     } else {
-      console.log(`  ⚠ No shared channel or base URL configured — the URL above is loopback only.`);
-      console.log(`     Configure the shared channel: shepaw-hub gateway set-channel ...`);
+      console.log(`  ⚠ No remote exposure or base URL configured — the URL above is loopback only.`);
+      console.log(`     Remote options:`);
+      console.log(`       shepaw-hub gateway set-channel --server <url> --channel-id <id> --secret <secret>`);
+      console.log(`       shepaw-hub gateway set-reverse-proxy --public-base <url> [--path-prefix /hub-a]`);
       console.log(`     Or a per-instance base URL: shepaw-hub instance update ${id} --base-url <url>`);
       console.log(`     Or re-register with --host 0.0.0.0 for same-Wi-Fi pairing.`);
     }
@@ -1202,13 +1216,14 @@ cli
   });
 
 cli
-  .command('gateway-show', 'Show the gateway channel + router configuration')
+  .command('gateway-show', 'Show the gateway channel / reverse proxy + router configuration')
   .action(() => {
     try {
       const cfg = loadOrCreateHubConfig();
       const gw = cfg.gateway;
       const state = readGatewayState();
       const running = state !== undefined && state.pid > 0 && isAlive(state.pid);
+      const acpBase = gatewayAcpWsBase(cfg);
       console.log('Gateway:');
       console.log(`  router port: ${gw?.routerPort ?? DEFAULT_ROUTER_PORT}`);
       console.log(`  router host: ${gw?.routerHost ?? '127.0.0.1'}`);
@@ -1219,11 +1234,90 @@ cli
         console.log(`  channel ID:  ${gw.tunnel.channelId}`);
         console.log(`  secret:      ${'*'.repeat(8)} (set)`);
       } else {
-        console.log('  channel:     (none — LAN-only)');
+        console.log('  channel:     (none)');
+      }
+      if (gw?.reverseProxy) {
+        console.log('');
+        console.log('Reverse proxy:');
+        console.log(`  public base: ${gw.reverseProxy.publicBaseUrl}`);
+        console.log(`  path prefix: ${gw.reverseProxy.pathPrefix ?? '(none)'}`);
+        console.log(`  peer entry:  ${reverseProxyPeerWsUrl(cfg) ?? '(none)'}`);
+        console.log(`  acp example: ${reverseProxyWsBaseWithAcp(cfg) ?? '(none)'}`);
+        if (gw.tunnel) {
+          console.log('  Channel is also configured — it takes precedence for pairing/QR.');
+        }
+      } else {
+        console.log('  reverse proxy: (none)');
       }
       console.log('');
+      if (acpBase !== undefined) {
+        console.log(`Effective remote base: ${acpBase}  (tunnel wins over reverse proxy)`);
+        console.log(`  peer/ws:    ${acpBase}/peer/ws`);
+        console.log(`  acp/ws:     ${acpBase}/p/<instanceId>/acp/ws`);
+        console.log('');
+      }
       console.log(`Router:  ${running ? `running (pid ${state!.pid})` : 'stopped'}`);
       console.log(`  log:   ${gatewayLogFile()}`);
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-set-reverse-proxy', 'Expose this hub through your own public reverse proxy (nginx; no Channel needed)')
+  .option('--public-base <url>', 'Public origin, e.g. https://agents.example.com (http/https only; ws/wss refused)')
+  .option('--path-prefix <p>', 'Optional per-hub prefix under a shared origin, e.g. /hub-a (nginx strips it via proxy_pass trailing /)')
+  .option('--router-host <h>', `Router bind host (default: ${DEFAULT_ROUTER_HOST})`)
+  .option('--router-port <n>', `Router dispatch port (default: ${DEFAULT_ROUTER_PORT})`)
+  .action((opts: {
+    publicBase?: string;
+    pathPrefix?: string;
+    routerHost?: string;
+    routerPort?: number | string;
+  }) => {
+    try {
+      if (!opts.publicBase || opts.publicBase.trim().length === 0) {
+        console.error('Error: --public-base is required.');
+        process.exit(1);
+      }
+      const reverseProxy = validateReverseProxyInput({
+        publicBaseUrl: opts.publicBase,
+        pathPrefix: opts.pathPrefix,
+      });
+      const cfg = loadOrCreateHubConfig();
+      setHubGateway(cfg, {
+        reverseProxy,
+        routerHost: opts.routerHost !== undefined && String(opts.routerHost).trim().length > 0
+          ? String(opts.routerHost).trim()
+          : undefined,
+        routerPort: opts.routerPort !== undefined ? Number(opts.routerPort) : undefined,
+      });
+      const updated = loadOrCreateHubConfig();
+      console.log('Configured self-managed reverse-proxy exposure.');
+      console.log(`  public base: ${updated.gateway?.reverseProxy?.publicBaseUrl ?? reverseProxy.publicBaseUrl}`);
+      console.log(`  path prefix: ${reverseProxy.pathPrefix ?? '(none)'}`);
+      console.log(`  router:      ${updated.gateway?.routerHost ?? DEFAULT_ROUTER_HOST}:${updated.gateway?.routerPort ?? DEFAULT_ROUTER_PORT}`);
+      console.log('');
+      console.log(`  Peer pairing channel → ${peerChannelWsUrl(updated) ?? '(none)'}`);
+      console.log(`  Add-Agent ACP        → ${gatewayAcpWsBase(updated) ?? '(none)'}/p/<instanceId>/acp/ws`);
+      console.log('');
+      console.log('  Confirm your nginx / reverse proxy forwards the path prefix to the router,');
+      console.log('  then start the router:  shepaw-hub gateway start');
+      if (isGatewayRunning()) {
+        console.log('(router already running — restart to apply: shepaw-hub gateway stop && shepaw-hub gateway start)');
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('gateway-clear-reverse-proxy', 'Remove the self-managed reverse-proxy entry (LAN-only unless a Channel is set)')
+  .action(() => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      setHubGateway(cfg, { reverseProxy: null });
+      console.log('Cleared reverse-proxy exposure. Restart the router if running.');
     } catch (err) {
       exitWithError(err);
     }
@@ -1240,9 +1334,11 @@ cli
       } else {
         console.log(`Started tunnel router — pid ${result.pid}, dispatch port ${result.routerPort}.`);
         console.log(`  log: ${gatewayLogFile()}`);
-        if (cfg.gateway?.tunnel === undefined) {
-          console.log('  ⚠ No shared channel configured — router is LAN-only.');
-          console.log('     Configure one: shepaw-hub gateway set-channel --server <url> --channel-id <id> --secret <secret>');
+        if (!hasGatewayExposure(cfg)) {
+          console.log('  ⚠ No remote exposure configured — router is LAN-only.');
+          console.log('     Remote pairing needs one of:');
+          console.log('       shepaw-hub gateway set-channel --server <url> --channel-id <id> --secret <secret>');
+          console.log('       shepaw-hub gateway set-reverse-proxy --public-base <url> [--path-prefix /hub-a]');
         }
       }
     } catch (err) {
@@ -1484,7 +1580,9 @@ async function runWebChild(opts: WebOptions): Promise<void> {
 
   if (opts.gateway) {
     const cfg = loadOrCreateHubConfig();
-    if (cfg.gateway?.tunnel !== undefined) {
+    // The router is the dispatch backend for BOTH a shared Channel and a
+    // self-managed reverse proxy, so start it whenever either is configured.
+    if (hasGatewayExposure(cfg)) {
       try {
         const res = await startGatewayRouter(cfg);
         console.log(
@@ -1511,7 +1609,7 @@ cli.help((sections) => {
     [/peers-(list|add|remove)/g, 'peers $1'],
     [/logs-(rotate)/g, 'logs $1'],
     [/enroll-(list|revoke)/g, 'enroll $1'],
-    [/gateway-(pair|set-channel|clear-channel|show|start|stop|status)/g, 'gateway $1'],
+    [/gateway-(pair|set-channel|clear-channel|set-reverse-proxy|clear-reverse-proxy|show|start|stop|status)/g, 'gateway $1'],
     [/peer-(start|stop|status|pair|devices|devices-remove)/g, 'peer $1'],
     [/^\s+--child.*$/gm, ''],
   ];
@@ -1529,16 +1627,16 @@ cli.parse();
 // ── helpers ────────────────────────────────────────────────────────
 
 /**
- * When a shared channel is configured, remote pairing only works if the
- * tunnel router is running. Warn (with the fix) so a freshly-minted QR isn't
- * silently unreachable.
+ * When remote exposure (shared Channel and/or reverse proxy) is configured,
+ * pairing only works if the tunnel router is running. Warn (with the fix) so a
+ * freshly-minted QR isn't silently unreachable.
  */
 function warnRouterIfNeeded(): void {
   const cfg = loadOrCreateHubConfig();
-  if (cfg.gateway?.tunnel === undefined) return;
+  if (!hasGatewayExposure(cfg)) return;
   if (isGatewayRunning()) return;
-  console.log('  ⚠ Shared channel is configured but the tunnel router is NOT running.');
-  console.log('     Remote pairing/connections will fail until you start it:');
+  console.log('  ⚠ Remote exposure is configured but the tunnel router is NOT running.');
+  console.log('     The QR points at a public entry that will not answer until you start it:');
   console.log('       shepaw-hub gateway start');
   console.log('');
 }
@@ -1587,15 +1685,10 @@ function printRestartReport(report: RestartReport): void {
   }
 }
 
-/** `wss://<server>/proxy/<channelId>` base for the shared gateway channel. */
-function gatewayChannelWsBase(cfg: ReturnType<typeof loadOrCreateHubConfig>): string | undefined {
-  const t = cfg.gateway?.tunnel;
-  if (t === undefined) return undefined;
-  const wsBase = t.serverUrl
-    .replace(/\/+$/, '')
-    .replace(/^https:\/\//, 'wss://')
-    .replace(/^http:\/\//, 'ws://');
-  return `${wsBase}/proxy/${t.channelId}`;
+/** `<reverse-proxy ws base>/p/<instanceId>/acp/ws` example for display. */
+function reverseProxyWsBaseWithAcp(cfg: ReturnType<typeof loadOrCreateHubConfig>): string | undefined {
+  const base = reverseProxyWsBase(cfg);
+  return base !== undefined ? `${base}/p/<instanceId>/acp/ws` : undefined;
 }
 
 function parseEngine(raw: string, cfg: ReturnType<typeof loadOrCreateHubConfig>): string {
