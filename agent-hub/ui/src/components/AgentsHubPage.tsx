@@ -12,14 +12,15 @@ import {
 import { isUnauthorizedError } from '../utils/errors.js';
 import { EngineIcon } from './EngineIcon.js';
 import { InstanceCard } from './InstanceCard.js';
-import { AddCustomEngineForm } from './AddCustomEngineForm.js';
+import { AddCustomEngineModal } from './AddCustomEngineModal.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 
 /**
  * "My Agents" landing page: every engine on this machine in the left rail,
  * instances grouped per engine on the right. Selecting a rail engine smooth-
- * scrolls to its group section; unavailable/disabled engines are greyed with a
- * "Configure" entry. Custom engines are added from the rail footer.
+ * scrolls to its group section; the group's Configure / Add-agent actions show
+ * in its header once that engine is selected or its block is hovered.
+ * Custom engines are added from the rail footer.
  */
 export function AgentsHubPage({
   loading,
@@ -51,6 +52,7 @@ export function AgentsHubPage({
     useEngines();
   const [search, setSearch] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [showAddCustom, setShowAddCustom] = useState(false);
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -179,8 +181,6 @@ export function AgentsHubPage({
                   group={g}
                   active={activeId === g.engine.id}
                   onScroll={() => scrollToEngine(g.engine.id)}
-                  onConfigure={() => onGoConfigure(g.engine.id)}
-                  onAddAgent={() => onAddInstance(g.engine.id)}
                 />
               ))}
             </div>
@@ -192,18 +192,9 @@ export function AgentsHubPage({
               </p>
             )}
             <div style={railAdd}>
-              {showAddCustom ? (
-                <AddCustomEngineForm
-                  onDone={() => {
-                    setShowAddCustom(false);
-                    void reloadEngines();
-                  }}
-                />
-              ) : (
-                <button type="button" style={addCustomToggle} onClick={() => setShowAddCustom(true)}>
-                  {t('hub.addCustomEngine')}
-                </button>
-              )}
+              <button type="button" style={addCustomToggle} onClick={() => setShowAddCustom(true)}>
+                {t('hub.addCustomEngine')}
+              </button>
             </div>
           </aside>
 
@@ -221,9 +212,13 @@ export function AgentsHubPage({
                   data-engine-id={g.engine.id}
                   ref={attachSectionRef}
                   style={groupSection}
+                  onMouseEnter={() => setHoveredId(g.engine.id)}
+                  onMouseLeave={() => setHoveredId((cur) => (cur === g.engine.id ? null : cur))}
                 >
                   <GroupSection
                     group={g}
+                    active={activeId === g.engine.id}
+                    hovered={hoveredId === g.engine.id}
                     onSelectInstance={onSelectInstance}
                     onReloadInstances={onReloadInstances}
                     onAddInstance={onAddInstance}
@@ -235,6 +230,16 @@ export function AgentsHubPage({
           </div>
         </div>
       )}
+
+      {showAddCustom && (
+        <AddCustomEngineModal
+          onClose={() => setShowAddCustom(false)}
+          onCreated={() => {
+            setShowAddCustom(false);
+            void reloadEngines();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -243,54 +248,22 @@ function RailItem({
   group,
   active,
   onScroll,
-  onConfigure,
-  onAddAgent,
 }: {
   group: AgentGroup;
   active: boolean;
   onScroll: () => void;
-  onConfigure: () => void;
-  onAddAgent: () => void;
 }) {
   const { t } = useI18n();
-  const [hover, setHover] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
   const state = engineState(group.engine);
   const dim = state !== 'ready';
-  const canAdd = group.inCatalog && state === 'ready';
   const countLabel =
     group.count === 1
       ? t('hub.agentCountOne', { count: group.count })
       : t('hub.agentCount', { count: group.count });
 
-  // Close the rail menu on outside mousedown or Escape.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDocDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDocDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
-
-  const showMore = hover || menuOpen;
-
   return (
-    <div
-      ref={wrapRef}
-      style={railItemWrap}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      <button type="button" style={railItem(active, dim, showMore)} onClick={onScroll} title={group.engine.id}>
+    <div style={railItemWrap}>
+      <button type="button" style={railItem(active, dim)} onClick={onScroll} title={group.engine.id}>
         <EngineIcon engineId={group.engine.id} size={20} />
         <span style={railLabel}>{group.engine.displayName}</span>
         {state === 'needs-setup' && (
@@ -301,58 +274,22 @@ function RailItem({
           <span style={railCount} title={countLabel}>{group.count}</span>
         )}
       </button>
-      {(hover || menuOpen) && (
-        <button
-          type="button"
-          style={moreBtn(menuOpen)}
-          aria-label={t('hub.moreActions')}
-          title={t('hub.moreActions')}
-          onClick={(ev) => {
-            ev.stopPropagation();
-            setMenuOpen((v) => !v);
-          }}
-        >
-          ⋯
-        </button>
-      )}
-      {menuOpen && (
-        <div style={railMenu}>
-          <button
-            type="button"
-            style={menuItem}
-            onClick={() => {
-              setMenuOpen(false);
-              onConfigure();
-            }}
-          >
-            {t('hub.goConfigure')}
-          </button>
-          {canAdd && (
-            <button
-              type="button"
-              style={menuItem}
-              onClick={() => {
-                setMenuOpen(false);
-                onAddAgent();
-              }}
-            >
-              {t('hub.addAgent')}
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
 function GroupSection({
   group,
+  active,
+  hovered,
   onSelectInstance,
   onReloadInstances,
   onAddInstance,
   onGoConfigure,
 }: {
   group: AgentGroup;
+  active: boolean;
+  hovered: boolean;
   onSelectInstance: (id: string) => void;
   onReloadInstances: () => void;
   onAddInstance: (engineId: string) => void;
@@ -364,6 +301,9 @@ function GroupSection({
     group.count === 1
       ? t('hub.agentCountOne', { count: group.count })
       : t('hub.agentCount', { count: group.count });
+
+  const showActions = active || hovered;
+  const canAdd = group.inCatalog && state === 'ready';
 
   return (
     <>
@@ -388,13 +328,26 @@ function GroupSection({
           )}
           {group.count > 0 && <span style={countPill}>{countLabel}</span>}
         </div>
-        <button
-          type="button"
-          style={configureLink(group.count === 0 && state !== 'ready')}
-          onClick={() => onGoConfigure(group.engine.id)}
-        >
-          {t('hub.goConfigure')}
-        </button>
+        {showActions && (
+          <div style={groupActions}>
+            <button
+              type="button"
+              style={configureLink(group.count === 0 && state !== 'ready')}
+              onClick={() => onGoConfigure(group.engine.id)}
+            >
+              {t('hub.goConfigure')}
+            </button>
+            {canAdd && (
+              <button
+                type="button"
+                style={configureLink(false)}
+                onClick={() => onAddInstance(group.engine.id)}
+              >
+                {t('hub.addAgent')}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {group.count > 0 ? (
@@ -565,11 +518,10 @@ const railList: React.CSSProperties = {
   gap: 2,
 };
 const railItemWrap: React.CSSProperties = {
-  position: 'relative',
   display: 'flex',
   alignItems: 'center',
 };
-const railItem = (active: boolean, dim: boolean, showMore: boolean): React.CSSProperties => ({
+const railItem = (active: boolean, dim: boolean): React.CSSProperties => ({
   flex: 1,
   minWidth: 0,
   display: 'flex',
@@ -579,8 +531,7 @@ const railItem = (active: boolean, dim: boolean, showMore: boolean): React.CSSPr
   color: dim ? '#6c7086' : active ? '#cdd6f4' : '#a6adc8',
   border: 'none',
   borderRadius: 6,
-  // Leave room for the hover "⋯" menu so it never covers the count pill.
-  padding: showMore ? '7px 32px 7px 8px' : '7px 8px',
+  padding: '7px 8px',
   cursor: 'pointer',
   fontSize: 13,
   textAlign: 'left',
@@ -607,46 +558,6 @@ const railCount: React.CSSProperties = {
   color: '#89b4fa',
   borderRadius: 999,
   padding: '1px 7px',
-  whiteSpace: 'nowrap',
-};
-const moreBtn = (open: boolean): React.CSSProperties => ({
-  position: 'absolute',
-  right: 4,
-  background: open ? '#313244' : '#181825',
-  color: '#a6adc8',
-  border: '1px solid #45475a',
-  borderRadius: 5,
-  width: 24,
-  height: 24,
-  lineHeight: '18px',
-  padding: 0,
-  cursor: 'pointer',
-  fontSize: 15,
-});
-const railMenu: React.CSSProperties = {
-  position: 'absolute',
-  right: 2,
-  top: 'calc(100% + 4px)',
-  zIndex: 20,
-  background: '#1e1e2e',
-  border: '1px solid #45475a',
-  borderRadius: 8,
-  boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
-  padding: 4,
-  minWidth: 150,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-};
-const menuItem: React.CSSProperties = {
-  background: 'transparent',
-  color: '#cdd6f4',
-  border: 'none',
-  borderRadius: 6,
-  padding: '7px 10px',
-  cursor: 'pointer',
-  fontSize: 13,
-  textAlign: 'left',
   whiteSpace: 'nowrap',
 };
 const railAdd: React.CSSProperties = {
@@ -748,6 +659,12 @@ const configureLink = (emphasis: boolean): React.CSSProperties => ({
   padding: '4px 6px',
   borderRadius: 6,
 });
+const groupActions: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  flexShrink: 0,
+};
 const grid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
