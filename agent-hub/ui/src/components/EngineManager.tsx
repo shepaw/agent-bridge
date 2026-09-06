@@ -148,21 +148,24 @@ export function EngineManager({
   );
 }
 
-function EngineRow({
+export function EngineRow({
   engine,
   onChanged,
   initialOpen = false,
   highlight = false,
   onOpened,
+  embedded = false,
 }: {
   engine: EngineInfo;
   onChanged: () => void;
   initialOpen?: boolean;
   highlight?: boolean;
   onOpened?: () => void;
+  /** Full-page mode: the row starts expanded and the collapse toggle is hidden. */
+  embedded?: boolean;
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(initialOpen);
+  const [open, setOpen] = useState(initialOpen || embedded);
   const rowRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -353,9 +356,11 @@ function EngineRow({
           <button style={smallBtn} disabled={busy} onClick={() => void toggleDisabled()}>
             {engine.disabled ? t('common.enable') : t('common.disable')}
           </button>
-          <button style={smallBtn} onClick={openConfig}>
-            {open ? t('common.collapse') : t('engine.configure')}
-          </button>
+          {!embedded && (
+            <button style={smallBtn} onClick={openConfig}>
+              {open ? t('common.collapse') : t('engine.configure')}
+            </button>
+          )}
         </div>
       </div>
 

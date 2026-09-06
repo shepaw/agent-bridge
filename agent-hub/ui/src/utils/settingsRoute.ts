@@ -1,31 +1,26 @@
-export type SettingsTab = 'global' | 'engines' | 'peer';
+/** Settings tabs (engine management moved to `#engine/<id>`; legacy links are handled by App). */
+export type SettingsTab = 'global' | 'peer';
 
 export interface SettingsRoute {
   active: boolean;
   tab: SettingsTab;
-  focusEngineId: string | null;
 }
 
+/**
+ * Parse `#settings`, `#settings/peer`, `#settings/global`. Anything else under
+ * `#settings` (e.g. legacy `#settings/engines`) maps to 'global'; App intercepts
+ * the legacy engine routes before this is consulted.
+ */
 export function parseSettingsHash(hash: string): SettingsRoute {
   if (!hash.startsWith('#settings')) {
-    return { active: false, tab: 'global', focusEngineId: null };
-  }
-  if (hash === '#settings') {
-    return { active: true, tab: 'global', focusEngineId: null };
+    return { active: false, tab: 'global' };
   }
   const parts = hash.slice('#settings'.length).replace(/^\//, '').split('/').filter(Boolean);
   const tabRaw = parts[0];
-  const tab: SettingsTab = tabRaw === 'engines' || tabRaw === 'peer' ? tabRaw : 'global';
-  const focusEngineId = tab === 'engines' && parts[1]
-    ? decodeURIComponent(parts[1])
-    : null;
-  return { active: true, tab, focusEngineId };
+  return { active: true, tab: tabRaw === 'peer' ? 'peer' : 'global' };
 }
 
-export function buildSettingsHash(tab: SettingsTab, focusEngineId?: string): string {
-  if (tab === 'global' && !focusEngineId) return '#settings';
-  if (tab === 'engines' && focusEngineId) {
-    return `#settings/engines/${encodeURIComponent(focusEngineId)}`;
-  }
-  return `#settings/${tab}`;
+export function buildSettingsHash(tab: SettingsTab): string {
+  if (tab === 'global') return '#settings';
+  return '#settings/peer';
 }

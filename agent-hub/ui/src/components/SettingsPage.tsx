@@ -1,5 +1,4 @@
 import { DeviceNamePanel } from './DeviceNamePanel.js';
-import { EngineManager } from './EngineManager.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 import { PeerPairingPanel } from './PeerPairingPanel.js';
 import { VersionPanel } from './VersionPanel.js';
@@ -8,20 +7,18 @@ import { useI18n } from '../i18n/index.js';
 
 /**
  * Settings content panels (nav lives in App shell).
- *   - 全局: dashboard auth token
- *   - 引擎: engine scan / install / configure (first-level nav + first-run guide)
+ *   - 全局: dashboard auth token + device name
  *   - 扫码配对: peer service + shepaw://peer QR + shared Channel
+ *
+ * Per-engine configuration moved to the per-engine page (#engine/<id>), so the
+ * engine management section no longer lives here.
  */
 
 export function SettingsPage({
   tab,
-  focusEngineId,
-  onFocusEngineHandled,
   onAuthTokenSaved,
 }: {
   tab: SettingsTab;
-  focusEngineId: string | null;
-  onFocusEngineHandled: () => void;
   onAuthTokenSaved?: () => void;
 }) {
   const { t } = useI18n();
@@ -41,17 +38,6 @@ export function SettingsPage({
           </section>
           <VersionPanel />
         </div>
-      )}
-
-      {tab === 'engines' && (
-        <section style={card}>
-          <h3 style={cardTitle}>{t('settings.enginesTitle')}</h3>
-          <p style={cardHint}>{t('settings.enginesHint')}</p>
-          <EngineManager
-            focusEngineId={focusEngineId}
-            onFocusEngineHandled={onFocusEngineHandled}
-          />
-        </section>
       )}
 
       {tab === 'peer' && (

@@ -58,9 +58,16 @@ interface AddInstanceModalProps {
   onClose: () => void;
   onCreated: (result?: { started: boolean }) => void;
   onOpenEngineSettings: (engineId: string) => void;
+  /** When set and present in the engine list, preselect this engine (per-mount only). */
+  presetEngineId?: string | null;
 }
 
-export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: AddInstanceModalProps) {
+export function AddInstanceModal({
+  onClose,
+  onCreated,
+  onOpenEngineSettings,
+  presetEngineId = null,
+}: AddInstanceModalProps) {
   const { t } = useI18n();
   const [label, setLabel] = useState(draft.label);
   const [engine, setEngine] = useState(draft.engine);
@@ -108,6 +115,9 @@ export function AddInstanceModal({ onClose, onCreated, onOpenEngineSettings }: A
       .then(({ engines }) => {
         setEngineOptions(engines);
         setEngine((current) => {
+          if (presetEngineId && engines.some((e) => e.id === presetEngineId)) {
+            return presetEngineId;
+          }
           if (current && engines.some((e) => e.id === current)) return current;
           const firstAvailable = engines.find((e) => e.available !== false);
           if (firstAvailable) return firstAvailable.id;
