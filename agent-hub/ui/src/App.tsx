@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useInstances } from './hooks/useInstances.js';
 import { InstanceCard } from './components/InstanceCard.js';
 import { InstanceDetail } from './components/InstanceDetail.js';
 import { AddInstanceModal } from './components/AddInstanceModal.js';
 import { ConfirmModal } from './components/ConfirmModal.js';
 import { SettingsPage } from './components/SettingsPage.js';
+import { SetupGuide } from './components/SetupGuide.js';
 import { InstanceListFilters, type InstanceListFilterState } from './components/InstanceListFilters.js';
 import { filterInstances, uniqueEngines } from './utils/instanceFilters.js';
 import { buildSettingsHash, parseSettingsHash, type SettingsTab } from './utils/settingsRoute.js';
@@ -14,6 +15,7 @@ import {
   parseInstanceHash,
   type InstanceDetailTab,
 } from './utils/instanceRoute.js';
+import { readSetupProgress, writeSetupProgress, type SetupStage } from './utils/setupProgress.js';
 import { api, getHubAuthToken } from './api/client.js';
 import { HubAuthTokenPanel } from './components/HubAuthTokenPanel.js';
 import { StoreBrowserPanel } from './components/StoreBrowserPanel.js';
@@ -23,7 +25,7 @@ import { useI18n } from './i18n/index.js';
 /** Top-level shell nav: instances list first (default), then settings sections. */
 type AppNav = 'instances' | 'store' | SettingsTab;
 
-const NAV_IDS: AppNav[] = ['instances', 'peer', 'store', 'global'];
+const NAV_IDS: AppNav[] = ['instances', 'engines', 'peer', 'store', 'global'];
 
 function navLabelKey(id: AppNav): 'nav.instances' | 'nav.peer' | 'nav.store' | 'nav.global' | 'nav.engines' {
   if (id === 'instances') return 'nav.instances';
@@ -80,6 +82,12 @@ export function App() {
   );
   const [focusEngineId, setFocusEngineId] = useState<string | null>(initialSettings.focusEngineId);
   const [storeUri, setStoreUri] = useState<string | null>(initialStore.uri);
+  // First-install guide progress. 'new' = no marker in localStorage (in-memory only).
+  const [progress, setProgress] = useState<SetupStage | 'new'>(() => readSetupProgress() ?? 'new');
+  // Snapshot whether the page loaded on a hash route (deep link) — those win
+  // over first-run / reload redirection.
+  const hadRouteHash = useRef(Boolean(location.hash));
+  const restoreDone = useRef(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addAutoPrompted, setAddAutoPrompted] = useState(false);
   const [showRestartAllConfirm, setShowRestartAllConfirm] = useState(false);
@@ -142,13 +150,56 @@ export function App() {
     goSettings(id);
   };
 
+  const persistProgress = useCallback((stage: SetupStage) => {
+    setProgress(stage);
+    writeSetupProgress(stage);
+  }, []);
+
+  // First-run decision: once the instance list is known and no progress marker
+  // exists, route new installs to the engines guide and mark existing hubs done.
+  useEffect(() => {
+    if (loading || isUnauthorizedError(error) || progress !== 'new') return;
+    if (instances.length === 0) {
+      persistProgress('engines');
+      if (!hadRouteHash.current && nav === 'instances' && !selected) {
+        goSettings('engines');
+      }
+    } else {
+      // Hub already has instances (e.g. created via CLI) — no guiding needed.
+      persistProgress('done');
+    }
+  }, [loading, error, progress, instances.length, nav, selected, persistProgress, goSettings]);
+
+  // Reload recovery: after a refresh the guide must stay visible, so restore
+  // the page that owns the current step (engine page / scan-to-pair page).
+  // Runs once per mount — later manual navigation is never overridden.
+  useEffect(() => {
+    if (restoreDone.current) return;
+    if (loading || isUnauthorizedError(error) || progress === 'new') return;
+    restoreDone.current = true;
+    if (hadRouteHash.current) return;
+    if (progress === 'engines') {
+      if (instances.length === 0 && nav === 'instances' && !selected) {
+        goSettings('engines');
+      } else if (instances.length > 0) {
+        // An instance appeared while the guide was open (CLI / another tab) —
+        // setup is effectively complete.
+        persistProgress('done');
+      }
+    } else if (progress === 'pair' && instances.length > 0 && nav === 'instances' && !selected) {
+      goSettings('peer');
+    }
+  }, [loading, error, progress, instances.length, nav, selected, goSettings, persistProgress]);
+
   // Auto-open Add Instance once when the dashboard has zero instances
   // (skip when auth is broken — user must fix the token first).
+  // Suppressed during the first-install guide: the engine page owns the flow.
   useEffect(() => {
     if (addAutoPrompted || loading || showAdd || nav !== 'instances' || selected) {
       return;
     }
     if (isUnauthorizedError(error)) return;
+    if (progress === 'new' || progress === 'engines') return;
     if (instances.length !== 0) return;
     try {
       if (localStorage.getItem('shepaw_add_dismissed') === '1') {
@@ -167,6 +218,7 @@ export function App() {
     nav,
     selected,
     error,
+    progress,
     instances.length,
   ]);
 
@@ -264,6 +316,36 @@ export function App() {
     }
   }, [running, reload, t]);
 
+  // Guide card shown above the page that owns the current setup step.
+  const guide: 'engines' | 'pair' | null =
+    progress === 'engines' && settingsTab === 'engines' && instances.length === 0
+      ? 'engines'
+      : progress === 'pair' && settingsTab === 'peer' && instances.length > 0
+        ? 'pair'
+        : null;
+
+  const openCreateFromGuide = () => {
+    // Clear the dismissed flag so the Add Instance modal re-opens from the CTA.
+    try {
+      localStorage.removeItem('shepaw_add_dismissed');
+    } catch {
+      /* ignore */
+    }
+    setShowAdd(true);
+  };
+
+  const skipGuide = () => {
+    persistProgress('done');
+    if (guide === 'engines') {
+      // Skipping the guide also opts out of the 0-instance auto-popup.
+      try {
+        localStorage.setItem('shepaw_add_dismissed', '1');
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
   const heading = navTitle(nav, Boolean(selected), t);
   const summaryKey = instances.length === 1 ? 'instances.summary' : 'instances.summaryPlural';
 
@@ -338,12 +420,21 @@ export function App() {
               onUriChange={setStoreUri}
             />
           ) : (
-            <SettingsPage
-              tab={settingsTab}
-              focusEngineId={focusEngineId}
-              onFocusEngineHandled={() => setFocusEngineId(null)}
-              onAuthTokenSaved={() => void reload()}
-            />
+            <>
+              {guide && (
+                <SetupGuide
+                  step={guide}
+                  onOpenCreate={guide === 'engines' ? openCreateFromGuide : undefined}
+                  onSkip={skipGuide}
+                />
+              )}
+              <SettingsPage
+                tab={settingsTab}
+                focusEngineId={focusEngineId}
+                onFocusEngineHandled={() => setFocusEngineId(null)}
+                onAuthTokenSaved={() => void reload()}
+              />
+            </>
           )}
         </main>
       </div>
@@ -359,7 +450,11 @@ export function App() {
               /* ignore */
             }
             void reload().then(() => {
-              if (wasEmpty && result?.started !== false) goSettings('peer');
+              if (wasEmpty && result?.started !== false) {
+                // First instance created → advance the guide to phone pairing.
+                if (progress === 'engines' || progress === 'pair') persistProgress('pair');
+                goSettings('peer');
+              }
             });
           }}
           onOpenEngineSettings={openEngineSettings}

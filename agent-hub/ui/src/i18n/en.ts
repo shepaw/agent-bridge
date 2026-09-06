@@ -73,7 +73,7 @@ export const en = {
   'title.peer': 'Pair device',
   'title.peerSub': 'Peer starts with the dashboard · scan to connect the app',
   'title.engines': 'Engine management',
-  'title.enginesSub': 'Opened from Add Instance · built-in and custom engines',
+  'title.enginesSub': 'Detect, install and configure ACP engines',
   'title.global': 'Settings',
   'title.globalSub': 'Auth token · default policies',
 
@@ -559,6 +559,9 @@ export const en = {
   'engine.namePlaceholderShort': 'My Local Agent',
   'engine.cmdPlaceholderShort': 'npx -y my-agent-acp@latest',
   'engine.saveEnv': 'Save environment variables',
+  'engine.scanReady': '{ready}/{total} ready',
+  'engine.scanNeedSetup': '{count} need setup or install',
+  'engine.scanDisabled': '{count} disabled',
 
   'store.justNow': 'just now',
   'store.minutesAgo': '{n} min ago',
@@ -662,6 +665,25 @@ export const en = {
   'device.agentsPending': 'Agent list appears after you generate a QR',
   'device.pairedTitle': 'Paired devices',
   'device.agentCount': '{count} agents',
+
+  'setup.title': 'Quick start',
+  'setup.step1Label': '① Engine',
+  'setup.step2Label': '② Create instance',
+  'setup.step3Label': '③ Pair phone',
+  'setup.enginesTitle': 'Get an engine ready first',
+  'setup.enginesLead':
+    'Shepaw Hub detected the ACP engines installed on this machine. Have at least one ready before creating your first instance — install and enable it below, or add a custom engine.',
+  'setup.enginesCount': '{ready} of {total} engines ready',
+  'setup.enginesNeedSetup': '{count} need setup',
+  'setup.createInstance': 'Create an instance',
+  'setup.skip': 'Skip guide',
+  'setup.pairTitle': 'Pair your phone',
+  'setup.pairLead':
+    'Your instance is ready. Open the Shepaw app → Device Pairing / Scan to Connect → scan the QR below.',
+  'setup.done': 'Finish',
+  'setup.installAppTitle': "Don't have the Shepaw app yet?",
+  'setup.installAppBody':
+    'The app is not on the app stores yet — get the latest install package at {url}',
 
   'wizard.title': 'Get started with Shepaw Hub',
   'wizard.subtitle': 'Connect a local Agent to your phone in three steps: engine → folder → scan',

@@ -8,6 +8,7 @@ import type {
   MaskedEnvVar,
 } from '../api/types.js';
 import { isSensitiveEnvVarKey } from '../utils/envVarSensitivity.js';
+import { summarizeEngines } from '../utils/engineScan.js';
 import { useI18n } from '../i18n/index.js';
 
 type EnvDraft = { key: string; value: string };
@@ -37,6 +38,8 @@ export function EngineManager({
   const [newName, setNewName] = useState('');
   const [newCmd, setNewCmd] = useState('');
   const [adding, setAdding] = useState(false);
+  /** Chip-clicked engine from the scan bar; auto-cleared once its row is open. */
+  const [scanFocus, setScanFocus] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -67,8 +70,41 @@ export function EngineManager({
     }
   };
 
+  const summary = summarizeEngines(engines);
   return (
     <div>
+      <div style={scanBar}>
+        <div style={scanSummary}>
+          <span style={scanCount}>
+            {t('engine.scanReady', { ready: summary.ready, total: summary.total })}
+          </span>
+          {summary.needSetup.length > 0 && (
+            <span style={scanNeedCount}>
+              {t('engine.scanNeedSetup', { count: summary.needSetup.length })}
+            </span>
+          )}
+          {summary.disabled.length > 0 && (
+            <span style={scanDisabledCount}>
+              {t('engine.scanDisabled', { count: summary.disabled.length })}
+            </span>
+          )}
+          {summary.needSetup.map((eng) => (
+            <button
+              key={eng.id}
+              type="button"
+              style={scanChip}
+              title={eng.unavailableReason ?? undefined}
+              onClick={() => setScanFocus(eng.id)}
+            >
+              {eng.displayName}
+            </button>
+          ))}
+        </div>
+        <button type="button" style={smallBtn} onClick={() => void load()}>
+          {t('engine.redetect')}
+        </button>
+      </div>
+
       <div style={addBlock}>
         <h4 style={sectionTitle}>{t('engine.addTitle')}</h4>
         <div style={addRow}>
@@ -87,16 +123,24 @@ export function EngineManager({
       </p>
 
       <div style={listCol}>
-        {engines.map((eng) => (
-          <EngineRow
-            key={eng.id}
-            engine={eng}
-            onChanged={load}
-            initialOpen={eng.id === focusEngineId}
-            highlight={eng.id === focusEngineId}
-            onOpened={eng.id === focusEngineId ? onFocusEngineHandled : undefined}
-          />
-        ))}
+        {engines.map((eng) => {
+          const rowFocus = eng.id === focusEngineId || eng.id === scanFocus;
+          return (
+            <EngineRow
+              key={eng.id}
+              engine={eng}
+              onChanged={load}
+              initialOpen={rowFocus}
+              highlight={rowFocus}
+              onOpened={rowFocus
+                ? () => {
+                    if (eng.id === focusEngineId) onFocusEngineHandled?.();
+                    if (eng.id === scanFocus) setScanFocus(null);
+                  }
+                : undefined}
+            />
+          );
+        })}
       </div>
 
       {err && <p style={{ color: '#f38ba8', fontSize: 13, marginTop: 8 }}>{err}</p>}
@@ -683,6 +727,27 @@ function EngineSetupSection({
 // ── styles ────────────────────────────────────────────────────────
 
 const addBlock: React.CSSProperties = { background: '#181825', border: '1px solid #313244', borderRadius: 8, padding: 14 };
+const scanBar: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
+  flexWrap: 'wrap', background: '#181825', border: '1px solid #313244',
+  borderRadius: 8, padding: '8px 12px', marginBottom: 10,
+};
+const scanSummary: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0,
+};
+const scanCount: React.CSSProperties = {
+  color: '#a6e3a1', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+};
+const scanNeedCount: React.CSSProperties = {
+  color: '#fab387', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+};
+const scanDisabledCount: React.CSSProperties = {
+  color: '#6c7086', fontSize: 12, whiteSpace: 'nowrap',
+};
+const scanChip: React.CSSProperties = {
+  background: '#1e1e2e', color: '#f38ba8', border: '1px solid #f38ba866',
+  borderRadius: 999, padding: '2px 10px', cursor: 'pointer', fontSize: 12,
+};
 const addRow: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap' };
 const sectionTitle: React.CSSProperties = { margin: '0 0 10px', color: '#cdd6f4', fontSize: 14 };
 const hint: React.CSSProperties = { color: '#6c7086', fontSize: 12, margin: '0 0 10px' };

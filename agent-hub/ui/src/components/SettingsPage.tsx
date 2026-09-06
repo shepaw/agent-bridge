@@ -9,7 +9,7 @@ import { useI18n } from '../i18n/index.js';
 /**
  * Settings content panels (nav lives in App shell).
  *   - 全局: dashboard auth token
- *   - 引擎: opened from Create Instance「管理引擎」(not a left-nav item)
+ *   - 引擎: engine scan / install / configure (first-level nav + first-run guide)
  *   - 扫码配对: peer service + shepaw://peer QR + shared Channel
  */
 

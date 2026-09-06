@@ -75,7 +75,7 @@ export const zh: Record<MessageKey, string> = {
   'title.peer': '扫码配对',
   'title.peerSub': 'Peer 已随仪表盘启动 · 扫码连接 App',
   'title.engines': '引擎管理',
-  'title.enginesSub': '从创建实例进入 · 配置内置与自定义引擎',
+  'title.enginesSub': '检测 · 安装 · 配置 ACP 引擎',
   'title.global': '全局设置',
   'title.globalSub': '鉴权 Token · 默认审核策略',
 
@@ -548,6 +548,9 @@ export const zh: Record<MessageKey, string> = {
   'engine.namePlaceholderShort': 'My Local Agent',
   'engine.cmdPlaceholderShort': 'npx -y my-agent-acp@latest',
   'engine.saveEnv': '保存环境变量',
+  'engine.scanReady': '就绪 {ready}/{total}',
+  'engine.scanNeedSetup': '{count} 个需要安装或配置',
+  'engine.scanDisabled': '{count} 个已禁用',
 
   'store.justNow': '刚刚',
   'store.minutesAgo': '{n} 分钟前',
@@ -647,6 +650,24 @@ export const zh: Record<MessageKey, string> = {
   'device.agentsPending': '生成二维码后显示 Agent 列表',
   'device.pairedTitle': '已配对设备',
   'device.agentCount': '{count} 个 Agent',
+
+  'setup.title': '快速上手',
+  'setup.step1Label': '① 引擎',
+  'setup.step2Label': '② 创建实例',
+  'setup.step3Label': '③ 手机配对',
+  'setup.enginesTitle': '先让一个引擎就绪',
+  'setup.enginesLead':
+    'Shepaw Hub 会自动检测本机已安装的 ACP 引擎。创建第一个实例前至少要让一个引擎就绪——在下方安装并启用，或添加自定义引擎。',
+  'setup.enginesCount': '就绪引擎 {ready}/{total}',
+  'setup.enginesNeedSetup': '{count} 个需要安装/配置',
+  'setup.createInstance': '创建实例',
+  'setup.skip': '跳过引导',
+  'setup.pairTitle': '扫码配对手机',
+  'setup.pairLead':
+    '实例已就绪。打开 Shepaw App →「设备配对 / 扫码连接」→ 扫描下方二维码。',
+  'setup.done': '完成',
+  'setup.installAppTitle': '还没有 Shepaw App？',
+  'setup.installAppBody': 'App 尚未上架应用商店，可前往 {url} 获取最新安装包',
 
   'wizard.title': '开始使用 Shepaw Hub',
   'wizard.subtitle': '三步把本机 Agent 接到手机：选引擎 → 选目录 → 扫码',
