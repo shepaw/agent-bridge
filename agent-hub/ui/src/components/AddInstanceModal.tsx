@@ -6,6 +6,7 @@ import { rememberCwd } from '../utils/cwdHistory.js';
 import { filterAndSortEngines } from '../utils/enginePicker.js';
 import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
+import { EngineIcon } from './EngineIcon.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
 import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
@@ -296,7 +297,7 @@ export function AddInstanceModal({
                     onClick={() => setEngine(e.id)}
                   >
                     <div style={engineRowMain}>
-                      <span style={engineRadio}>{selected ? '●' : '○'}</span>
+                      <EngineIcon engineId={e.id} size={24} title={title} />
                       <div style={engineRowText}>
                         <span style={{ color: unavailable ? '#a6adc8' : '#cdd6f4' }}>
                           {title}
@@ -319,6 +320,9 @@ export function AddInstanceModal({
                         {t('add.goConfigure')}
                       </button>
                     )}
+                    <span style={engineRadio} aria-hidden="true">
+                      {selected ? '●' : '○'}
+                    </span>
                   </div>
                 );
               })}
