@@ -55,6 +55,14 @@ export function AgentsHubPage({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [showAddCustom, setShowAddCustom] = useState(false);
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
+  // While a rail click's smooth scroll is animating, the rail highlight is
+  // locked to the clicked engine and the scroll-spy below is ignored until the
+  // user actually scrolls. Without this the spy can end up on the *next* engine
+  // block: short blocks never reach the old 20%–30% reading band, and the
+  // active block's header collapsing/expanding shifts the target a few pixels
+  // mid-jump so the scroll lands one block too far.
+  const jumpLocked = useRef(false);
+  const jumpSettled = useRef(false);
 
   const groups = useMemo(
     () => (engines ? buildAgentGroups(engines, instances) : []),
@@ -82,34 +90,128 @@ export function AgentsHubPage({
     }
   }, [filteredGroups]);
 
-  // Track which engine section is under the reading band to highlight the rail.
+  // Rail "spy": highlight the engine whose group block currently sits at the
+  // reading position — the block just under the pinned toolbar. A section is
+  // considered "current" once its top crosses the anchor line; the highlight
+  // hands over to the next block only when *that* block reaches the same line,
+  // so a short block parked by a rail click stays highlighted instead of
+  // skipping straight to the engine below it.
+  const recomputeActive = useCallback(() => {
+    if (jumpLocked.current) return;
+    const els = [...sectionRefs.current.values()];
+    if (els.length === 0) return;
+    const rects = els
+      .map((el) => ({
+        id: el.getAttribute('data-engine-id'),
+        top: el.getBoundingClientRect().top,
+        bottom: el.getBoundingClientRect().bottom,
+      }))
+      .sort((a, b) => a.top - b.top);
+    // 92 ≈ scroll-margin-top (66) + the inter-section gap (26): by the time the
+    // next block's top reaches this line the previous block has fully cleared
+    // the pinned toolbar.
+    const anchor = 92;
+    let lastAbove: string | null = null;
+    let firstBelow: string | null = null;
+    for (const r of rects) {
+      if (!r.id) continue;
+      if (r.top <= anchor) lastAbove = r.id;
+      else if (firstBelow === null) firstBelow = r.id;
+    }
+    let next = lastAbove;
+    if (next === null) {
+      // Nothing has reached the anchor yet (top of page): highlight the first
+      // block that is actually visible at/under it.
+      const visible = rects.find((r) => r.id && r.bottom > anchor);
+      next = visible?.id ?? firstBelow;
+    }
+    if (next) setActiveId(next);
+  }, [setActiveId]);
+
+  const unlockJump = useCallback(() => {
+    jumpLocked.current = false;
+    jumpSettled.current = false;
+    recomputeActive();
+  }, [recomputeActive]);
+
+  // Re-run the spy whenever the visible sections change (initial load, search,
+  // engine/instance refresh).
   useEffect(() => {
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const id = (entry.target as HTMLElement).getAttribute('data-engine-id');
-            if (id) setActiveId(id);
-          }
-        }
-      },
-      { rootMargin: '-20% 0px -70% 0px' },
-    );
-    const observed = new Set<HTMLElement>();
-    sectionRefs.current.forEach((el) => {
-      observed.add(el);
-      obs.observe(el);
-    });
-    return () => {
-      observed.forEach((el) => obs.unobserve(el));
-      obs.disconnect();
+    recomputeActive();
+  }, [filteredGroups, recomputeActive]);
+
+  // Scroll/resize spy. A rail click locks the highlight to the clicked engine:
+  // scroll events while the jump animates only arm the "settled" flag, and the
+  // lock is released on the first user scroll gesture (wheel / touch / scroll
+  // key) or on the first scroll event after the animation has come to rest.
+  useEffect(() => {
+    let settle: number | undefined;
+    const scheduleSettle = () => {
+      if (settle !== undefined) window.clearTimeout(settle);
+      settle = window.setTimeout(() => {
+        settle = undefined;
+        if (jumpLocked.current) jumpSettled.current = true;
+      }, 180);
     };
-  }, [filteredGroups]);
+    const onScroll = () => {
+      if (jumpLocked.current) {
+        if (jumpSettled.current) unlockJump();
+        else scheduleSettle();
+        return;
+      }
+      recomputeActive();
+    };
+    const unlock = () => {
+      if (jumpLocked.current) unlockJump();
+    };
+    const SCROLL_KEYS = new Set([
+      'ArrowUp',
+      'ArrowDown',
+      'PageUp',
+      'PageDown',
+      'Home',
+      'End',
+      ' ',
+    ]);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(e.key)) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      unlock();
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', recomputeActive);
+    window.addEventListener('wheel', unlock, { passive: true });
+    window.addEventListener('touchstart', unlock, { passive: true });
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', recomputeActive);
+      window.removeEventListener('wheel', unlock);
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('keydown', onKeyDown);
+      if (settle !== undefined) window.clearTimeout(settle);
+    };
+  }, [recomputeActive, unlockJump]);
 
   const scrollToEngine = useCallback((id: string) => {
     setActiveId(id);
     const el = sectionRefs.current.get(id);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!el) return;
+    jumpLocked.current = true;
+    jumpSettled.current = false;
+    // Defer the scroll by one frame: setActiveId above toggles the previous
+    // active block's header actions, which shifts this section a few pixels.
+    // Scrolling against the pre-render layout would overshoot by that delta and
+    // land on the block below instead.
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }, []);
 
   return (
