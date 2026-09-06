@@ -9,7 +9,6 @@ import {
   filterAgentGroups,
   type AgentGroup,
 } from '../utils/engineGrouping.js';
-import { summarizeEngines } from '../utils/engineScan.js';
 import { isUnauthorizedError } from '../utils/errors.js';
 import { EngineIcon } from './EngineIcon.js';
 import { InstanceCard } from './InstanceCard.js';
@@ -60,7 +59,6 @@ export function AgentsHubPage({
     [engines, instances],
   );
   const filteredGroups = useMemo(() => filterAgentGroups(groups, search), [groups, search]);
-  const summary = useMemo(() => (engines ? summarizeEngines(engines) : null), [engines]);
 
   const authNeeded = isUnauthorizedError(error) || isUnauthorizedError(enginesError);
   const retryAll = () => {
@@ -129,74 +127,27 @@ export function AgentsHubPage({
       )}
 
       <div style={topBar}>
-        <div style={scanArea}>
-          <div style={scanSummary}>
-            {summary ? (
-              <>
-                <span style={scanReady}>
-                  {t('engine.scanReady', { ready: summary.ready, total: summary.total })}
-                </span>
-                {summary.needSetup.length > 0 && (
-                  <span style={scanNeed}>
-                    {t('engine.scanNeedSetup', { count: summary.needSetup.length })}
-                  </span>
-                )}
-                {summary.disabled.length > 0 && (
-                  <span style={scanDisabled}>
-                    {t('engine.scanDisabled', { count: summary.disabled.length })}
-                  </span>
-                )}
-                {summary.needSetup.map((eng) => (
-                  <button
-                    key={eng.id}
-                    type="button"
-                    style={scanChip}
-                    title={eng.unavailableReason ?? undefined}
-                    onClick={() => scrollToEngine(eng.id)}
-                  >
-                    {eng.displayName}
-                  </button>
-                ))}
-              </>
-            ) : (
-              <span style={{ color: '#6c7086', fontSize: 12 }}>
-                {enginesLoading ? t('common.loading') : t('common.error', { message: enginesError ?? '' })}
-              </span>
-            )}
-          </div>
+        <input
+          style={searchInput}
+          type="search"
+          placeholder={t('filters.search')}
+          aria-label={t('filters.search')}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {running > 0 && (
           <button
             type="button"
-            style={smallBtn}
-            disabled={engines === null && enginesLoading}
-            onClick={() => void reloadEngines()}
+            style={restartBtn}
+            disabled={restartAllBusy}
+            onClick={onRestartAll}
           >
-            {t('engine.redetect')}
+            {restartAllBusy ? t('instances.restarting') : t('instances.restartAll')}
           </button>
-        </div>
-
-        <div style={actionArea}>
-          <input
-            style={searchInput}
-            type="search"
-            placeholder={t('filters.search')}
-            aria-label={t('filters.search')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {running > 0 && (
-            <button
-              type="button"
-              style={restartBtn}
-              disabled={restartAllBusy}
-              onClick={onRestartAll}
-            >
-              {restartAllBusy ? t('instances.restarting') : t('instances.restartAll')}
-            </button>
-          )}
-          <button type="button" style={addBtn} onClick={() => onAddInstance(null)}>
-            {t('instances.addPlus')}
-          </button>
-        </div>
+        )}
+        <button type="button" style={addBtn} onClick={() => onAddInstance(null)}>
+          {t('instances.addPlus')}
+        </button>
       </div>
 
       {enginesError && !isUnauthorizedError(enginesError) && engines === null && (
@@ -528,75 +479,26 @@ const retryBtn: React.CSSProperties = {
   cursor: 'pointer',
   fontSize: 12,
 };
+// Pinned toolbar: search / restart / add stay visible while the list scrolls.
+// Group sections need a matching scroll offset so rail jumps never hide a
+// section header behind the pinned toolbar.
 const topBar: React.CSSProperties = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 30,
   display: 'flex',
-  justifyContent: 'space-between',
   alignItems: 'center',
   gap: 10,
   flexWrap: 'wrap',
   background: '#1e1e2e',
   border: '1px solid #313244',
   borderRadius: 8,
+  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
   padding: '8px 12px',
   marginBottom: 18,
 };
-const scanArea: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  minWidth: 0,
-};
-const scanSummary: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  flexWrap: 'wrap',
-  minWidth: 0,
-};
-const scanReady: React.CSSProperties = {
-  color: '#a6e3a1',
-  fontSize: 12,
-  fontWeight: 600,
-  whiteSpace: 'nowrap',
-};
-const scanNeed: React.CSSProperties = {
-  color: '#fab387',
-  fontSize: 12,
-  fontWeight: 600,
-  whiteSpace: 'nowrap',
-};
-const scanDisabled: React.CSSProperties = {
-  color: '#6c7086',
-  fontSize: 12,
-  whiteSpace: 'nowrap',
-};
-const scanChip: React.CSSProperties = {
-  background: '#1e1e2e',
-  color: '#f38ba8',
-  border: '1px solid #f38ba866',
-  borderRadius: 999,
-  padding: '2px 10px',
-  cursor: 'pointer',
-  fontSize: 12,
-};
-const smallBtn: React.CSSProperties = {
-  background: 'transparent',
-  color: '#cdd6f4',
-  border: '1px solid #45475a',
-  borderRadius: 5,
-  padding: '4px 10px',
-  cursor: 'pointer',
-  fontSize: 12,
-  whiteSpace: 'nowrap',
-};
-const actionArea: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  flexWrap: 'wrap',
-};
 const searchInput: React.CSSProperties = {
-  flex: '1 1 160px',
+  flex: '1 1 auto',
   minWidth: 130,
   padding: '7px 10px',
   background: '#181825',
@@ -643,7 +545,7 @@ const rail: React.CSSProperties = {
   width: 230,
   flexShrink: 0,
   position: 'sticky',
-  top: 16,
+  top: 58,
   display: 'flex',
   flexDirection: 'column',
   minWidth: 0,
@@ -776,7 +678,7 @@ const emptyNote: React.CSSProperties = {
   margin: '20px 0',
 };
 const groupSection: React.CSSProperties = {
-  scrollMarginTop: 16,
+  scrollMarginTop: 66,
 };
 const groupHead: React.CSSProperties = {
   display: 'flex',
