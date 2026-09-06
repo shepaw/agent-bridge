@@ -378,10 +378,14 @@ export class ACPAgentServer {
   private readonly pendingResponses = new Map<string, Deferred<Record<string, unknown>>>();
   /**
    * submitResponse that arrived before waitForResponse registered the waiter
-   * (peer loopback race). Consumed by waitForResponse / handleSubmitResponse.
+   * (peer loopback race), or for a component whose waiter was already torn
+   * down. Retained per task — not dropped after 2s — so a verdict that races
+   * ahead of, or outlives, its waiter is still consumable by a later
+   * `waitForResponse` for the same component id. Entries carry the task they
+   * belong to (so a reused id across tasks can't cross-contaminate) and are
+   * discarded when the owning task finishes.
    */
-  private readonly earlyResponses = new Map<string, Record<string, unknown>>();
-  private readonly earlyResponseTimers = new Map<string, NodeJS.Timeout>();
+  private readonly earlyResponses = new Map<string, { taskId: string; data: Record<string, unknown> }>();
   /**
    * Per-session FIFO queue tail. Each `handleChatDispatch` call chains onto
    * the previous promise for the same sessionId so that concurrent `agent.chat`
@@ -1549,7 +1553,7 @@ export class ACPAgentServer {
       sessionId,
       pendingHubRequests: this.pendingHubRequests,
       pendingResponses: this.pendingResponses,
-      takeEarlyResponse: (id) => this.takeEarlyResponse(id),
+      takeEarlyResponse: (id) => this.takeEarlyResponse(id, taskId),
       transport,
     });
 
@@ -1628,6 +1632,7 @@ export class ACPAgentServer {
       }
     } finally {
       this.activeTasks.delete(taskId);
+      this.discardEarlyResponsesForTask(taskId);
       // 有空位时优先消化信箱 backlog，避免实时流量饿死留言
       void this.drainMailbox();
     }
@@ -2134,44 +2139,54 @@ export class ACPAgentServer {
         if (deferred !== undefined && !deferred.settled) {
           deferred.resolve(responseData);
         } else {
-          // Buffer briefly so a reply that raced ahead of waitForResponse is
-          // not silently dropped (Cursor would stay on [pending] forever).
+          // Keep the verdict for this task so a reply that raced ahead of —
+          // or outlived — its waitForResponse is not silently dropped (the
+          // turn would otherwise stay on [pending] with no way to resolve).
+          // Unlike the old 2s buffer, retention is bounded by the task's own
+          // lifetime and discarded at teardown, so a genuinely slow review is
+          // never lost to a short clock.
           // eslint-disable-next-line no-console
           console.warn(
             `[ACP] submitResponse: no waiter for ${idKey}=${componentId} ` +
-            `task=${taskId} — buffering 2s`,
+            `task=${taskId} — buffering until task end`,
           );
-          this.bufferEarlyResponse(componentId, responseData);
+          this.bufferEarlyResponse(componentId, taskId, responseData);
         }
         break;
       }
     }
   }
 
-  private bufferEarlyResponse(componentId: string, responseData: Record<string, unknown>): void {
-    const prevTimer = this.earlyResponseTimers.get(componentId);
-    if (prevTimer !== undefined) clearTimeout(prevTimer);
-    this.earlyResponses.set(componentId, responseData);
-    this.earlyResponseTimers.set(
-      componentId,
-      setTimeout(() => {
-        this.earlyResponses.delete(componentId);
-        this.earlyResponseTimers.delete(componentId);
-      }, 2_000),
-    );
+  /** Keep a no-waiter submitResponse for the owning task (see field doc). */
+  private bufferEarlyResponse(
+    componentId: string,
+    taskId: string,
+    responseData: Record<string, unknown>,
+  ): void {
+    this.earlyResponses.set(componentId, { taskId, data: responseData });
   }
 
-  /** Consume a buffered early submitResponse, if any. */
-  takeEarlyResponse(componentId: string): Record<string, unknown> | undefined {
+  /**
+   * Consume a buffered early submitResponse, if any, that belongs to the given
+   * task. Task-scoped so a component id reused by a later task can never pick
+   * up a stale verdict from its predecessor.
+   */
+  takeEarlyResponse(
+    componentId: string,
+    taskId: string,
+  ): Record<string, unknown> | undefined {
     const early = this.earlyResponses.get(componentId);
-    if (early === undefined) return undefined;
+    if (early === undefined || early.taskId !== taskId) return undefined;
     this.earlyResponses.delete(componentId);
-    const timer = this.earlyResponseTimers.get(componentId);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      this.earlyResponseTimers.delete(componentId);
+    return early.data;
+  }
+
+  /** Drop early-submitResponse buffers belonging to a finished task. */
+  private discardEarlyResponsesForTask(taskId: string): void {
+    if (this.earlyResponses.size === 0) return;
+    for (const [componentId, entry] of this.earlyResponses) {
+      if (entry.taskId === taskId) this.earlyResponses.delete(componentId);
     }
-    return early;
   }
 
   // ── rollback ───────────────────────────────────────────────────

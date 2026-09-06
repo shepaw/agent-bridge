@@ -116,6 +116,12 @@ export interface SendMessageMetadataOpts {
 }
 
 export interface WaitForResponseOpts {
+  /**
+   * Cap on how long to block for a reply. `0` (or `Infinity`) disables the
+   * cap entirely: the waiter stays live until the reply arrives, the task is
+   * cancelled (waiter rejected with TaskCancelledError), or the connection/
+   * process is torn down. Defaults to 300_000 (5 minutes) when omitted.
+   */
   timeoutMs?: number;
 }
 
@@ -446,9 +452,12 @@ export class TaskContext {
    *   3. The user's reply arrives as a regular `agent.chat` message that
    *      re-enters `onChat`; handle it there.
    *
-   * This method is retained for niche use-cases where the agent really
-   * does want to block the current turn on a response (e.g. an in-process
-   * UI test harness). It still obeys the 300-second timeout.
+   * Retained for niche use-cases where the agent really does want to block
+   * the current turn on a response (e.g. an in-process UI test harness, or a
+   * synchronous ACP `request_permission` that MUST block until the reviewer
+   * answers). For those, pass `timeoutMs: 0` so a slow human review is not
+   * silently turned into a denial; the waiter is released when the task is
+   * cancelled (`handleCancelTask` rejects all pending waiters) or torn down.
    */
   async waitForResponse(
     componentId: string,
@@ -466,7 +475,13 @@ export class TaskContext {
       deferred.resolve(early);
     }
     try {
-      return await withTimeout(deferred.promise, opts.timeoutMs ?? 300_000, `component ${componentId}`);
+      const timeoutMs = opts.timeoutMs;
+      // timeoutMs: 0 / Infinity = wait for the reply (or task teardown)
+      // without an artificial deadline — see WaitForResponseOpts.
+      if (timeoutMs === 0 || timeoutMs === Infinity) {
+        return await deferred.promise;
+      }
+      return await withTimeout(deferred.promise, timeoutMs ?? 300_000, `component ${componentId}`);
     } finally {
       this.pendingResponses.delete(componentId);
     }

@@ -366,6 +366,154 @@ describe('ACPAgentServer v2.1 — cancel + UI interaction', () => {
   });
 });
 
+// ── Delayed / late review ─────────────────────────────────────────
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe('ACPAgentServer v2.1 — delayed review (no silent cancel, late replies kept)', () => {
+  /**
+   * The reply races AHEAD of waitForResponse: the card goes out, then the
+   * implementation takes >2s (longer than the legacy early-response buffer)
+   * before it registers the waiter. The verdict must survive in the task-level
+   * buffer instead of being dropped — otherwise the wait would time out and
+   * the turn would never deliver its result.
+   */
+  class LateWaiterAgent extends ACPAgentServer {
+    override async onChat(ctx: TaskContext): Promise<void> {
+      await ctx.sendActionConfirmation({
+        prompt: 'Approve?',
+        actions: [
+          { label: 'Yes', value: 'allow' },
+          { label: 'No', value: 'deny' },
+        ],
+        confirmationId: 'confirm_latebuf',
+      });
+      await sleep(2500);
+      const response = await ctx.waitForResponse('confirm_latebuf', { timeoutMs: 5000 });
+      await ctx.sendText(`verdict:${response.value as string}`);
+    }
+  }
+
+  /**
+   * A human-scale wait: `timeoutMs: 0` means the approval stays answerable
+   * until the task is cancelled/ends — a reply that lands well after the card
+   * (and after any conceivable register-vs-reply micro-race) still resolves
+   * the turn instead of being silently dropped at some fixed deadline.
+   */
+  class NoCapReviewAgent extends ACPAgentServer {
+    override async onChat(ctx: TaskContext): Promise<void> {
+      const cid = await ctx.sendActionConfirmation({
+        prompt: 'Approve?',
+        actions: [
+          { label: 'Yes', value: 'allow' },
+          { label: 'No', value: 'deny' },
+        ],
+        confirmationId: 'confirm_nocap',
+      });
+      const response = await ctx.waitForResponse(cid, { timeoutMs: 0 });
+      await ctx.sendText(`verdict:${response.value as string}`);
+    }
+  }
+
+  let agent: LateWaiterAgent;
+  let port: number;
+  let stop: () => Promise<void>;
+  let peersPath: string;
+  let workdir: string;
+  let authorized: ReturnType<typeof makePeerKeypair>;
+
+  beforeAll(async () => {
+    workdir = mkdtempSync(join(tmpdir(), 'shepaw-server-delayed-review-'));
+    peersPath = join(workdir, 'authorized_peers.json');
+    authorized = makePeerKeypair();
+    addPeer(peersPath, authorized.publicKeyB64, 'test-client');
+
+    agent = new LateWaiterAgent({ name: 'DelayedReview', peersPath });
+    const handle = await startAgent(agent);
+    port = handle.port;
+    stop = handle.stop;
+  });
+
+  afterAll(async () => {
+    await stop?.();
+    rmSync(workdir, { recursive: true, force: true });
+  });
+
+  const waitForVerdict = async (
+    client: V2TestClient,
+    taskId: string,
+    sessionId: string,
+    confirmationId: string,
+  ): Promise<void> => {
+    await client.waitForNotification('ui.actionConfirmation');
+    await client.request('agent.submitResponse', {
+      task_id: taskId,
+      response_type: 'confirmation',
+      response_data: { confirmation_id: confirmationId, value: 'allow' },
+    });
+    const text = (await client.waitFor(
+      (m) =>
+        m.method === 'ui.textContent' &&
+        (m.params as Record<string, unknown>).content === 'verdict:allow',
+    )) as unknown as JsonRpcNotification;
+    expect(text).toBeDefined();
+  };
+
+  it('keeps a submitResponse that outlives the waiter (re-register after >2s)', async () => {
+    const client = new V2TestClient(
+      `ws://127.0.0.1:${port}/acp/ws`,
+      agent.identity.staticPublicKey,
+      { staticKeypair: authorized },
+    );
+    await client.waitReady();
+    await client.request('agent.chat', { task_id: 't-delay-1', session_id: 's-delay-1', message: 'x' });
+    // submitResponse is sent immediately after the card — BEFORE the agent
+    // (still sleeping) registers its waiter 2.5s later.
+    await waitForVerdict(client, 't-delay-1', 's-delay-1', 'confirm_latebuf');
+    await client.waitForNotification('task.completed', 3000);
+    await client.close();
+  });
+
+  it('honors a genuinely late human review when waitForResponse has no deadline', async () => {
+    // Swap the server's agent for the no-cap variant on the same port is not
+    // possible, so spin a dedicated server for this case.
+    const agent2 = new NoCapReviewAgent({ name: 'NoCap', peersPath });
+    const handle2 = await startAgent(agent2);
+    try {
+      const client = new V2TestClient(
+        `ws://127.0.0.1:${handle2.port}/acp/ws`,
+        agent2.identity.staticPublicKey,
+        { staticKeypair: authorized },
+      );
+      await client.waitReady();
+      await client.request('agent.chat', {
+        task_id: 't-nocap-1',
+        session_id: 's-nocap-1',
+        message: 'x',
+      });
+      await client.waitForNotification('ui.actionConfirmation');
+      // Reply deliberately late — well past the card delivery and any 2s
+      // micro-race. The waiter (timeoutMs: 0) must still be standing.
+      await sleep(1500);
+      await client.request('agent.submitResponse', {
+        task_id: 't-nocap-1',
+        response_type: 'confirmation',
+        response_data: { confirmation_id: 'confirm_nocap', value: 'allow' },
+      });
+      const text = (await client.waitFor(
+        (m) =>
+          m.method === 'ui.textContent' &&
+          (m.params as Record<string, unknown>).content === 'verdict:allow',
+      )) as unknown as JsonRpcNotification;
+      expect(text).toBeDefined();
+      await client.waitForNotification('task.completed', 3000);
+      await client.close();
+    } finally {
+      await handle2.stop();
+    }
+  }, 10_000);
+});
+
 // ── Cancellation ──────────────────────────────────────────────────
 
 describe('ACPAgentServer v2.1 — cancellation', () => {

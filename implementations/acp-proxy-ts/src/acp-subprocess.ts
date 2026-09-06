@@ -1602,10 +1602,19 @@ export class AcpSubprocess {
     // On the peer path the phone can relay submitResponse over loopback almost
     // immediately; if we send first and register second, the reply is dropped
     // and Cursor sits on [pending] forever even after "Always allow".
+    //
+    // No reply deadline (timeoutMs: 0): ACP `request_permission` is
+    // synchronous, so a human who reviews after 30+ minutes is still making a
+    // legitimate decision — silently cancelling her approval at 20 minutes
+    // aborts the agent's tool, drops the late submitResponse, and can wedge
+    // the turn forever (drainUpdates never sees `stop`). An abandoned review
+    // is reaped by the turn-level backstops instead: task.cancel rejects every
+    // pending waiter, ws teardown detaches the route, and the ACP request's
+    // own ctx.signal aborts when the upstream connection dies.
     const prompt = formatPermissionPrompt(this.agentDisplayName, toolCall);
     const confirmationId = `perm_${randomUUID()}`;
     const responsePromise = turn.taskCtx.waitForResponse(confirmationId, {
-      timeoutMs: 20 * 60 * 1000,
+      timeoutMs: 0,
     });
     await turn.taskCtx.sendActionConfirmation({
       confirmationId,
@@ -1647,8 +1656,12 @@ export class AcpSubprocess {
       );
       return { outcome: { outcome: 'cancelled' } };
     } catch (err) {
+      // Only a task-level teardown should land here now (task.cancel rejects
+      // waiters with TaskCancelledError; upstream death aborts ctx.signal) —
+      // not an arbitrary 20-minute clock. Cancelling the tool is correct in
+      // that case because the whole turn is going away.
       log(
-        'permission wait failed (%s): %s',
+        'permission wait aborted (%s): %s',
         confirmationId,
         err instanceof Error ? err.message : String(err),
       );
