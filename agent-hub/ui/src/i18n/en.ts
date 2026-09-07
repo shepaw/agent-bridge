@@ -71,7 +71,7 @@ export const en = {
   'title.store': 'Nexus Pouch',
   'title.storeSub': 'This machine · paired devices · Agent spaces',
   'title.peer': 'Pair device',
-  'title.peerSub': 'Peer starts with the dashboard · scan to connect the app',
+  'title.peerSub': 'Scan with the Shepaw app to manage every local Agent from your phone',
   'title.engines': 'Engine management',
   'title.enginesSub': 'Detect, install and configure ACP engines',
   'title.global': 'Settings',
@@ -212,7 +212,7 @@ export const en = {
   'settings.enginesHint': 'Manage built-in and custom engines, and default environment variables per engine.',
   'settings.peerTitle': 'Pair device',
   'settings.peerHint':
-    'Start Peer, then scan with Shepaw App → Device Pairing / Scan to Connect. After pairing, the phone can reach every local instance over Peer.',
+    'Once the Shepaw app is installed, scan the QR on this page to manage this computer’s Agents from your phone.',
   'settings.versionTitle': 'Version & update',
   'settings.versionHint':
     'Installed shepaw-agent-hub release, npm update check, and dashboard server restart.',
@@ -250,22 +250,27 @@ export const en = {
     'The dashboard did not come back. It may still be starting — reload the page manually.',
 
   'peer.section': 'Peer service',
-  'peer.hint':
-    'The dashboard starts Peer automatically. This page shows a pairing QR — scan it with the app’s Device Pairing.',
-  'peer.remoteWarn':
-    'Remote access is configured (shared Channel or reverse proxy) but the tunnel router is not running. Remote pairing needs the router first.',
   'peer.statusBooting': 'Peer service: starting…',
   'peer.statusRunning': 'Peer service: running (pid {pid})',
   'peer.statusStopped': 'Peer service: stopped',
   'peer.port': 'Port {port}',
-  'peer.scanHint': 'Scan the QR below with Shepaw app Device Pairing / Scan to Connect.',
-  'peer.qrBoth': ' The QR includes LAN and remote endpoints.',
-  'peer.qrLanOnly': ' Phone and this machine must be on the same Wi-Fi / LAN.',
+  'peer.downloadApp': 'Download the Shepaw app',
+  'peer.noAppHint':
+    "Don't have it yet? Grab the installer here (not on the app stores yet).",
+  'peer.step1': 'Install the Shepaw app on your phone',
+  'peer.step2': 'Open the app and go to “Pair Device / Scan to Connect”',
+  'peer.step3': 'Scan the QR code below with the app to finish pairing',
+  'peer.heroEmptyHint': 'No active QR yet — click below to generate one.',
+  'peer.mintStart': 'Start Peer and show QR',
   'peer.preparingQr': 'Preparing pairing QR…',
   'peer.mint': 'Generate pairing QR',
   'peer.minting': 'Generating…',
   'peer.expiresIn': 'Expires in {seconds}s',
   'peer.expired': 'Expired',
+  'peer.qrNote': 'Keep the phone on the same Wi-Fi / LAN as this computer, then scan.',
+  'peer.qrRemoteOk': 'Remote access is on — the phone can connect even off this network.',
+  'peer.remoteWarn':
+    'Remote access is configured (shared Channel or reverse proxy) but the tunnel router is not running. Remote pairing needs the router first.',
   'peer.lan': 'LAN: {endpoint}',
   'peer.channel': 'Channel: {endpoint}',
   'peer.remote': 'Remote: {endpoint}',
@@ -273,6 +278,11 @@ export const en = {
   'peer.emulatorHint':
     'Android emulator: change 192.168.x.x in the link to 10.0.2.2; iOS simulator can use localhost.',
   'peer.refreshQr': 'Refresh QR',
+  'peer.pairedBanner':
+    '✓ Paired as {name} — you can now manage this computer from your phone.',
+  'peer.advancedTitle': 'Advanced options',
+  'peer.advancedHint':
+    'Service status, manual link pairing and remote access (Channel / reverse proxy). Expand only when you need them.',
   'peer.channelTitle': 'Shared Channel (remote access)',
   'peer.channelCollapsed':
     'On a LAN or VPN, only devices on the same network can scan by default. For cellular / other networks, a shared Channel proxy forwards encrypted traffic to this machine without exposing Agent ports.',
@@ -679,13 +689,10 @@ export const en = {
   'setup.enginesNeedSetup': '{count} need setup',
   'setup.createInstance': 'Create an instance',
   'setup.skip': 'Skip guide',
-  'setup.pairTitle': 'Pair your phone',
+  'setup.pairTitle': 'Last step: pair your phone',
   'setup.pairLead':
-    'Your instance is ready. Open the Shepaw app → Device Pairing / Scan to Connect → scan the QR below.',
+    'Your instance is ready. Install and open the Shepaw app below, then scan to pair.',
   'setup.done': 'Finish',
-  'setup.installAppTitle': "Don't have the Shepaw app yet?",
-  'setup.installAppBody':
-    'The app is not on the app stores yet — get the latest install package at {url}',
 
   'wizard.title': 'Get started with Shepaw Hub',
   'wizard.subtitle': 'Connect a local Agent to your phone in three steps: engine → folder → scan',
@@ -734,6 +741,7 @@ export const en = {
   'hub.engineGone': 'This engine is no longer registered.',
   'hub.backToAgents': 'Back to My Agents',
   'hub.noSearchMatch': 'No agents match "{q}".',
+  'hub.scanning': 'Checking engines…',
 } as const;
 
 export type MessageKey = keyof typeof en;

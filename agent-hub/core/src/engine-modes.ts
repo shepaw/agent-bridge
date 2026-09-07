@@ -135,11 +135,12 @@ const QWEN_MODES: EngineSessionModeCatalog = {
  * @see https://www.codebuddy.cn/cli/
  */
 const CODEBUDDY_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'default',
+  defaultModeId: 'auto',
   modes: [
     { id: 'default', name: 'Default', description: '首次使用每个工具前确认' },
     { id: 'acceptEdits', name: 'Accept Edits', description: '自动接受文件编辑，命令仍需确认' },
     { id: 'plan', name: 'Plan', description: '只规划，不改代码' },
+    { id: 'auto', name: 'Auto', description: '后台安全检查后自动执行，高风险操作仍拦截' },
     { id: 'bypassPermissions', name: 'Bypass Permissions', description: '跳过所有权限确认（仅隔离环境）' },
   ],
 };

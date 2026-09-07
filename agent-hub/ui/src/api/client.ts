@@ -274,7 +274,12 @@ export const api = {
   },
 
   engines: {
-    list: (): Promise<{ engines: EngineInfo[] }> => request('/engines'),
+    /**
+     * `probe: false` skips the server's local CLI scan (returns the catalog
+     * only) — used for the first paint; availability is fetched separately.
+     */
+    list: (opts?: { probe?: boolean }): Promise<{ engines: EngineInfo[] }> =>
+      request(opts?.probe === false ? '/engines?probe=0' : '/engines'),
 
     create: (input: CreateCustomEngineInput): Promise<{ engine: EngineInfo }> =>
       request('/engines', { method: 'POST', body: JSON.stringify(input) }),

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import type { EngineInfo } from '../api/types.js';
 import { summarizeEngines } from '../utils/engineScan.js';
-import { SHEPAW_APP_DOWNLOAD_URL } from '../utils/appLinks.js';
 import { useI18n } from '../i18n/index.js';
 
 /**
@@ -11,9 +10,9 @@ import { useI18n } from '../i18n/index.js';
  *   - step 'engines': above Engine management — live scan summary + "create
  *     instance" CTA. Polls /api/engines every 5 s so counts refresh as the
  *     user installs/enables engines further down the page.
- *   - step 'pair':     above the scan-to-pair page — static scan instructions
- *     plus a collapsible "get the app" block. PeerPairingPanel below already
- *     mints the QR.
+ *   - step 'pair':     above the scan-to-pair page — just the step-in card and
+ *     the Finish/Skip actions. The install guide and QR live in
+ *     PeerPairingPanel below.
  *
  * The three mini-steps (engine → instance → phone) highlight the current one.
  */
@@ -111,17 +110,6 @@ export function SetupGuide({
           <h4 style={heading}>{t('setup.pairTitle')}</h4>
           <p style={lead}>{t('setup.pairLead')}</p>
 
-          <details style={appInstall}>
-            <summary style={appInstallSummary}>{t('setup.installAppTitle')}</summary>
-            <p style={appInstallBody}>
-              {t('setup.installAppBody', { url: SHEPAW_APP_DOWNLOAD_URL })}
-              <a href={SHEPAW_APP_DOWNLOAD_URL} target="_blank" rel="noreferrer" style={docLink}>
-                {' '}
-                {SHEPAW_APP_DOWNLOAD_URL} ↗
-              </a>
-            </p>
-          </details>
-
           <div style={actions}>
             <button type="button" style={primaryBtn} onClick={onSkip}>
               {t('setup.done')}
@@ -198,22 +186,3 @@ const secondaryBtn: React.CSSProperties = {
   fontWeight: 600,
   fontSize: 14,
 };
-const appInstall: React.CSSProperties = {
-  background: '#181825',
-  border: '1px solid #313244',
-  borderRadius: 6,
-  padding: '8px 12px',
-};
-const appInstallSummary: React.CSSProperties = {
-  color: '#a6adc8',
-  fontSize: 13,
-  cursor: 'pointer',
-};
-const appInstallBody: React.CSSProperties = {
-  margin: '8px 0 0',
-  color: '#6c7086',
-  fontSize: 12,
-  lineHeight: 1.5,
-  wordBreak: 'break-all',
-};
-const docLink: React.CSSProperties = { color: '#89b4fa', fontSize: 12, textDecoration: 'none' };

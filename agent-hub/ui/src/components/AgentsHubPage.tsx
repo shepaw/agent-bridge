@@ -48,8 +48,13 @@ export function AgentsHubPage({
   onGoConfigure: (engineId: string) => void;
 }) {
   const { t } = useI18n();
-  const { engines, loading: enginesLoading, error: enginesError, reload: reloadEngines } =
-    useEngines();
+  const {
+    engines,
+    loading: enginesLoading,
+    scanning: enginesScanning,
+    error: enginesError,
+    reload: reloadEngines,
+  } = useEngines();
   const [search, setSearch] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -64,11 +69,16 @@ export function AgentsHubPage({
   const jumpLocked = useRef(false);
   const jumpSettled = useRef(false);
 
+  // Saved instances render as soon as they arrive — the engine catalog (and
+  // its availability scan) is merged in afterwards, so opening the page never
+  // waits on a CLI probe. Engines missing from the catalog yet (deleted custom
+  // engines, or a catalog still in flight) are synthesised from the instance.
   const groups = useMemo(
-    () => (engines ? buildAgentGroups(engines, instances) : []),
+    () => buildAgentGroups(engines ?? [], instances),
     [engines, instances],
   );
   const filteredGroups = useMemo(() => filterAgentGroups(groups, search), [groups, search]);
+  const hasGroups = engines !== null || instances.length > 0;
 
   const authNeeded = isUnauthorizedError(error) || isUnauthorizedError(enginesError);
   const retryAll = () => {
@@ -239,6 +249,7 @@ export function AgentsHubPage({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+        {enginesScanning && <span style={scanNote}>{t('hub.scanning')}</span>}
         {running > 0 && (
           <button
             type="button"
@@ -268,11 +279,11 @@ export function AgentsHubPage({
         </p>
       )}
 
-      {engines === null && enginesLoading && (
+      {!hasGroups && (enginesLoading || loading) && (
         <div style={loadingBlock}>{t('common.loading')}</div>
       )}
 
-      {engines !== null && (
+      {hasGroups && (
         <div style={bodyLayout}>
           <aside style={rail} aria-label={t('hub.railAria')}>
             <div style={railHeader}>{t('hub.railTitle')}</div>
@@ -582,6 +593,11 @@ const addBtn: React.CSSProperties = {
   cursor: 'pointer',
   fontWeight: 600,
   fontSize: 13,
+  whiteSpace: 'nowrap',
+};
+const scanNote: React.CSSProperties = {
+  color: '#6c7086',
+  fontSize: 12,
   whiteSpace: 'nowrap',
 };
 const loadingBlock: React.CSSProperties = {

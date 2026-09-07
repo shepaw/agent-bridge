@@ -1,7 +1,8 @@
 /**
  * Custom ACP engine REST routes.
  *
- * GET    /api/engines                       — list built-in + custom engines (with overrides)
+ * GET    /api/engines                       — list built-in + custom engines (with overrides).
+ *                                             `?probe=0` skips local availability scanning.
  * POST   /api/engines                       — register a custom local CLI
  * PUT    /api/engines/:id                   — edit a custom engine (displayName / acpCommand)
  * DELETE /api/engines/:id                   — remove a custom engine
@@ -43,6 +44,7 @@ import {
   formatShellCommand,
   resolveEngineAvatarFile,
   validateCustomEngineId,
+  type EngineInfo,
 } from '@shepaw/agent-hub-core';
 import { hubRoot } from '@shepaw/agent-hub-core';
 
@@ -61,24 +63,41 @@ function requireKnownEngine(id: string): void {
   }
 }
 
-enginesRouter.get('/', (_req: Request, res: Response) => {
+/**
+ * GET /api/engines
+ *
+ * `?probe=0` returns the raw catalog with no local scanning (no `which`, no
+ * subprocess spawn) so the dashboard can paint saved instances immediately;
+ * availability is fetched by a follow-up request and merged in. Without the
+ * flag the response includes per-engine availability as before.
+ *
+ * Probing shells out per engine, so the loop yields to the event loop between
+ * engines — otherwise a full scan stalls every other in-flight request.
+ */
+enginesRouter.get('/', async (req: Request, res: Response) => {
   try {
+    const probe = req.query.probe !== '0';
     const cfg = loadOrCreateHubConfig();
     const overrides = cfg.engineOverrides ?? {};
-    const engines = listEngineInfos(cfg.customEngines, overrides).map((info) => {
-      const ov = overrides[info.id];
-      const disabled = ov?.disabled === true;
+    const engines: Array<EngineInfo & { disabled: boolean; envVarKeys: string[] }> = [];
+    for (const info of listEngineInfos(cfg.customEngines, overrides, {
+      resolveCommands: probe,
+    })) {
+      const disabled = overrides[info.id]?.disabled === true;
       const engineEnv = resolveEngineEnvVars(cfg, info.id);
-      const enriched = enrichEngineInfo(info, cfg.customEngines, disabled, {
-        cursorApiKey: info.id === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
-        listFastPath: true,
-      });
-      return {
-        ...enriched,
+      const body = probe
+        ? enrichEngineInfo(info, cfg.customEngines, disabled, {
+            cursorApiKey: info.id === 'cursor' ? engineEnv.CURSOR_API_KEY : undefined,
+            listFastPath: true,
+          })
+        : info;
+      engines.push({
+        ...body,
         disabled,
         envVarKeys: engineEnvVarKeys(cfg, info.id),
-      };
-    });
+      });
+      if (probe) await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     res.json({ engines });
   } catch (err) {
     res.status(500).json({ error: String(err) });

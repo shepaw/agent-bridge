@@ -167,6 +167,12 @@ export function isKnownEngine(
 export function listEngineInfos(
   customEngines: ReadonlyArray<CustomEngineDefinition>,
   overrides?: Readonly<Record<string, EngineOverrideInstanceion>>,
+  /**
+   * `resolveCommands: false` skips per-engine local binary detection (Cursor
+   * CLI lookup) so callers that only need the catalog — e.g. the dashboard's
+   * first paint — get a pure config read with no subprocess spawns.
+   */
+  opts: { resolveCommands?: boolean } = {},
 ): EngineInfo[] {
   const withModes = (id: string, info: EngineInfo): EngineInfo => {
     const catalog = getEngineSessionCatalog(id);
@@ -184,7 +190,10 @@ export function listEngineInfos(
       id,
       displayName: ov?.displayName ?? BUILTIN_ENGINE_LABELS[id],
       description: catalog.description,
-      acpCommand: id === 'cursor' ? getCursorAcpCommand() : BUILTIN_ENGINE_ACP_COMMANDS[id],
+      acpCommand:
+        id === 'cursor' && opts.resolveCommands !== false
+          ? getCursorAcpCommand()
+          : BUILTIN_ENGINE_ACP_COMMANDS[id],
       builtin: true,
       ...(ov?.disabled && { disabled: true }),
     });

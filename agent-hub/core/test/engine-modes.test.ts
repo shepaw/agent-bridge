@@ -34,9 +34,9 @@ describe('engine session mode catalogs', () => {
     expect(getEngineSessionCatalog('qwen-code').modes.map((m) => m.id)).toEqual([
       'plan', 'default', 'auto-edit', 'auto', 'yolo',
     ]);
-    expect(getEngineSessionCatalog('codebuddy').defaultModeId).toBe('default');
+    expect(getEngineSessionCatalog('codebuddy').defaultModeId).toBe('auto');
     expect(getEngineSessionCatalog('codebuddy').modes.map((m) => m.id)).toEqual([
-      'default', 'acceptEdits', 'plan', 'bypassPermissions',
+      'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions',
     ]);
   });
 
@@ -114,7 +114,7 @@ describe('catalogModesWire', () => {
     expect(catalogModesWire('codex').current).toBe('on-request');
     expect(catalogModesWire('deepseek-harness').current).toBe('workspace-write');
     expect(catalogModesWire('qwen-code').current).toBe('auto');
-    expect(catalogModesWire('codebuddy').current).toBe('default');
+    expect(catalogModesWire('codebuddy').current).toBe('auto');
   });
 
   it('leaves engines without a catalog empty', () => {
