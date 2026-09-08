@@ -2,21 +2,27 @@ import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { GatewayInfo, PairedPeer, PeerPairingResult, PeerServiceStatus } from '../api/types.js';
-import { useI18n } from '../i18n/index.js';
+import { useI18n, type MessageKey } from '../i18n/index.js';
 import { SHEPAW_APP_DOWNLOAD_URL } from '../utils/appLinks.js';
+import { PublicChannelGuide, SelfHostChannelGuide } from './ConnectChannelGuide.js';
 import { ChannelSettingsPanel } from './GatewaySettingsModal.js';
 import { ReverseProxyPanel } from './ReverseProxyPanel.js';
 import { HubAuthTokenPanel } from './HubAuthTokenPanel.js';
 
 /**
- * Scan-to-pair panel: Peer is started by `shepaw-hub web` (and again here if
+ * Connect-client panel: Peer is started by `shepaw-hub web` (and again here if
  * needed). Auto-mint `shepaw://peer` QR, then list paired devices.
  *
- * Layout is beginner-first: a short install guide (or a "paired" banner for
- * returning users) sits above the centered QR. Peer service controls, the
- * manual pairing link and remote-access (Channel / reverse proxy) setup all
- * live under an "Advanced options" disclosure so a first-timer never has to
- * read about pids, ports or routers to pair a phone.
+ * The page is a two-step wizard so a first-timer is never dropped straight into
+ * tunnelling vocabulary:
+ *   ① get the phone app ready (install / open / scan)
+ *   ② choose how the phone reaches this machine — same network, a hosted
+ *      Channel tunnel, or a self-hosted Channel service
+ * The QR lives at the bottom of step ② and refreshes itself once a Channel is
+ * saved (that is when the payload gains its `channel=` entry).
+ *
+ * Peer service controls, the manual pairing link and the reverse proxy stay
+ * under an "Advanced options" disclosure visible from both steps.
  */
 export function PeerPairingPanel() {
   const { t } = useI18n();
@@ -30,10 +36,12 @@ export function PeerPairingPanel() {
   const [copied, setCopied] = useState(false);
   const [booting, setBooting] = useState(true);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
-  const [channelExpanded, setChannelExpanded] = useState(false);
   const [reverseProxyExpanded, setReverseProxyExpanded] = useState(false);
+  const [step, setStep] = useState<'client' | 'network'>('client');
+  const [method, setMethod] = useState<'lan' | 'channel' | 'selfhost'>('lan');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoQrDone = useRef(false);
+  const methodPicked = useRef(false);
 
   const load = async () => {
     const peerRes = await api.peer.get();
@@ -94,11 +102,17 @@ export function PeerPairingPanel() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pairing]);
 
-  // Already configured — keep the sections open so operators can manage them.
+  // Already tunnelling? Open step ② on the Channel option instead of the LAN one.
   useEffect(() => {
-    if (gateway?.channel) setChannelExpanded(true);
+    if (methodPicked.current || !gateway) return;
+    methodPicked.current = true;
+    if (gateway.channel) setMethod('channel');
+  }, [gateway]);
+
+  // Already configured — keep the reverse proxy section open so operators can manage it.
+  useEffect(() => {
     if (gateway?.reverseProxy) setReverseProxyExpanded(true);
-  }, [gateway?.channel, gateway?.reverseProxy]);
+  }, [gateway?.reverseProxy]);
 
   /** Start Peer if it is not running, then mint a QR. Hero CTA + refresh share this. */
   const mintFromHero = async () => {
@@ -144,6 +158,20 @@ export function PeerPairingPanel() {
     try { await api.peer.removeDevice(fp); await load(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
+  /**
+   * A saved Channel changes the QR payload (`channel=` entry), so refresh the
+   * gateway view and mint a fresh code — otherwise the phone keeps scanning a
+   * LAN-only QR.
+   */
+  const handleChannelChanged = async () => {
+    try {
+      await load();
+      if (status?.running ?? true) setPairing(await api.peer.pair());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const running = status?.running ?? false;
   const hasRemoteExposure = Boolean(gateway?.channel || gateway?.reverseProxy);
   const pairedName = devices[0]?.deviceName || devices[0]?.deviceId || devices[0]?.fingerprint || '';
@@ -174,68 +202,151 @@ export function PeerPairingPanel() {
         </div>
       )}
 
-      {devices.length > 0 ? (
-        <p style={pairedBanner}>{t('peer.pairedBanner', { name: pairedName })}</p>
-      ) : (
-        <div style={guideCard}>
-          <ol style={stepList}>
-            <li style={step}>
-              <span>{t('peer.step1')}</span>
-              <div style={noAppHint}>{t('peer.noAppHint')}</div>
-              <a href={SHEPAW_APP_DOWNLOAD_URL} target="_blank" rel="noreferrer" style={downloadLink}>
-                {t('peer.downloadApp')} ↗
-              </a>
-            </li>
-            <li style={step}>{t('peer.step2')}</li>
-            <li style={step}>{t('peer.step3')}</li>
-          </ol>
-        </div>
-      )}
-
-      <div style={heroCard}>
-        {booting && !pairing ? (
-          <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>{t('peer.preparingQr')}</p>
-        ) : !pairing ? (
-          <>
-            <p style={heroEmptyHint}>{t('peer.heroEmptyHint')}</p>
-            <button
-              type="button"
-              style={primaryBtn}
-              disabled={busy || !status}
-              onClick={() => void mintFromHero()}
-            >
-              {busy ? t('peer.minting') : running ? t('peer.mint') : t('peer.mintStart')}
-            </button>
-          </>
-        ) : (
-          <>
-            <QRCodeSVG value={pairing.qrPayload} size={200} bgColor="#1e1e2e" fgColor="#cdd6f4" />
-            <p style={pairCode}>{pairing.code}</p>
-            <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>
-              {secondsLeft > 0 ? t('peer.expiresIn', { seconds: secondsLeft }) : t('peer.expired')}
-            </p>
-            <p style={qrNote}>{t('peer.qrNote')}</p>
-            {hasRemoteExposure && !gateway?.status.running && (
-              <p style={remoteWarnText}>{t('peer.remoteWarn')}</p>
-            )}
-            {hasRemoteExposure && gateway?.status.running && (
-              <p style={qrRemoteOk}>{t('peer.qrRemoteOk')}</p>
-            )}
-            <button
-              type="button"
-              style={{ ...secondaryBtn, marginTop: 12 }}
-              disabled={busy || !status}
-              onClick={() => void mintFromHero()}
-            >
-              {t('peer.refreshQr')}
-            </button>
-          </>
-        )}
-
-        {err && !/unauthorized|SHEPAW_HUB_TOKEN/i.test(err) && (
-          <p style={errText}>{err}</p>
-        )}
+      <div style={stepBar} role="tablist" aria-label={t('settings.peerTitle')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={step === 'client'}
+          style={stepChip(step === 'client')}
+          onClick={() => setStep('client')}
+        >
+          {step === 'network' && <span style={stepDone}>✓ </span>}
+          {t('connect.stepClient')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={step === 'network'}
+          style={stepChip(step === 'network')}
+          onClick={() => setStep('network')}
+        >
+          {t('connect.stepNetwork')}
+        </button>
       </div>
+
+      {step === 'client' ? (
+        <>
+          {devices.length > 0 ? (
+            <p style={pairedBanner}>{t('peer.pairedBanner', { name: pairedName })}</p>
+          ) : null}
+
+          <div style={guideCard}>
+            <ol style={stepList}>
+              <li style={listStep}>
+                <span>{t('peer.step1')}</span>
+                <div style={noAppHint}>{t('peer.noAppHint')}</div>
+                <a href={SHEPAW_APP_DOWNLOAD_URL} target="_blank" rel="noreferrer" style={downloadLink}>
+                  {t('peer.downloadApp')} ↗
+                </a>
+              </li>
+              <li style={listStep}>{t('peer.step2')}</li>
+              <li style={listStep}>{t('peer.step3')}</li>
+            </ol>
+          </div>
+
+          <div style={{ textAlign: 'right' }}>
+            <button type="button" style={primaryBtn} onClick={() => setStep('network')}>
+              {t('connect.next')}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={guideCard}>
+            <p style={pickTitle}>{t('connect.pickTitle')}</p>
+            <ul style={pickList}>
+              <li style={pickItem}>{t('connect.pickQ1')}</li>
+              <li style={pickItem}>{t('connect.pickQ2')}</li>
+              <li style={pickItem}>{t('connect.pickQ3')}</li>
+            </ul>
+          </div>
+
+          <div style={methodList} role="radiogroup" aria-label={t('connect.stepNetwork')}>
+            {CONNECT_METHODS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                role="radio"
+                aria-checked={method === option.id}
+                style={methodCard(method === option.id)}
+                onClick={() => setMethod(option.id)}
+              >
+                <span style={methodRadio}>{method === option.id ? '●' : '○'}</span>
+                <span style={methodText}>
+                  <strong style={methodTitle}>{t(option.titleKey)}</strong>
+                  <span style={methodDesc}>{t(option.descKey)}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {method === 'channel' && (
+            <>
+              <PublicChannelGuide />
+              <div style={channelForm}>
+                <ChannelSettingsPanel onChanged={() => void handleChannelChanged()} />
+              </div>
+            </>
+          )}
+
+          {method === 'selfhost' && (
+            <SelfHostChannelGuide onDone={() => setMethod('channel')} />
+          )}
+
+          <div style={heroCard}>
+            {booting && !pairing ? (
+              <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>{t('peer.preparingQr')}</p>
+            ) : !pairing ? (
+              <>
+                <p style={heroEmptyHint}>{t('peer.heroEmptyHint')}</p>
+                <button
+                  type="button"
+                  style={primaryBtn}
+                  disabled={busy || !status}
+                  onClick={() => void mintFromHero()}
+                >
+                  {busy ? t('peer.minting') : running ? t('peer.mint') : t('peer.mintStart')}
+                </button>
+              </>
+            ) : (
+              <>
+                <QRCodeSVG value={pairing.qrPayload} size={200} bgColor="#1e1e2e" fgColor="#cdd6f4" />
+                <p style={pairCode}>{pairing.code}</p>
+                <p style={{ color: '#a6adc8', fontSize: 13, margin: 0 }}>
+                  {secondsLeft > 0 ? t('peer.expiresIn', { seconds: secondsLeft }) : t('peer.expired')}
+                </p>
+                <p style={qrNote}>
+                  {method === 'lan' ? t('peer.qrNote') : t('connect.qrChannelHint')}
+                </p>
+                {hasRemoteExposure && !gateway?.status.running && (
+                  <p style={remoteWarnText}>{t('peer.remoteWarn')}</p>
+                )}
+                {hasRemoteExposure && gateway?.status.running && (
+                  <p style={qrRemoteOk}>{t('peer.qrRemoteOk')}</p>
+                )}
+                <button
+                  type="button"
+                  style={{ ...secondaryBtn, marginTop: 12 }}
+                  disabled={busy || !status}
+                  onClick={() => void mintFromHero()}
+                >
+                  {t('peer.refreshQr')}
+                </button>
+              </>
+            )}
+
+            {err && !/unauthorized|SHEPAW_HUB_TOKEN/i.test(err) && (
+              <p style={errText}>{err}</p>
+            )}
+          </div>
+
+          <div style={{ marginBottom: 4 }}>
+            <button type="button" style={secondaryBtn} onClick={() => setStep('client')}>
+              {t('connect.back')}
+            </button>
+          </div>
+        </>
+      )}
 
       <div style={section}>
         <h4 style={sectionTitle}>{t('peer.devicesTitle', { count: devices.length })}</h4>
@@ -336,30 +447,6 @@ export function PeerPairingPanel() {
               <button
                 type="button"
                 style={collapseHeader}
-                aria-expanded={channelExpanded}
-                onClick={() => setChannelExpanded((v) => !v)}
-              >
-                <span style={collapseTitleRow}>
-                  <span style={chevron}>{channelExpanded ? '▾' : '▸'}</span>
-                  <span style={sectionTitleInline}>{t('peer.channelTitle')}</span>
-                  {gateway?.channel && !channelExpanded && (
-                    <span style={configuredBadge}>{t('common.configured')}</span>
-                  )}
-                </span>
-                <span style={collapseAction}>{channelExpanded ? t('common.collapse') : t('common.expand')}</span>
-              </button>
-              {!channelExpanded && (
-                <p style={channelCollapsedHint}>
-                  {t('peer.channelCollapsed')}
-                </p>
-              )}
-              {channelExpanded && <ChannelSettingsPanel onChanged={() => void load()} />}
-            </div>
-
-            <div style={section}>
-              <button
-                type="button"
-                style={collapseHeader}
                 aria-expanded={reverseProxyExpanded}
                 onClick={() => setReverseProxyExpanded((v) => !v)}
               >
@@ -385,6 +472,17 @@ export function PeerPairingPanel() {
     </>
   );
 }
+
+/** How the phone reaches this machine — the three cards in step ②. */
+const CONNECT_METHODS: ReadonlyArray<{
+  id: 'lan' | 'channel' | 'selfhost';
+  titleKey: MessageKey;
+  descKey: MessageKey;
+}> = [
+  { id: 'lan', titleKey: 'connect.optLan.title', descKey: 'connect.optLan.desc' },
+  { id: 'channel', titleKey: 'connect.optChannel.title', descKey: 'connect.optChannel.desc' },
+  { id: 'selfhost', titleKey: 'connect.optSelfHost.title', descKey: 'connect.optSelfHost.desc' },
+];
 
 function dot(running: boolean): React.CSSProperties {
   return { display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: running ? '#a6e3a1' : '#6c7086', marginRight: 8, verticalAlign: 'middle' };
@@ -412,7 +510,7 @@ const stepList: React.CSSProperties = {
   paddingLeft: 20,
   fontSize: 13,
 };
-const step: React.CSSProperties = {
+const listStep: React.CSSProperties = {
   margin: '0 0 8px',
   color: '#cdd6f4',
   lineHeight: 1.55,
@@ -433,6 +531,70 @@ const downloadLink: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   textDecoration: 'none',
+};
+const stepBar: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  marginBottom: 14,
+  flexWrap: 'wrap',
+};
+function stepChip(active: boolean): React.CSSProperties {
+  return {
+    background: active ? '#313244' : 'transparent',
+    border: `1px solid ${active ? '#89b4fa' : '#313244'}`,
+    borderRadius: 999,
+    color: active ? '#cdd6f4' : '#6c7086',
+    fontSize: 13,
+    fontWeight: active ? 600 : 400,
+    padding: '6px 14px',
+    cursor: 'pointer',
+  };
+}
+const stepDone: React.CSSProperties = { color: '#a6e3a1' };
+const pickTitle: React.CSSProperties = {
+  margin: '0 0 8px',
+  color: '#cdd6f4',
+  fontSize: 13,
+  fontWeight: 600,
+};
+const pickList: React.CSSProperties = {
+  margin: 0,
+  paddingLeft: 18,
+  fontSize: 12,
+  color: '#a6adc8',
+  lineHeight: 1.8,
+};
+const pickItem: React.CSSProperties = { marginBottom: 2 };
+const methodList: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  marginBottom: 14,
+};
+function methodCard(selected: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 10,
+    textAlign: 'left',
+    background: selected ? '#313244' : '#181825',
+    border: `1px solid ${selected ? '#89b4fa' : '#313244'}`,
+    borderRadius: 8,
+    padding: '12px 14px',
+    cursor: 'pointer',
+  };
+}
+const methodRadio: React.CSSProperties = { color: '#89b4fa', fontSize: 12, lineHeight: '20px' };
+const methodText: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 };
+const methodTitle: React.CSSProperties = { color: '#cdd6f4', fontSize: 13, fontWeight: 600 };
+const methodDesc: React.CSSProperties = { color: '#a6adc8', fontSize: 12, lineHeight: 1.6 };
+const channelForm: React.CSSProperties = {
+  marginTop: 12,
+  padding: '12px 14px',
+  background: '#181825',
+  border: '1px solid #313244',
+  borderRadius: 8,
 };
 const heroCard: React.CSSProperties = {
   textAlign: 'center',

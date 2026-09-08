@@ -59,7 +59,7 @@ export const en = {
 
   'nav.aria': 'Main navigation',
   'nav.instances': 'My Agents',
-  'nav.peer': 'Pair device',
+  'nav.peer': 'Connect client',
   'nav.store': 'Nexus Pouch',
   'nav.global': 'Settings',
   'nav.engines': 'Engines',
@@ -70,8 +70,8 @@ export const en = {
   'title.detailSub': 'Runtime · sessions · config',
   'title.store': 'Nexus Pouch',
   'title.storeSub': 'This machine · paired devices · Agent spaces',
-  'title.peer': 'Pair device',
-  'title.peerSub': 'Scan with the Shepaw app to manage every local Agent from your phone',
+  'title.peer': 'Connect client',
+  'title.peerSub': 'Connect the Shepaw app on your phone to every Agent on this machine',
   'title.engines': 'Engine management',
   'title.enginesSub': 'Detect, install and configure ACP engines',
   'title.global': 'Settings',
@@ -83,7 +83,7 @@ export const en = {
   'instances.summaryPlural': '{count} agents · {running} running',
   'instances.emptyTitle': 'No Agent instances yet',
   'instances.emptyHint':
-    'Add a workspace to get started. Peer already started with the dashboard — after adding, pair your phone under Pair device.',
+    'Add a workspace to get started. Peer already started with the dashboard — after adding, connect your phone under Connect client.',
   'instances.add': 'Add agent',
   'instances.addPlus': '+ Add agent',
   'instances.noneMatch': 'No instances match the current filters.',
@@ -125,7 +125,7 @@ export const en = {
 
   'add.title': 'Add instance',
   'add.hint':
-    'Pick an engine and working directory. Hub creates and starts the instance; scan to pair under Pair device. Upstream CLIs manage their own login and API keys.',
+    'Pick an engine and working directory. Hub creates and starts the instance; connect the app under Connect client. Upstream CLIs manage their own login and API keys.',
   'add.label': 'Display name',
   'add.labelPlaceholder': 'My Agent',
   'add.engine': 'Engine',
@@ -147,7 +147,7 @@ export const en = {
   'add.bindAll': '0.0.0.0 (all interfaces)',
   'add.baseUrl': 'Base URL',
   'add.tunnelHint':
-    'For remote access, configure a shared Channel under Pair device instead of per-instance tunnels. Fill the three fields below only if this agent needs its own channel.',
+    'For remote access, configure a shared Channel under Connect client instead of per-instance tunnels. Fill the three fields below only if this agent needs its own channel.',
   'add.submit': 'Create and start',
   'add.submitting': 'Creating and starting…',
   'add.errPickEngine': 'Select an engine first.',
@@ -210,9 +210,9 @@ export const en = {
   'settings.deviceNameTooLong': 'Device name must be 64 characters or fewer.',
   'settings.enginesTitle': 'Engine management',
   'settings.enginesHint': 'Manage built-in and custom engines, and default environment variables per engine.',
-  'settings.peerTitle': 'Pair device',
+  'settings.peerTitle': 'Connect client',
   'settings.peerHint':
-    'Once the Shepaw app is installed, scan the QR on this page to manage this computer’s Agents from your phone.',
+    'Two steps: get the Shepaw app ready on your phone, then pick how the phone reaches this computer — same Wi-Fi, or a Channel tunnel from outside the network.',
   'settings.versionTitle': 'Version & update',
   'settings.versionHint':
     'Installed shepaw-agent-hub release, npm update check, and dashboard server restart.',
@@ -282,11 +282,7 @@ export const en = {
     '✓ Paired as {name} — you can now manage this computer from your phone.',
   'peer.advancedTitle': 'Advanced options',
   'peer.advancedHint':
-    'Service status, manual link pairing and remote access (Channel / reverse proxy). Expand only when you need them.',
-  'peer.channelTitle': 'Shared Channel (remote access)',
-  'peer.channelCollapsed':
-    'On a LAN or VPN, only devices on the same network can scan by default. For cellular / other networks, a shared Channel proxy forwards encrypted traffic to this machine without exposing Agent ports.',
-  'peer.channelProxy': 'shared Channel proxy',
+    'Service status, manual link pairing and your own reverse proxy. Expand only when you need them — Channel setup is in step ②.',
   'peer.reverseProxyTitle': 'Reverse proxy (remote access)',
   'peer.reverseProxyCollapsed':
     'No Channel Service? Point your own nginx / reverse proxy at the hub router, and devices off the LAN can pair and connect through it.',
@@ -296,6 +292,75 @@ export const en = {
   'peer.revoke': 'Revoke',
   'peer.authFail':
     'API authentication failed. Set the dashboard token (same as SHEPAW_HUB_TOKEN at start) first:',
+
+  'connect.stepClient': '① Get the app ready',
+  'connect.stepNetwork': '② Choose how to connect',
+  'connect.next': 'Next: choose how to connect →',
+  'connect.back': '← Back to step 1',
+
+  'connect.pickTitle': 'Which one sounds like you?',
+  'connect.pickQ1': 'Phone and this computer are on the same Wi-Fi → pick 1',
+  'connect.pickQ2': 'This computer already has a public address (public IP / domain / your own reverse proxy) → pick 1',
+  'connect.pickQ3': 'The computer sits on a home/office intranet and the phone uses mobile data → pick 2 or 3',
+
+  'connect.optLan.title': '1 · Same network, or already reachable from the internet',
+  'connect.optLan.desc':
+    'Nothing to configure. Keep the phone on the same Wi-Fi as this computer and scan the QR below. If this machine already answers on a public address, the app can reach it directly.',
+  'connect.optChannel.title': '2 · Tunnel through a public Channel service',
+  'connect.optChannel.desc':
+    'The Hub dials out to a Channel service and traffic is relayed back down that connection — no inbound port to open. Use the hosted service (or one your team already runs), then fill in URL / Channel ID / Secret.',
+  'connect.optSelfHost.title': '3 · Run your own public Channel service',
+  'connect.optSelfHost.desc':
+    'Self-host the relay on your own server and domain. Deploy it first, then come back and fill in the same three values under option 2.',
+
+  'connect.qrChannelHint':
+    'Saving a Channel refreshes this QR with a channel= entry — after that the phone can scan over mobile data.',
+  'connect.gotoChannel': 'I have deployed it — take me to the Channel form',
+
+  'connect.public.title': 'How to get the three values',
+  'connect.public.openConsole': 'Open Channel console ↗',
+  'connect.public.step1': 'Open the Channel console (link below)',
+  'connect.public.step2': 'Sign up / log in — WeChat, Google, GitHub or email',
+  'connect.public.step3': 'Click “Create Channel”, give it a name, and set an optional alias',
+  'connect.public.step4':
+    'Copy and save the Secret immediately — it is shown only once. Lost it? Regenerate it in the channel settings (old connections stop working).',
+  'connect.public.step5': 'Back here: fill Server URL / Channel ID / Secret, then save',
+  'connect.public.step6':
+    'The tunnel router starts automatically and this QR refreshes with channel= — the phone can now connect over mobile data',
+  'connect.public.note':
+    'One channel serves one computer — create a separate channel per machine. Traffic stays end-to-end encrypted; the relay only sees ciphertext.',
+
+  'connect.selfhost.whoTitle': 'Who is this for',
+  'connect.selfhost.whoBody':
+    'You don’t want a third party in the path, you need your own domain for compliance, or your team already runs its own infrastructure. If you only need remote access right now, use option 2 (hosted Channel) — you can migrate later.',
+  'connect.selfhost.reqTitle': 'What you need',
+  'connect.selfhost.reqBody':
+    'A server with a public IP (1 vCPU / 2 GB is plenty), a domain such as channel.your-domain.com, and ports 80 / 443 reachable.',
+  'connect.selfhost.deployTitle': 'Step 1 · Deploy the service (pick one)',
+  'connect.selfhost.deployDocker': 'Docker Compose (recommended)',
+  'connect.selfhost.deployBinary': 'Prebuilt binary',
+  'connect.selfhost.deploySource': 'Build from source',
+  'connect.selfhost.openRepo': 'Open repository ↗',
+  'connect.selfhost.envTitle': 'Step 2 · Set the environment',
+  'connect.selfhost.envBody':
+    'Edit .env: BASE_URL must be your public https address; leave AUTH_MODE empty so login stays required. DATABASE_URL defaults to SQLite, REDIS is optional, MAX_CHANNELS caps channels per user (default 5).',
+  'connect.selfhost.envWarn':
+    'AUTH_MODE=open turns off all login — anyone who finds the URL owns the instance. Never use it on a public deployment.',
+  'connect.selfhost.tlsTitle': 'Step 3 · Put HTTPS in front',
+  'connect.selfhost.tlsBody':
+    'The app connects over wss, so plain HTTP will not work. Caddy fetches the certificate for you; nginx works the same way — just proxy to 127.0.0.1:8080.',
+  'connect.selfhost.createTitle': 'Step 4 · Create a Channel in your own console',
+  'connect.selfhost.createBody':
+    'Open https://channel.your-domain.com, log in, click Create Channel, then copy the Secret (shown only once).',
+  'connect.selfhost.backTitle': 'Step 5 · Back to this page',
+  'connect.selfhost.backBody':
+    'Pick option 2 above and fill Server URL with your https address plus the Channel ID and Secret you just created, then save.',
+  'connect.selfhost.noInbound':
+    'No inbound port to open: the Hub dials out to the Channel service, so your router needs no port forwarding.',
+  'connect.selfhost.troubleTitle': 'If it does not work',
+  'connect.selfhost.trouble1': '/health is unreachable → the service or the reverse proxy is not up yet',
+  'connect.selfhost.trouble2': 'Tunnel never connects → Channel ID or Secret is wrong',
+  'connect.selfhost.trouble3': 'This page says the router is stopped → click Start',
 
   'gateway.routerRunning': 'Tunnel router: running (pid {pid})',
   'gateway.routerStopped': 'Tunnel router: stopped',
@@ -378,7 +443,7 @@ export const en = {
   'detail.logsTitle': 'Logs',
   'detail.logsHint': 'Live process output for this instance.',
   'detail.devicesTitle': 'Devices and pairing',
-  'detail.devicesHint': 'Manage authorized ACP peers for this instance. Scan-to-pair lives under Pair device (Peer).',
+  'detail.devicesHint': 'Manage authorized ACP peers for this instance. Pairing a phone lives under Connect client (Peer).',
   'detail.scanConnect': 'Scan to connect',
   'detail.pairDevice': 'Pair device',
   'detail.qrTitle': 'Connection QR',
@@ -393,7 +458,7 @@ export const en = {
   'detail.authorized': 'Authorized devices ({count})',
   'detail.addDevice': '+ Add device',
   'detail.cancelAdd': '✕ Cancel',
-  'detail.noPeers': 'No authorized devices. Use Pair device or Add device.',
+  'detail.noPeers': 'No authorized devices. Use Connect client or Add device.',
   'detail.attachmentsTitle': 'Attachments',
   'detail.attachmentsHint': 'Files pushed from the phone into this instance’s peer-attachments directory.',
   'detail.configTitle': 'Configuration',
@@ -409,7 +474,7 @@ export const en = {
   'detail.saveEnv': 'Save environment variables',
   'detail.tunnelAdvanced': 'Advanced: per-instance remote channel',
   'detail.tunnelNote':
-    'Usually configure a shared channel under Pair device. Fill this only if this agent needs its own channel.',
+    'Usually configure a shared channel under Connect client. Fill this only if this agent needs its own channel.',
   'detail.tunnelViewHint':
     'This agent uses a dedicated channel for remote access, independent of the shared channel. Remove it in Edit if it is not needed.',
   'detail.deleteInstance': 'Delete instance',
@@ -593,8 +658,8 @@ export const en = {
   'store.pairedDevice': 'Paired device',
   'store.localSub': '{id} · writable',
   'store.peerHint':
-    'Without Peer running you only see the local mirror. Live remote reads need Pair device first.',
-  'store.noPeers': 'No paired devices. Connect a phone under Pair device.',
+    'Without Peer running you only see the local mirror. Live remote reads need Connect client first.',
+  'store.noPeers': 'No paired devices. Connect a phone under Connect client.',
   'store.peerSub': '{id} · read-only share',
   'store.agentSpaces': 'Agent Nexus Pouch spaces',
   'store.noAgents': 'No instances yet. Creating one maps a private agents space automatically.',

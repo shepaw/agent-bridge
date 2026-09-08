@@ -61,7 +61,7 @@ export const zh: Record<MessageKey, string> = {
 
   'nav.aria': '主导航',
   'nav.instances': '我的 Agent',
-  'nav.peer': '扫码配对',
+  'nav.peer': '接入客户端',
   'nav.store': '储物袋',
   'nav.global': '全局设置',
   'nav.engines': '引擎管理',
@@ -72,8 +72,8 @@ export const zh: Record<MessageKey, string> = {
   'title.detailSub': '运行状态 · 会话 · 配置',
   'title.store': '储物袋',
   'title.storeSub': '本机 · 配对设备 · Agent 空间',
-  'title.peer': '扫码配对',
-  'title.peerSub': '用惜宝 App 扫码，在手机上管理本机全部 Agent',
+  'title.peer': '接入客户端',
+  'title.peerSub': '把手机上的惜宝 App 接到这台电脑的 Agent',
   'title.engines': '引擎管理',
   'title.enginesSub': '检测 · 安装 · 配置 ACP 引擎',
   'title.global': '全局设置',
@@ -85,7 +85,7 @@ export const zh: Record<MessageKey, string> = {
   'instances.summaryPlural': '{count} 个 Agent · {running} 运行中',
   'instances.emptyTitle': '还没有 Agent 实例',
   'instances.emptyHint':
-    '添加一个工作区即可开始。Peer 已随仪表盘启动，添加后去「扫码配对」连接手机。',
+    '添加一个工作区即可开始。Peer 已随仪表盘启动，添加后去「接入客户端」连接手机。',
   'instances.add': '添加 Agent',
   'instances.addPlus': '+ 添加 Agent',
   'instances.noneMatch': '没有符合筛选条件的实例。',
@@ -126,7 +126,7 @@ export const zh: Record<MessageKey, string> = {
 
   'add.title': '添加实例',
   'add.hint':
-    '选引擎和工作目录即可。Hub 会创建并启动实例；手机扫码在「扫码配对」。上游 CLI 自己管理登录与 API Key，这里不用填凭据。',
+    '选引擎和工作目录即可。Hub 会创建并启动实例；连接手机在「接入客户端」。上游 CLI 自己管理登录与 API Key，这里不用填凭据。',
   'add.label': '显示名称',
   'add.labelPlaceholder': '我的 Agent',
   'add.engine': '引擎',
@@ -148,7 +148,7 @@ export const zh: Record<MessageKey, string> = {
   'add.bindAll': '0.0.0.0（所有网卡）',
   'add.baseUrl': 'Base URL',
   'add.tunnelHint':
-    '外网访问请在「扫码配对」配置共享 Channel，无需给每个实例单独填。仅当该 Agent 需要独立 channel 时才填写下面三项。',
+    '外网访问请在「接入客户端」配置共享 Channel，无需给每个实例单独填。仅当该 Agent 需要独立 channel 时才填写下面三项。',
   'add.submit': '创建并启动',
   'add.submitting': '正在创建并启动…',
   'add.errPickEngine': '请先选择一个引擎。',
@@ -211,9 +211,9 @@ export const zh: Record<MessageKey, string> = {
   'settings.deviceNameTooLong': '设备名称不能超过 64 个字符。',
   'settings.enginesTitle': '引擎管理',
   'settings.enginesHint': '管理内置与自定义引擎，配置每个引擎的默认环境变量。',
-  'settings.peerTitle': '扫码配对',
+  'settings.peerTitle': '接入客户端',
   'settings.peerHint':
-    '手机装好惜宝 App 后，扫一扫本页二维码即可在手机上管理这台电脑上的 Agent。',
+    '两步：先在手机上准备好惜宝 App，再选择手机怎么连到这台电脑——同一个 Wi-Fi 直连，或用 Channel 从外网穿透进来。',
   'settings.versionTitle': '版本与更新',
   'settings.versionHint': '当前 shepaw-agent-hub 版本、npm 更新检查与服务重启。',
   'settings.installed': '已安装版本：{version}',
@@ -275,11 +275,7 @@ export const zh: Record<MessageKey, string> = {
   'peer.pairedBanner': '✓ 已连接「{name}」，现在可以用手机管理这台电脑了。',
   'peer.advancedTitle': '高级选项',
   'peer.advancedHint':
-    'Peer 服务状态、手动配对链接与远程访问（Channel / 反向代理）配置。遇到问题或需要外网访问时再展开。',
-  'peer.channelTitle': '共享 Channel（远程访问）',
-  'peer.channelCollapsed':
-    'Hub 运行在内网（局域网 / VPN）时，默认仅同一网络内的设备可扫码连接。若希望外网（如手机移动网络）也能访问，可借助共享 Channel 代理，将加密流量安全转发到本机，无需对公网开放 Agent 端口。',
-  'peer.channelProxy': '共享 Channel 代理',
+    'Peer 服务状态、手动配对链接与自建反向代理。遇到问题或需要外网访问时再展开——Channel 配置在第二步。',
   'peer.reverseProxyTitle': '反向代理（远程访问）',
   'peer.reverseProxyCollapsed':
     '不想用 Channel？把自建的 nginx / 反向代理指到 Hub 路由器，局域网外的设备即可通过它配对与连接。',
@@ -288,6 +284,75 @@ export const zh: Record<MessageKey, string> = {
   'peer.openStore': '打开储物袋',
   'peer.revoke': '撤销',
   'peer.authFail': 'API 鉴权失败。请先配置 Dashboard Token（与启动时的 SHEPAW_HUB_TOKEN 相同）：',
+
+  'connect.stepClient': '① 准备客户端',
+  'connect.stepNetwork': '② 选择连接方式',
+  'connect.next': '下一步：选择连接方式 →',
+  'connect.back': '← 返回第一步',
+
+  'connect.pickTitle': '我属于哪一种？',
+  'connect.pickQ1': '手机和这台电脑连的是同一个 Wi-Fi → 选 1',
+  'connect.pickQ2': '这台电脑本身就有公网地址（公网 IP / 域名 / 你自己的反向代理）→ 选 1',
+  'connect.pickQ3': '电脑在公司或家里的内网，手机要用移动网络访问 → 选 2 或 3',
+
+  'connect.optLan.title': '1 · 同一局域网，或本机已有公网入口',
+  'connect.optLan.desc':
+    '什么都不用配。让手机和这台电脑连同一个 Wi-Fi，直接扫下方二维码。如果这台机器本身就有公网地址，App 也能直接连上。',
+  'connect.optChannel.title': '2 · 用公共 Channel 服务穿透',
+  'connect.optChannel.desc':
+    '由 Hub 主动外连到 Channel 服务，流量沿这条连接回流——不需要在路由器上开任何入站端口。用现成的托管服务（或你们已经在用的）即可，填好 地址 / Channel ID / Secret 就行。',
+  'connect.optSelfHost.title': '3 · 自建公网 Channel 服务',
+  'connect.optSelfHost.desc':
+    '把中继服务部署到你自己的服务器和域名上。先把服务搭起来，再回到选项 2 填同样的三项。',
+
+  'connect.qrChannelHint':
+    '保存 Channel 后本二维码会自动刷新并带上 channel= 远程入口，此后手机用移动网络也能扫。',
+  'connect.gotoChannel': '我已部署好，去填 Channel 信息',
+
+  'connect.public.title': '怎么拿到这三项',
+  'connect.public.openConsole': '打开 Channel 控制台 ↗',
+  'connect.public.step1': '打开 Channel 控制台（下方链接）',
+  'connect.public.step2': '注册 / 登录 —— 支持微信、Google、GitHub 或邮箱',
+  'connect.public.step3': '点「创建 Channel」，填一个名称，可选填地址别名',
+  'connect.public.step4':
+    '立刻复制并保存 Secret —— 它只显示一次。万一丢了，可在 Channel 设置里重新生成（旧的连接会立即失效）。',
+  'connect.public.step5': '回到本页，填 服务地址 / Channel ID / Secret，然后保存',
+  'connect.public.step6':
+    '隧道路由器会自动启动，本页二维码也会刷新并带上 channel= —— 之后手机用移动网络也能连上',
+  'connect.public.note':
+    '一个 Channel 对应一台电脑，多台电脑请各建一个。流量全程端到端加密，中继只看到密文。',
+
+  'connect.selfhost.whoTitle': '适合谁',
+  'connect.selfhost.whoBody':
+    '不想让第三方经手数据、合规要求用自己的域名、或团队本来就有自己的基础设施。如果只是现在就要外网访问，先用选项 2（托管 Channel），以后再迁也可以。',
+  'connect.selfhost.reqTitle': '需要准备什么',
+  'connect.selfhost.reqBody':
+    '一台有公网 IP 的服务器（1 核 2G 就够）、一个域名（如 channel.你的域名.com），以及 80 / 443 端口可被访问。',
+  'connect.selfhost.deployTitle': '第 1 步 · 部署服务（三选一）',
+  'connect.selfhost.deployDocker': 'Docker Compose（推荐）',
+  'connect.selfhost.deployBinary': '预编译二进制',
+  'connect.selfhost.deploySource': '源码构建',
+  'connect.selfhost.openRepo': '打开仓库 ↗',
+  'connect.selfhost.envTitle': '第 2 步 · 配置环境',
+  'connect.selfhost.envBody':
+    '编辑 .env：BASE_URL 必须填你的公网 https 地址；AUTH_MODE 留空（保持需要登录）。DATABASE_URL 默认是 SQLite，Redis 可选，MAX_CHANNELS 是每个用户的 Channel 上限（默认 5）。',
+  'connect.selfhost.envWarn':
+    'AUTH_MODE=open 会关掉所有登录校验——任何拿到 URL 的人都能完全控制这个实例。公网部署绝不要开。',
+  'connect.selfhost.tlsTitle': '第 3 步 · 套上 HTTPS',
+  'connect.selfhost.tlsBody':
+    'App 走的是 wss，纯 HTTP 连不上。用 Caddy 可以自动申请证书；nginx 同理，把请求反代到 127.0.0.1:8080 即可。',
+  'connect.selfhost.createTitle': '第 4 步 · 在你自己的控制台里创建 Channel',
+  'connect.selfhost.createBody':
+    '打开 https://channel.你的域名.com，登录后点「创建 Channel」，复制 Secret（只显示一次）。',
+  'connect.selfhost.backTitle': '第 5 步 · 回到本页',
+  'connect.selfhost.backBody':
+    '选择上面的选项 2，服务地址填你的 https 地址，再填刚创建的 Channel ID 和 Secret，然后保存。',
+  'connect.selfhost.noInbound':
+    '不需要开任何入站端口：Hub 是主动外连到 Channel 服务的，路由器上无需做端口映射。',
+  'connect.selfhost.troubleTitle': '连不上时这样排查',
+  'connect.selfhost.trouble1': '/health 打不开 → 服务或反向代理还没起来',
+  'connect.selfhost.trouble2': '隧道一直连不上 → Channel ID 或 Secret 填错了',
+  'connect.selfhost.trouble3': '本页提示路由器未运行 → 点「启动」',
 
   'gateway.routerRunning': '隧道路由器：运行中 (pid {pid})',
   'gateway.routerStopped': '隧道路由器：已停止',
@@ -369,7 +434,7 @@ export const zh: Record<MessageKey, string> = {
   'detail.logsTitle': '日志',
   'detail.logsHint': '实例进程实时输出。',
   'detail.devicesTitle': '设备与配对',
-  'detail.devicesHint': '管理本实例已授权的 ACP 终端。扫码配对请到「扫码配对」（Peer）。',
+  'detail.devicesHint': '管理本实例已授权的 ACP 终端。手机配对请到「接入客户端」（Peer）。',
   'detail.scanConnect': '扫码连接',
   'detail.pairDevice': '配对设备',
   'detail.qrTitle': '连接二维码',
@@ -399,7 +464,7 @@ export const zh: Record<MessageKey, string> = {
   'detail.saveEnv': '保存环境变量',
   'detail.tunnelAdvanced': '高级:单独的外网 channel (per-instance tunnel)',
   'detail.tunnelNote':
-    '可选。通常在「扫码配对」配置共享 channel 即可，无需在此填写。仅当该 agent 需要独立 channel 时才配置。',
+    '可选。通常在「接入客户端」配置共享 channel 即可，无需在此填写。仅当该 agent 需要独立 channel 时才配置。',
   'detail.tunnelViewHint':
     '该 agent 使用独立 channel 外网可达，与全局共享 channel 互不冲突。如无需独立 channel，可在编辑里移除。',
   'detail.deleteInstance': '删除实例',
@@ -579,8 +644,8 @@ export const zh: Record<MessageKey, string> = {
   'store.local': '本机',
   'store.pairedDevice': '配对设备',
   'store.localSub': '{id} · 可写',
-  'store.peerHint': 'Peer 未启动时仅能看本机镜像；远端实时读取需先开「扫码配对」。',
-  'store.noPeers': '暂无配对设备。去「扫码配对」连接手机。',
+  'store.peerHint': 'Peer 未启动时仅能看本机镜像；远端实时读取需先开「接入客户端」。',
+  'store.noPeers': '暂无配对设备。去「接入客户端」连接手机。',
   'store.peerSub': '{id} · 只读共享',
   'store.agentSpaces': 'Agent 储物空间',
   'store.noAgents': '暂无实例。创建实例后会自动映射私有 agents 空间。',
@@ -693,7 +758,7 @@ export const zh: Record<MessageKey, string> = {
   'wizard.openEngineSettings': '打开引擎设置',
   'wizard.cwdHint': '选择 Agent 的工作目录（会作为上游 CLI 的 cwd）。',
   'wizard.displayNameOptional': '显示名称（可选）',
-  'wizard.bindHint': '网关将绑定 0.0.0.0（局域网可达），方便同 Wi-Fi 扫码配对。',
+  'wizard.bindHint': '网关将绑定 0.0.0.0（局域网可达），方便同 Wi-Fi 接入客户端。',
   'wizard.preparing': '准备中…',
   'wizard.pleaseWait': '请稍候',
   'wizard.pairHint':
