@@ -61,6 +61,27 @@ function messageText(content: readonly ContentBlock[]): string {
   return out;
 }
 
+/** Display titles are capped here — long prompts get cut rather than elided. */
+const TITLE_MAX_LENGTH = 80;
+
+/**
+ * Derive a display title from the session's first human prompt.
+ *
+ * DSH's `SessionHeader` carries no title, so the app's session list would fall
+ * back to rendering the raw session id. Synthetic `agent.inject()` context is
+ * skipped (same filter as `onSessionHistory`) so the title is always something
+ * the user actually typed. Returns `undefined` before the first prompt.
+ */
+export function sessionTitle(events: readonly SessionEvent[]): string | undefined {
+  for (const event of events) {
+    if (event.type === 'user/message' && event.data.source.kind === 'user') {
+      const text = messageText(event.data.content).trim().replace(/\s+/g, ' ');
+      if (text.length > 0) return text.slice(0, TITLE_MAX_LENGTH);
+    }
+  }
+  return undefined;
+}
+
 interface ActiveTurn {
   taskCtx: TaskContext;
   agent: Agent;
@@ -310,10 +331,14 @@ export class DshShepawBridge extends ACPAgentServer {
 
   /** Mirror DSH's live sessions into the app's session list. */
   override async onSessionsList(_params: SessionsListParams): Promise<SessionsListResult> {
-    const sessions: SessionInfo[] = this.agents.list().map((agent) => ({
-      session_id: String(agent.id),
-      cwd: agent.session.header.cwd,
-    }));
+    const sessions: SessionInfo[] = this.agents.list().map((agent) => {
+      const title = sessionTitle(agent.session.events);
+      return {
+        session_id: String(agent.id),
+        ...(title !== undefined ? { title } : {}),
+        cwd: agent.session.header.cwd,
+      };
+    });
     return { sessions };
   }
 
