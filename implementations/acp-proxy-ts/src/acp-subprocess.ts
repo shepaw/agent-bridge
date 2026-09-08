@@ -233,8 +233,14 @@ export class AcpSubprocess {
   /** Latest advertised session modes per Shepaw session. */
   private readonly modesByShepawSession = new Map<string, acp.SessionModeState>();
 
-  /** Current in-flight turn — used by permission/fs handlers. */
-  private currentTurn: TurnContext | undefined;
+  /**
+   * In-flight turns keyed by UPSTREAM ACP session id, not by a single global
+   * slot: with two conversations open the newer turn used to overwrite the
+   * slot, so the older conversation's `session/request_permission` card was
+   * delivered to the wrong chat and the older turn hung forever waiting for an
+   * answer nobody could see.
+   */
+  private readonly turnsByUpstreamSession = new Map<string, TurnContext>();
 
   /** Cached slash commands from the latest available_commands_update. */
   private cachedCommands: acp.AvailableCommand[] = [];
@@ -392,7 +398,7 @@ export class AcpSubprocess {
   ): Promise<SessionHistoryMessage[]> {
     // Avoid spawning a second cursor-agent while a chat turn is using the cwd.
     const deadline = Date.now() + 120_000;
-    while (this.currentTurn !== undefined && Date.now() < deadline) {
+    while (this.turnsByUpstreamSession.size > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     await this.start();
@@ -691,7 +697,7 @@ export class AcpSubprocess {
     return {
       acpConnected: this.connection !== undefined && this.child !== undefined && !this.child.killed,
       acpSessionCount: this.sessions.size,
-      hasActiveTurn: this.currentTurn !== undefined,
+      hasActiveTurn: this.turnsByUpstreamSession.size > 0,
     };
   }
 
@@ -817,7 +823,6 @@ export class AcpSubprocess {
     // also die idle (SIGTERM/143). Restart + retry a few times before surfacing.
     let exitRetries = 0;
     for (let retry = 0; ; retry++) {
-      this.currentTurn = turn;
       try {
         const result = await this.runPromptTurnOnce(shepawSessionId, prompt, turn, opts);
         if (result.kind === 'ok') return;
@@ -857,8 +862,6 @@ export class AcpSubprocess {
           continue;
         }
         throw err;
-      } finally {
-        this.currentTurn = undefined;
       }
     }
   }
@@ -886,49 +889,62 @@ export class AcpSubprocess {
       throw new Error(detail);
     }
 
-    let promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
-      ? [...prompt]
-      : (prompt as string | acp.ContentBlock);
-    if (origin === 'created' && opts.priorHistory !== undefined && opts.priorHistory.length > 0) {
-      promptArg = prependHistoryToPrompt(promptArg, opts.priorHistory);
-      log(
-        'rehydrated %d history turn(s) into new upstream session for shepaw %s',
-        opts.priorHistory.length,
-        shepawSessionId,
-      );
-      console.error(
-        `[acp-proxy] rehydrated ${opts.priorHistory.length} history turn(s) into new session shepaw=${shepawSessionId}`,
-      );
-    }
-    const userText = promptToPlainText(promptArg as string | acp.ContentBlock | acp.ContentBlock[]);
-    if (userText) {
-      this.transcriptSink?.append(shepawSessionId, 'user', userText);
-    }
-    const promptPromise = session.prompt(promptArg).catch((err: unknown) => {
-      const detail = formatAcpError(err);
-      log('session.prompt failed for %s: %s', shepawSessionId, detail);
-      console.error('[acp-proxy] session.prompt failed:', detail, err);
-      throw new Error(detail);
-    });
-    const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
-
-    const abortPromise = new Promise<never>((_, reject) => {
-      if (turn.signal.aborted) {
-        reject(new TaskCancelledError());
-        return;
+    // Register before issuing the prompt: the upstream agent may raise
+    // session/request_permission at any point during the turn, and that
+    // handler resolves the owning turn by upstream session id.
+    const upstreamSessionId = session.sessionId;
+    this.turnsByUpstreamSession.set(upstreamSessionId, turn);
+    try {
+      let promptArg: string | acp.ContentBlock | acp.ContentBlock[] = Array.isArray(prompt)
+        ? [...prompt]
+        : (prompt as string | acp.ContentBlock);
+      if (origin === 'created' && opts.priorHistory !== undefined && opts.priorHistory.length > 0) {
+        promptArg = prependHistoryToPrompt(promptArg, opts.priorHistory);
+        log(
+          'rehydrated %d history turn(s) into new upstream session for shepaw %s',
+          opts.priorHistory.length,
+          shepawSessionId,
+        );
+        console.error(
+          `[acp-proxy] rehydrated ${opts.priorHistory.length} history turn(s) into new session shepaw=${shepawSessionId}`,
+        );
       }
-      turn.signal.addEventListener(
-        'abort',
-        () => {
-          void this.cancelSession(session.sessionId);
-          reject(new TaskCancelledError());
-        },
-        { once: true },
-      );
-    });
+      const userText = promptToPlainText(promptArg as string | acp.ContentBlock | acp.ContentBlock[]);
+      if (userText) {
+        this.transcriptSink?.append(shepawSessionId, 'user', userText);
+      }
+      const promptPromise = session.prompt(promptArg).catch((err: unknown) => {
+        const detail = formatAcpError(err);
+        log('session.prompt failed for %s: %s', shepawSessionId, detail);
+        console.error('[acp-proxy] session.prompt failed:', detail, err);
+        throw new Error(detail);
+      });
+      const updatesLoop = this.drainUpdates(session, turn, shepawSessionId);
 
-    const run = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
-    return await Promise.race([run, abortPromise]);
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (turn.signal.aborted) {
+          reject(new TaskCancelledError());
+          return;
+        }
+        turn.signal.addEventListener(
+          'abort',
+          () => {
+            void this.cancelSession(session.sessionId);
+            reject(new TaskCancelledError());
+          },
+          { once: true },
+        );
+      });
+
+      const run = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
+      return await Promise.race([run, abortPromise]);
+    } finally {
+      // Only drop our own entry — a concurrent turn on the same upstream
+      // session must not be unregistered by someone else's teardown.
+      if (this.turnsByUpstreamSession.get(upstreamSessionId) === turn) {
+        this.turnsByUpstreamSession.delete(upstreamSessionId);
+      }
+    }
   }
 
   /**
@@ -1561,12 +1577,36 @@ export class AcpSubprocess {
     }
   }
 
+  /**
+   * Resolve the in-flight turn that owns `upstreamSessionId`, using the session
+   * id the ACP agent sends on every client request. Never guess across two live
+   * turns — a single global slot is what delivered one conversation's approval
+   * card into another conversation's chat.
+   */
+  private turnForUpstreamSession(upstreamSessionId: string | undefined): TurnContext | undefined {
+    // An engine that sends the id gets an exact match — never route a live
+    // turn's approval card into another conversation.
+    if (upstreamSessionId !== undefined && upstreamSessionId.length > 0) {
+      return this.turnsByUpstreamSession.get(upstreamSessionId);
+    }
+    // Id omitted entirely: unambiguous only while a single turn is live.
+    if (this.turnsByUpstreamSession.size === 1) {
+      return this.turnsByUpstreamSession.values().next().value;
+    }
+    return undefined;
+  }
+
   private async handleRequestPermission(
     params: acp.RequestPermissionRequest,
     signal: AbortSignal,
   ): Promise<acp.RequestPermissionResponse> {
-    const turn = this.currentTurn;
+    const turn = this.turnForUpstreamSession(params.sessionId);
     if (turn === undefined) {
+      log('permission request for upstream %s matched no in-flight turn', params.sessionId);
+      console.error(
+        `[acp-proxy] request_permission upstream=${params.sessionId} matched no active turn ` +
+          `(active: ${[...this.turnsByUpstreamSession.keys()].join(', ') || 'none'}); cancelling`,
+      );
       return { outcome: { outcome: 'cancelled' } };
     }
 

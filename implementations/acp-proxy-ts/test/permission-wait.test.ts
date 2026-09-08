@@ -54,31 +54,44 @@ function makeDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** Wire an AcpSubprocess with a fake currentTurn whose waiters we control. */
-function setup() {
-  const sub = new AcpSubprocess({ spec: SPEC, cwd: '/tmp' }) as unknown as {
-    currentTurn: TurnContext;
-    handleRequestPermission(
-      params: unknown,
-      signal: AbortSignal,
-    ): Promise<PermissionOutcome>;
-  };
+const UPSTREAM_A = 'upstream-a';
+const UPSTREAM_B = 'upstream-b';
+
+type WiredSubprocess = {
+  turnsByUpstreamSession: Map<string, TurnContext>;
+  handleRequestPermission(
+    params: unknown,
+    signal: AbortSignal,
+  ): Promise<PermissionOutcome>;
+};
+
+function makeSub(): WiredSubprocess {
+  return new AcpSubprocess({ spec: SPEC, cwd: '/tmp' }) as unknown as WiredSubprocess;
+}
+
+/** Register one fake turn on `sub` whose permission waiters we control. */
+function registerTurn(sub: WiredSubprocess, upstreamSessionId: string) {
   const turnAbort = new AbortController();
   const d = makeDeferred<Record<string, unknown>>();
   const waitForResponse = vi.fn().mockReturnValue(d.promise);
   const sendActionConfirmation = vi.fn().mockResolvedValue(undefined);
-  sub.currentTurn = {
+  sub.turnsByUpstreamSession.set(upstreamSessionId, {
     taskCtx: { waitForResponse, sendActionConfirmation } as never,
     signal: turnAbort.signal,
-  } as TurnContext;
-  return { sub, d, waitForResponse, sendActionConfirmation };
+  } as TurnContext);
+  return { d, waitForResponse, sendActionConfirmation, turnAbort };
+}
+
+function setup(upstreamSessionId = UPSTREAM_A) {
+  const sub = makeSub();
+  return { sub, ...registerTurn(sub, upstreamSessionId), upstreamSessionId };
 }
 
 describe('request_permission — no silent cancel on a slow human review', () => {
   it('registers the permission waiter with no reply deadline (not 20 minutes)', async () => {
-    const { sub, d, waitForResponse, sendActionConfirmation } = setup();
+    const { sub, d, waitForResponse, sendActionConfirmation, upstreamSessionId } = setup();
 
-    const request = { toolCall: TOOL_CALL, options: OPTIONS };
+    const request = { sessionId: upstreamSessionId, toolCall: TOOL_CALL, options: OPTIONS };
     const resultPromise = sub.handleRequestPermission(request, new AbortController().signal);
 
     await vi.waitFor(() => expect(waitForResponse).toHaveBeenCalledTimes(1));
@@ -98,9 +111,9 @@ describe('request_permission — no silent cancel on a slow human review', () =>
   });
 
   it('still cancels the tool when the waiter is torn down (task cancel / abort)', async () => {
-    const { sub, d, waitForResponse } = setup();
+    const { sub, d, waitForResponse, upstreamSessionId } = setup();
 
-    const request = { toolCall: TOOL_CALL, options: OPTIONS };
+    const request = { sessionId: upstreamSessionId, toolCall: TOOL_CALL, options: OPTIONS };
     const resultPromise = sub.handleRequestPermission(request, new AbortController().signal);
     await vi.waitFor(() => expect(waitForResponse).toHaveBeenCalledTimes(1));
 
@@ -111,10 +124,10 @@ describe('request_permission — no silent cancel on a slow human review', () =>
   });
 
   it('denies the tool when the whole request/turn was aborted before the reply', async () => {
-    const { sub, d, waitForResponse } = setup();
+    const { sub, d, waitForResponse, upstreamSessionId } = setup();
     const signal = new AbortController();
 
-    const request = { toolCall: TOOL_CALL, options: OPTIONS };
+    const request = { sessionId: upstreamSessionId, toolCall: TOOL_CALL, options: OPTIONS };
     const resultPromise = sub.handleRequestPermission(request, signal.signal);
     await vi.waitFor(() => expect(waitForResponse).toHaveBeenCalledTimes(1));
 
@@ -123,5 +136,40 @@ describe('request_permission — no silent cancel on a slow human review', () =>
     d.resolve({ confirmation_id: 'perm_x', selected_action_id: 'allow_once' });
     const result = await resultPromise;
     expect(result.outcome.outcome).toBe('cancelled');
+  });
+
+  it('routes a permission request to the turn owning the upstream session, not the newest one', async () => {
+    const sub = makeSub();
+    const older = registerTurn(sub, UPSTREAM_A);
+    const newer = registerTurn(sub, UPSTREAM_B);
+
+    const resultPromise = sub.handleRequestPermission(
+      { sessionId: UPSTREAM_A, toolCall: TOOL_CALL, options: OPTIONS },
+      new AbortController().signal,
+    );
+
+    await vi.waitFor(() => expect(older.waitForResponse).toHaveBeenCalledTimes(1));
+    // The regression: a single global "current turn" slot meant the newer
+    // conversation received the older one's approval card, so the older turn
+    // hung forever waiting for a reply nobody could see.
+    expect(newer.waitForResponse).not.toHaveBeenCalled();
+
+    older.d.resolve({ confirmation_id: 'perm_x', selected_action_id: 'allow_once' });
+    const result = await resultPromise;
+    expect(result.outcome).toEqual({ outcome: 'selected', optionId: 'allow_once' });
+  });
+
+  it('cancels a permission request whose upstream session has no live turn', async () => {
+    const sub = makeSub();
+    const other = registerTurn(sub, UPSTREAM_B);
+
+    const result = await sub.handleRequestPermission(
+      { sessionId: UPSTREAM_A, toolCall: TOOL_CALL, options: OPTIONS },
+      new AbortController().signal,
+    );
+
+    expect(result.outcome.outcome).toBe('cancelled');
+    // Must not be routed to the other conversation by a "size === 1" guess.
+    expect(other.waitForResponse).not.toHaveBeenCalled();
   });
 });
