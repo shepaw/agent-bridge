@@ -8,6 +8,8 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import * as acp from '@agentclientprotocol/sdk';
+
 import {
   ACPAgentServer,
   SessionStore,
@@ -42,6 +44,7 @@ import {
 import { AcpSubprocess } from './acp-subprocess.js';
 import { createHubFanoutHandler } from './hub-fanout.js';
 import { tryLoadDiskHistory } from './disk-history/index.js';
+import { listCodebuddyDiskSessions } from './disk-history/codebuddy.js';
 import { ensureHistoryCreatedAt } from './history-created-at.js';
 import { SessionHistoryCache } from './session-history-cache.js';
 import {
@@ -94,6 +97,34 @@ import {
 } from './workspace-resume.js';
 
 const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
+
+/**
+ * Combine upstream `session/list` entries with sessions discovered on disk.
+ * Entries are keyed by session id; an upstream entry wins for any field it
+ * populates, while disk-derived `title`/`updatedAt` backfill the empty slots
+ * upstream engines (e.g. CodeBuddy) leave blank.
+ */
+function mergeListedSessions(
+  upstream: ReadonlyArray<acp.SessionInfo>,
+  disk: ReadonlyArray<acp.SessionInfo>,
+): acp.SessionInfo[] {
+  const byId = new Map<string, acp.SessionInfo>();
+  for (const s of upstream) byId.set(s.sessionId, { ...s });
+  for (const d of disk) {
+    const existing = byId.get(d.sessionId);
+    if (existing === undefined) {
+      byId.set(d.sessionId, { ...d });
+      continue;
+    }
+    if ((existing.title ?? '').trim().length === 0 && d.title != null && d.title.trim().length > 0) {
+      existing.title = d.title;
+    }
+    if ((existing.updatedAt ?? '').trim().length === 0 && d.updatedAt != null && d.updatedAt.trim().length > 0) {
+      existing.updatedAt = d.updatedAt;
+    }
+  }
+  return [...byId.values()];
+}
 
 export interface AcpProxyAgentOptions {
   /** Engine id (built-in or custom). */
@@ -396,6 +427,32 @@ export class AcpProxyAgent extends ACPAgentServer {
     return { commands };
   }
 
+  /**
+   * Sessions discovered off disk for engines whose live `session/list` is
+   * missing or title-less (CodeBuddy). Each entry gets a derived `title` (first
+   * user message) and `updatedAt` so it survives the listing filter and renders
+   * with a real label. Returns `[]` for other engines or on any I/O error.
+   */
+  private async listEngineDiskSessions(cwd?: string): Promise<acp.SessionInfo[]> {
+    if (this.engineId !== 'codebuddy') return [];
+    const scanCwd = cwd ?? this.cwd;
+    try {
+      const list = await listCodebuddyDiskSessions(scanCwd);
+      return list.map((s) => ({
+        sessionId: s.sessionId,
+        title: s.title,
+        ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+        cwd: scanCwd,
+      }));
+    } catch (err) {
+      log(
+        'codebuddy disk session scan failed: %s',
+        err instanceof Error ? err.message : String(err),
+      );
+      return [];
+    }
+  }
+
   override async onSessionsList(params: SessionsListParams): Promise<SessionsListResult> {
     // Register disposable warmup ids before session/list so Cursor ghosts from
     // commands/model warm-up are filtered for both Hub Dashboard and app sync.
@@ -404,7 +461,13 @@ export class AcpProxyAgent extends ACPAgentServer {
       preserveUpstreamIds: this.sessionStore.establishedSdkSessionIds(),
       orphanedUpstreamIds: this.sessionStore.orphanedSdkSessionIds(),
     });
-    const sessions: SessionInfo[] = upstream.map((s) => {
+    // CodeBuddy's ACP server doesn't advertise `sessionCapabilities.list`, so the
+    // live `session/list` returns `[]`; even when it does, its entries carry no
+    // `title`. Merge in sessions discovered on disk (with a derived title +
+    // updatedAt) so historical CodeBuddy conversations actually surface and show
+    // a real title instead of the raw session id.
+    const listed = mergeListedSessions(upstream, await this.listEngineDiskSessions(params.cwd));
+    const sessions: SessionInfo[] = listed.map((s) => {
       // If the app already has a mapping to this upstream session, surface it
       // under the app's own session id so it reuses the existing local channel
       // instead of adopting a second (crossing) one.
