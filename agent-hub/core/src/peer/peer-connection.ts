@@ -67,6 +67,8 @@ const APPROVAL_TIMEOUT_MS = 20 * 60 * 1000;
 // turn ended can still resume and collect the result instead of a false
 // 'lost' (which would fail an already-computed turn).
 const TURN_RESULT_TTL_MS = 25 * 60 * 1000;
+/** Streaming turn with no chunk/metadata this long → send keepalive to the app. */
+const TURN_KEEPALIVE_IDLE_MS = 90 * 1000;
 
 function parsePeerChatHistory(
   raw: unknown,
@@ -112,6 +114,9 @@ interface TurnEntry {
   lastMetadata?: Record<string, unknown>;
   /** When the turn reached a terminal state — TTL base for the reaper. */
   terminalAt?: number;
+  /** Last chunk/metadata routed to the phone (ms) — drives keepalive while
+   * upstream is silent so the app idle watchdog does not hit 30min. */
+  lastOutputAt?: number;
 }
 
 /** One live connection's routing endpoints. Turn output and approval cards
@@ -209,11 +214,27 @@ export function reapIdlePeerSessions(): void {
         s.turns.delete(rid);
       }
     }
+    tickTurnKeepalives(s, now);
     // Only drop sessions that never got going — anything with a live acp
     // client stays so the next reconnect reuses it.
     if (s.acpClients.size === 0 && s.turns.size === 0 && s.detachedApprovals.size === 0) {
       peerSessions.delete(peerId);
     }
+  }
+}
+
+/** Keep the phone idle watchdog fed while upstream is working silently. */
+function tickTurnKeepalives(peerSession: PeerSessionState, now: number): void {
+  for (const [requestId, entry] of peerSession.turns) {
+    if (entry.status !== 'streaming') continue;
+    const last = entry.lastOutputAt ?? now;
+    if (now - last < TURN_KEEPALIVE_IDLE_MS) continue;
+    entry.lastOutputAt = now;
+    routeToPeer(peerSession, {
+      type: 'agent_metadata',
+      request_id: requestId,
+      metadata: { keepalive: true, upstream_status: 'working' },
+    });
   }
 }
 
@@ -312,6 +333,26 @@ export async function drivePeerConnection(opts: {
     // cached bio catches up without waiting for a reconnect/restart.
     client.onResumeChanged = () => {
       if (!closed && ws.readyState === ws.OPEN) send(currentAgentListPayload());
+    };
+    const notifyUpstreamTransport = (
+      type: 'agent_turn_upstream_reconnecting' | 'agent_turn_upstream_reconnected',
+      taskIds?: readonly string[],
+    ): void => {
+      for (const [requestId, entry] of peerSession.turns) {
+        if (entry.status !== 'streaming') continue;
+        if (taskIds !== undefined && !taskIds.includes(entry.taskId)) continue;
+        routeToPeer(peerSession, { type, request_id: requestId });
+      }
+    };
+    client.onTransportLost = (taskIds) => {
+      log(
+        `acp transport lost agent=${agentId} tasks=${taskIds.length} — notify app`,
+      );
+      notifyUpstreamTransport('agent_turn_upstream_reconnecting', taskIds);
+    };
+    client.onTransportRestored = () => {
+      log(`acp transport restored agent=${agentId} — notify app`);
+      notifyUpstreamTransport('agent_turn_upstream_reconnected');
     };
     acpClients.set(agentId, client);
     return client;
@@ -798,7 +839,13 @@ export async function drivePeerConnection(opts: {
    * later resume can rebuild the turn from the proxy's replay buffer.
    */
   const registerTurn = (requestId: string, agentId: string, taskId: string): TurnEntry => {
-    const entry: TurnEntry = { agentId, taskId, status: 'streaming', accumulated: '' };
+    const entry: TurnEntry = {
+      agentId,
+      taskId,
+      status: 'streaming',
+      accumulated: '',
+      lastOutputAt: Date.now(),
+    };
     peerSession.turns.set(requestId, entry);
     try {
       savePeerTurn({ requestId, peerId, agentId, taskId, createdAt: Date.now() });
@@ -833,10 +880,12 @@ export async function drivePeerConnection(opts: {
     return {
       onChunk: (content) => {
         entry.accumulated += content;
+        entry.lastOutputAt = Date.now();
         routeToPeer(peerSession, { type: 'agent_chunk', request_id: requestId, content });
       },
       onMetadata: (metadata) => {
         entry.lastMetadata = metadata;
+        entry.lastOutputAt = Date.now();
         routeToPeer(peerSession, { type: 'agent_metadata', request_id: requestId, metadata });
       },
       onDone: finishDone,

@@ -117,6 +117,15 @@ export class PeerAcpClient {
   onResumeChanged: (() => void) | undefined;
 
   /**
+   * Hub→proxy ACP transport dropped while turns keep running on the proxy.
+   * Paired apps should freeze idle timeout until [onTransportRestored].
+   */
+  onTransportLost?: (inflightTaskIds: readonly string[]) => void;
+
+  /** Hub→proxy ACP transport is back (reconnect + resume loop progressed). */
+  onTransportRestored?: () => void;
+
+  /**
    * Request cancellation of a running turn. The 300ms cancelTimer forwards
    * `agent.cancelTask` to the proxy. Called via the peer-level turn registry
    * (works from any live connection — the registry owns request_id ↔ taskId).
@@ -926,10 +935,16 @@ export class PeerAcpClient {
     this.ws = undefined;
     this.session = undefined;
     this.connecting = undefined;
+    const inflightIds = [...this.inflight.keys()];
     // Turns survive: the proxy kept running them. Mark every in-flight turn
     // for resume and start the reconnect loop — a flap should be invisible
     // to the app (chunks missed meanwhile replay via agent.taskResume).
     this.markTurnsForResume();
+    if (inflightIds.length > 0) {
+      try {
+        this.onTransportLost?.(inflightIds);
+      } catch { /* ignore */ }
+    }
     if (this.pendingResume !== undefined && this.pendingResume.size > 0) {
       this.log(
         `acp transport lost with ${this.pendingResume.size} inflight turn(s) — will reconnect and resume`,
@@ -976,6 +991,9 @@ export class PeerAcpClient {
       if (this.ws === undefined || this.session === undefined) {
         try {
           await this.ensureConnected();
+          try {
+            this.onTransportRestored?.();
+          } catch { /* ignore */ }
         } catch (err) {
           this.log(
             `acp resume reconnect failed (attempt ${attempt + 1}): ` +
