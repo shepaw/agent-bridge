@@ -27,12 +27,11 @@ describe('engines', () => {
     expect(ids).toContain('kimi');
     expect(ids).toContain('zcode');
     expect(ids).toContain('deepseek-harness');
-    expect(ids).toContain('qwen-code');
-    expect(ids).toContain('gemini');
-    expect(ids).toContain('copilot');
+    expect(ids).toContain('openclaw');
     expect(ids).toContain('pi');
+    expect(ids).toContain('codebuddy');
     expect(ids.length).toBe(Object.keys(ACP_ENGINES).length);
-    expect(ids.length).toBe(42);
+    expect(ids.length).toBe(11);
   });
 
   it('resolves zcode to the community ACP adapter', () => {
@@ -103,26 +102,6 @@ describe('engines', () => {
     expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'auto-review' }).args[0]).toBe('--auto-review');
     expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'unrestricted' }).args[0]).toBe('--force');
     expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'allowlist' }).args).toEqual(['acp']);
-  });
-
-  it('spawnCommand adds Qwen approval mode from PAW_ACP_SESSION_MODE', () => {
-    const spec = getBuiltinEngineSpec('qwen-code');
-    expect(spawnCommand(spec, {}).args).toEqual(['--acp']);
-    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'yolo' }).args).toEqual([
-      '--acp', '--approval-mode', 'yolo',
-    ]);
-    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'auto-edit' }).args).toEqual([
-      '--acp', '--approval-mode', 'auto-edit',
-    ]);
-  });
-
-  it('records spawnEnv for Auggie / Factory Droid / VT Code', () => {
-    expect(getBuiltinEngineSpec('auggie').spawnEnv?.AUGMENT_DISABLE_AUTO_UPDATE).toBe('1');
-    expect(getBuiltinEngineSpec('factory-droid').spawnEnv?.DROID_DISABLE_AUTO_UPDATE).toBe('true');
-    expect(getBuiltinEngineSpec('vtcode').spawnEnv?.VT_ACP_ENABLED).toBe('1');
-    expect(getBuiltinEngineSpec('gemini').command).toBe('npx');
-    expect(getBuiltinEngineSpec('copilot').args).toEqual(['--acp']);
-    expect(getBuiltinEngineSpec('pi').args).toEqual(['-y', 'pi-acp']);
   });
 
   it('validates engine ids', () => {

@@ -15,10 +15,7 @@ describe('builtin engine catalog', () => {
       'codex',
       'opencode',
       'cursor',
-      'gemini',
-      'copilot',
       'pi',
-      'qwen-code',
       'openclaw',
       'zcode',
       'deepseek-harness',
@@ -40,11 +37,8 @@ describe('builtin engine catalog', () => {
   });
 
   it('records spawn commands for popular ACP CLIs', () => {
-    expect(acpCommandForEngine('gemini')).toBe('npx -y @google/gemini-cli@latest --acp');
-    expect(acpCommandForEngine('copilot')).toBe('copilot --acp');
     expect(acpCommandForEngine('pi')).toBe('npx -y pi-acp');
-    expect(acpCommandForEngine('qwen-code')).toBe('qwen --acp');
-    expect(BUILTIN_ENGINE_BY_ID.auggie.spawnEnv?.AUGMENT_DISABLE_AUTO_UPDATE).toBe('1');
-    expect(BUILTIN_ENGINE_BY_ID.vtcode.spawnEnv?.VT_ACP_ENABLED).toBe('1');
+    expect(acpCommandForEngine('codebuddy')).toBe('codebuddy --acp');
+    expect(acpCommandForEngine('zcode')).toBe('npx -y zcode-acp-server@latest');
   });
 });

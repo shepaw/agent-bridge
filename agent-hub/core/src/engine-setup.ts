@@ -685,8 +685,6 @@ function buildBuiltinSetupGuide(engineId: BuiltinAgentEngine, platform: HubPlatf
       return buildZcodeGuide(platform);
     case 'deepseek-harness':
       return buildDeepseekHarnessGuide(platform);
-    case 'qwen-code':
-      return buildQwenGuide(platform);
     default:
       return buildCatalogGuide(engineId, platform);
   }
@@ -1111,73 +1109,6 @@ function buildDeepseekHarnessGuide(platform: HubPlatform): EngineSetupGuide {
         title: '验证 profile',
         description: '打印 shepaw profile 的组合树，确认 shepaw-bridge 插件已挂载。',
         command: `dsh --profile ${DSH_SHEPAW_PROFILE} --dump-config`,
-      },
-    ],
-  };
-}
-
-const QWEN_INSTALL_UNIX =
-  'curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash';
-const QWEN_INSTALL_WIN32 =
-  "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm 'https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1' | iex\"";
-
-function buildQwenGuide(platform: HubPlatform): EngineSetupGuide {
-  const installCommand = platform === 'win32' ? QWEN_INSTALL_WIN32 : QWEN_INSTALL_UNIX;
-  const installStepCommand =
-    platform === 'win32'
-      ? "irm 'https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1' | iex"
-      : QWEN_INSTALL_UNIX;
-
-  return {
-    engineId: 'qwen-code',
-    summary: `Qwen Code 原生支持 ACP（qwen --acp）；需安装 qwen CLI 并配置模型凭据（${hubPlatformLabel(platform)}）。官方独立安装包会放到 ~/.local/bin。`,
-    acpCommand: BUILTIN_ENGINE_ACP_COMMANDS['qwen-code'],
-    docsUrl: 'https://github.com/QwenLM/qwen-code',
-    checkBinary: 'qwen',
-    checkPaths: [LOCAL_BIN],
-    installable: true,
-    installCommand,
-    requiredEnvVars: [
-      {
-        key: 'OPENAI_API_KEY',
-        description: 'OpenAI 兼容 API Key（已用 qwen /auth 或 ~/.qwen/settings.json 配置时可省略）',
-        optional: true,
-      },
-      {
-        key: 'OPENAI_BASE_URL',
-        description: '自定义 API 端点（如 DashScope / Coding Plan / OpenRouter）',
-        optional: true,
-      },
-      {
-        key: 'OPENAI_MODEL',
-        description: '默认模型 ID（如 qwen3-coder-plus）',
-        optional: true,
-      },
-      {
-        key: 'BAILIAN_CODING_PLAN_API_KEY',
-        description: '阿里云百炼 Coding Plan Key（使用 Coding Plan 端点时）',
-        optional: true,
-      },
-    ],
-    steps: [
-      {
-        title: '安装 Qwen Code CLI',
-        description:
-          platform === 'win32'
-            ? '在 PowerShell 中运行官方独立安装脚本（安装到用户目录）。也可：npm install -g @qwen-code/qwen-code@latest（需 Node.js 22+）。'
-            : '运行官方独立安装脚本（安装到 ~/.local/bin/qwen）。也可：npm install -g @qwen-code/qwen-code@latest 或 brew install qwen-code（需 Node.js 22+）。',
-        command: installStepCommand,
-      },
-      {
-        title: '配置认证',
-        description:
-          '交互式运行 qwen 后执行 /auth（阿里云百炼 / 第三方 / 自定义端点）。ACP / 无头模式请在下方配置 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL，或使用 ~/.qwen/settings.json。',
-        command: 'qwen',
-      },
-      {
-        title: '验证 ACP',
-        description: 'Gateway 通过 qwen --acp 子进程接入；进程应保持运行（Ctrl+C 退出）。',
-        command: 'qwen --acp',
       },
     ],
   };

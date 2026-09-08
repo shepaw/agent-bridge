@@ -160,28 +160,6 @@ describe('engine-setup', () => {
     expect(keys).toEqual(expect.arrayContaining(['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']));
   });
 
-  it('returns qwen-code guide with official install command', () => {
-    const guide = getEngineSetupGuide('qwen-code', 'darwin');
-    expect(guide.acpCommand).toBe('qwen --acp');
-    expect(guide.checkBinary).toBe('qwen');
-    expect(guide.installable).toBe(true);
-    expect(guide.installCommand).toContain('install-qwen-standalone.sh');
-    expect(guide.docsUrl).toContain('QwenLM/qwen-code');
-    const keys = (guide.requiredEnvVars ?? []).map((v) => v.key);
-    expect(keys).toEqual(expect.arrayContaining([
-      'OPENAI_API_KEY',
-      'OPENAI_BASE_URL',
-      'OPENAI_MODEL',
-      'BAILIAN_CODING_PLAN_API_KEY',
-    ]));
-  });
-
-  it('qwen-code guide uses PowerShell install on Windows', () => {
-    const guide = getEngineSetupGuide('qwen-code', 'win32');
-    expect(guide.installCommand).toContain('install-qwen-standalone.ps1');
-    expect(guide.steps[0]?.command).toContain('irm');
-  });
-
   it('checkEngineInstallStatus finds kimi under ~/.kimi-code/bin', () => {
     clearEngineProbeCaches();
     const kimiHome = join(homedir(), '.kimi-code', 'bin', 'kimi');
@@ -284,22 +262,6 @@ describe('engine-setup', () => {
   });
 
   it('builds catalog guides for newly added ACP agents', () => {
-    const gemini = getEngineSetupGuide('gemini', 'darwin');
-    expect(gemini.acpCommand).toBe('npx -y @google/gemini-cli@latest --acp');
-    expect(gemini.installable).toBe(true);
-    expect(gemini.checkBinary).toBe('npx');
-    expect(gemini.docsUrl).toContain('geminicli.com');
-
-    const goose = getEngineSetupGuide('goose', 'linux');
-    expect(goose.acpCommand).toBe('goose acp');
-    expect(goose.installable).toBe(false);
-    expect(goose.checkBinary).toBe('goose');
-
-    const copilot = getEngineSetupGuide('copilot', 'darwin');
-    expect(copilot.acpCommand).toBe('copilot --acp');
-    expect(copilot.installable).toBe(true);
-    expect(copilot.installCommand).toContain('@github/copilot');
-
     const pi = getEngineSetupGuide('pi', 'darwin');
     expect(pi.acpCommand).toBe('npx -y pi-acp');
     expect(pi.checkBinary).toBe('pi');

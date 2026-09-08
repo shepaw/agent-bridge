@@ -12,7 +12,7 @@ import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'codex',
-  'opencode', 'openclaw', 'cursor', 'hermes', 'kimi', 'zcode', 'deepseek-harness', 'qwen-code',
+  'opencode', 'openclaw', 'cursor', 'hermes', 'kimi', 'zcode', 'deepseek-harness', 'pi',
 ];
 
 /** Survives modal unmount so closing without submit keeps the draft. */
