@@ -12,8 +12,11 @@ import { randomUUID } from 'node:crypto';
 import { decodeFrame, encodeFrame, NoiseSession, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
 import { getInstance, loadOrCreateHubConfig, updateInstance } from '../config.js';
+import type { InstanceConfig } from '../config.js';
 import { catalogModesWire, parseSessionMode } from '../engine-modes.js';
+import { polishInstanceResume, rebuildInstanceResume } from '../instance-acp-rpc.js';
 import { instancePaths } from '../paths.js';
+import { probeInstanceRuntime } from '../runtime-status.js';
 import {
   isInstanceRunning,
   listAgents,
@@ -724,7 +727,22 @@ export async function drivePeerConnection(opts: {
     }
   };
 
-  /** agent_resume_rebuild_req { agent_id, prompt?, request_id? } → agent_resume_rebuild_resp */
+  /**
+   * agent_resume_rebuild_req { agent_id, prompt?, request_id? } → agent_resume_rebuild_resp
+   *
+   * Two very different costs hide behind this one frame, so branch on the prompt:
+   *
+   * - No prompt → deterministic re-derivation (`agent.resume.rebuild`): the
+   *   gateway re-scans the workspace and recomposes the resume without an LLM,
+   *   which returns in milliseconds.
+   * - Prompt → the user is asking for a *rewrite*, and the gateway's rebuild
+   *   only stores the prompt as a standing instruction — it never calls a
+   *   model. Route it through the hub's AI polish flow instead: refresh the
+   *   objective facts, then spend one chat turn drafting a new Summary per the
+   *   prompt and applying it via `agent.resume.summarySet`. That is the flow
+   *   behind the dashboard's "AI 润色简历" button, and it takes tens of seconds
+   *   to ~3 minutes, so callers must budget their relay timeout accordingly.
+   */
   const handleAgentResumeRebuildReq = async (
     params: Record<string, unknown>,
   ): Promise<void> => {
@@ -735,16 +753,52 @@ export async function drivePeerConnection(opts: {
       send({ ...base, ok: false, error: 'missing_agent_id' });
       return;
     }
+    let instance: InstanceConfig;
     try {
-      getInstance(loadOrCreateHubConfig(), agentId);
+      instance = getInstance(loadOrCreateHubConfig(), agentId);
     } catch {
       send({ ...base, ok: false, error: 'not_found' });
       return;
     }
     try {
-      const card = await getAcpClient(agentId).resumeRebuild(
-        prompt.length > 0 ? { prompt } : {},
-      );
+      if (prompt.length > 0) {
+        // Fail fast on an offline gateway instead of hanging a 3-minute turn.
+        const runtime = await probeInstanceRuntime(instance);
+        if (runtime.availability !== 'online' && runtime.availability !== 'degraded') {
+          send({
+            ...base,
+            ok: false,
+            error: runtime.probeError ?? '网关离线，无法进行 AI 改写简历。请先启动实例。',
+          });
+          return;
+        }
+        // Refresh the objective facts first, and pass the prompt so the gateway
+        // keeps it as a standing instruction — its fingerprint is what lets a
+        // later rebuild preserve the AI-written Summary instead of discarding it.
+        await rebuildInstanceResume(agentId, prompt);
+        const polished = await polishInstanceResume(
+          agentId,
+          agentId,
+          prompt,
+          instance.cwd,
+          instance.label,
+        );
+        if (!polished.ok) {
+          send({ ...base, ok: false, error: polished.error ?? 'polish_failed' });
+          return;
+        }
+        // Prefer the summary the polish flow already read back from the live
+        // card (the gateway's `description`) over re-reading the card through
+        // `cardResumeOf`: a gateway that predates the `bio` refresh leaves `bio`
+        // at its construction-time label, which `cardResumeOf` prefers.
+        let resume = polished.summary ?? '';
+        if (resume.trim().length === 0) {
+          resume = cardResumeOf(await getAcpClient(agentId).card()) ?? '';
+        }
+        send({ ...base, ok: true, resume });
+        return;
+      }
+      const card = await getAcpClient(agentId).resumeRebuild({});
       if (card === undefined) {
         send({ ...base, ok: false, error: 'timeout' });
         return;

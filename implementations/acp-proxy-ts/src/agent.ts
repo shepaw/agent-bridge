@@ -574,11 +574,20 @@ export class AcpProxyAgent extends ACPAgentServer {
     };
   }
 
-  /** Agent card enriched with the workspace-grounded resume. */
+  /**
+   * Agent card enriched with the workspace-grounded resume.
+   *
+   * Both `bio` and `description` carry the resume: the SDK captures `bio` once
+   * at construction (`opts.bio ?? description`), so without re-stating it here
+   * the card would keep advertising the static `ACP Agent: <name>` label while
+   * `description` moved on. Consumers read `bio` first (hub `cardResumeOf`,
+   * app `regenerateResume`), which then relays that label as the resume.
+   */
   override getAgentCard(): AgentCard {
     return {
       ...super.getAgentCard(),
       description: this.resume.summary,
+      bio: this.resume.summary,
       capabilities: [...this.resume.capabilities],
       version: this.resume.version,
     };
