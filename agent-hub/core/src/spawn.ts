@@ -69,6 +69,7 @@ import {
   ensureAgentStoreMappings,
   hubStoreDeviceId,
 } from './peer/agent-store-mapping.js';
+import { hubStoreClientEnv } from './peer/hub-store-client-env.js';
 
 // ── types ──────────────────────────────────────────────────────────
 
@@ -255,6 +256,8 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       SHEPAW_IDENTITY_PATH: paths.identityPath,
       SHEPAW_PEERS_PATH: paths.peersPath,
       SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
+      // Point the gateway at this hub's peer-store HTTP (not App :18792).
+      ...hubStoreClientEnv(hubCfg),
       ...(() => {
         try {
           const deviceId = hubStoreDeviceId();

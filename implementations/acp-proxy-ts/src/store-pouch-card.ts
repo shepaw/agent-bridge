@@ -78,7 +78,8 @@ export function buildStorePouchCard(opts: {
     '',
     '- 分区：`files` 沉淀 · `public` 公开引用 · `runtime` 会话产物 · `cognition` Soul/结构化记忆权威 · `workspaces` 工作区 · `backups` 本端灾备',
     '- 读: `shepaw store read --uri <uri-as-is>` · 列: `shepaw store list --uri <uri> --depth 1`',
-    '- 写产物: `shepaw store write --filename <名> --content "..."`（可选 `--task` / `--desc` / `--space public`）；**不要**传 `agent_id` / `owner`，由系统落到本作用域袋',
+    '- 写产物: `shepaw store write --filename <名> --content "..."`（可选 `--task` / `--desc` / `--space public`）；**不要**传 `agent_id` / `owner`，由系统落到本机 device 目录',
+    '- 本宿主 shepaw 仅 `store`（read / write / list / meta）；不要调 `os` / `chat` / `hub.cli.execute`',
     '- 禁止: 编造 `store://`；用 OS 路径代替储物袋；回写 runtime 镜像当权威',
     '- 未指定分区时：长期文件 → `files`；本轮中间产物 → `runtime`',
   ].join('\n');

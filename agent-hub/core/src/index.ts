@@ -93,6 +93,7 @@ export {
   SHARED_SPACES,
   MAX_CHUNK,
 } from './peer/peer-local-store.js';
+export { hubStoreClientEnv } from './peer/hub-store-client-env.js';
 export type {
   BackupDeviceInfo,
   BackupSpaceInfo,
