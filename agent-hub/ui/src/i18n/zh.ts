@@ -265,6 +265,7 @@ export const zh: Record<MessageKey, string> = {
   'peer.qrNote': '让手机与这台电脑连同一个 Wi-Fi / 局域网后扫码。',
   'peer.qrRemoteOk': '已开启远程访问，手机不在同一网络也能连接。',
   'peer.remoteWarn': '已配置远程访问（共享 Channel 或反向代理），但隧道路由器未运行。远程配对需先启动路由器。',
+  'peer.deviceName': '链接中的设备名：{name}',
   'peer.lan': '局域网：{endpoint}',
   'peer.channel': 'Channel：{endpoint}',
   'peer.remote': '远程：{endpoint}',

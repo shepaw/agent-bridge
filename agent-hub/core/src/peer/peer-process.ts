@@ -182,6 +182,12 @@ export interface MintPairingResult {
   /** WAN endpoint via shared channel; present when gateway tunnel is configured. */
   channelEndpoint?: string;
   fingerprint: string;
+  /**
+   * Device name baked into the QR (`name=` query param). Same value the
+   * handshake later delivers as `PairingResponse.device_name` — both come from
+   * `resolvePeerDeviceName`, so they cannot drift by construction.
+   */
+  deviceName: string;
 }
 
 /**
@@ -195,12 +201,17 @@ export async function mintPairingQr(): Promise<MintPairingResult> {
   const code = generatePairingCode();
   const localEndpoint = resolveLocalEndpoint(port, host);
   const channelEndpoint = resolvePeerChannelEndpoint(cfg);
+  // Not caller-overridable on purpose: the same resolver feeds
+  // `PairingResponse.device_name` in peer-server.ts, and the app's confirm card
+  // promises the QR name is the name that arrives after the handshake.
+  const deviceName = resolvePeerDeviceName(cfg);
   const qrPayload = buildPeerQrPayload({
     localEndpoint,
     channelEndpoint,
     code,
     fingerprint: identity.fingerprint,
     publicKey: identity.staticPublicKey,
+    name: deviceName,
   });
   const entry: PairingFileEntry = {
     code,
@@ -217,6 +228,7 @@ export async function mintPairingQr(): Promise<MintPairingResult> {
     localEndpoint,
     channelEndpoint,
     fingerprint: identity.fingerprint,
+    deviceName,
   };
 }
 

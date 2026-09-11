@@ -417,6 +417,8 @@ export function PeerPairingPanel() {
             {pairing && (
               <div style={{ marginTop: 12 }}>
                 <p style={hint}>
+                  {t('peer.deviceName', { name: pairing.deviceName })}
+                  <br />
                   {t('peer.lan', { endpoint: pairing.localEndpoint })}
                   {pairing.channelEndpoint && (
                     <>

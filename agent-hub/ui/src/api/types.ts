@@ -228,6 +228,8 @@ export interface PeerPairingResult {
   /** WAN endpoint via shared channel; present when gateway tunnel is configured. */
   channelEndpoint?: string;
   fingerprint: string;
+  /** Device name baked into the QR `name=` param (unauthenticated). */
+  deviceName: string;
 }
 
 export interface SessionResume {

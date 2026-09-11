@@ -4,7 +4,13 @@
  * Mirrors the Shepaw app's `lib/peer/services/peer_pairing_service.dart`:
  *   - 8-char code, charset `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no 0/O/1/I/L).
  *   - 5-minute TTL, single-use, constant-time compare.
- *   - QR: `shepaw://peer?local=<ws>&code=<8char>#fp=<16hex>&pk=<base64url>`.
+ *   - QR: `shepaw://peer?local=<ws>&code=<8char>&name=<label>#fp=<16hex>&pk=<base64url>`.
+ *
+ * `name` is an optional, UNAUTHENTICATED self-declared device label carried in
+ * the query string so the app can show who it is about to pair with *before*
+ * connecting. The trust anchors remain `#fp=`/`#pk=` — `fp` is verified against
+ * `sha256(publicKey)` by the app's `tryParse`. Anyone who can swap the link can
+ * also swap the name; this is a UX affordance, never a security one.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -18,6 +24,29 @@ import { peerPairingPath } from '../paths.js';
 const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const PAIRING_CODE_LENGTH = 8;
 export const PAIRING_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Max device-name length carried in the QR, counted in Unicode runes.
+ *
+ * Deliberately lower than the 64-char cap `POST /peer/device-name` accepts:
+ * percent-encoded CJK costs 9 ASCII bytes per character in the QR, and the
+ * payload length drives the QR version (and therefore how hard it is to scan).
+ * The two limits are not meant to agree.
+ */
+export const PEER_QR_NAME_MAX_RUNES = 32;
+
+/**
+ * Truncate to `max` Unicode runes.
+ *
+ * Must not be `String.prototype.slice`/`substring` — those count UTF-16 code
+ * units, so cutting at index 32 can split a surrogate pair and leave a lone
+ * surrogate. `encodeURIComponent` then throws `URIError: URI malformed`, which
+ * would turn `buildPeerQrPayload` (and its `POST /api/peer/pair` caller) into a
+ * 500 for any device named with an emoji.
+ */
+export function truncateRunes(s: string, max: number): string {
+  return [...s].slice(0, max).join('');
+}
 
 export interface PairingFileEntry {
   readonly code: string;
@@ -97,11 +126,21 @@ export interface PeerQrOptions {
   fingerprint: string;
   /** Responder X25519 static public key (32 bytes). */
   publicKey: Uint8Array;
+  /**
+   * Optional self-declared device label, shown by the app before connecting.
+   * Unauthenticated — see the file header. Omitted when null/empty/blank.
+   */
+  name?: string;
 }
 
 /**
  * Build the `shepaw://peer?...#fp=...&pk=...` QR payload.
  * `local` and `channel` are URL-encoded; `fp`/`pk` live in the fragment raw.
+ *
+ * `name` is appended by hand rather than through `URLSearchParams` for two
+ * reasons: it must stay the last query parameter (so the hub and the app emit
+ * byte-identical strings and can share a golden test), and `URLSearchParams`
+ * serializes a space as `+` where the app emits `%20`.
  */
 export function buildPeerQrPayload(opts: PeerQrOptions): string {
   const params = new URLSearchParams();
@@ -110,8 +149,13 @@ export function buildPeerQrPayload(opts: PeerQrOptions): string {
     params.set('channel', opts.channelEndpoint);
   }
   params.set('code', opts.code);
+  const rawName = opts.name;
+  const name =
+    rawName !== undefined && rawName.trim().length > 0
+      ? `&name=${encodeURIComponent(truncateRunes(rawName, PEER_QR_NAME_MAX_RUNES))}`
+      : '';
   const pk = base64urlUnpadded(opts.publicKey);
-  return `shepaw://peer?${params.toString()}#fp=${opts.fingerprint}&pk=${pk}`;
+  return `shepaw://peer?${params.toString()}${name}#fp=${opts.fingerprint}&pk=${pk}`;
 }
 
 /**

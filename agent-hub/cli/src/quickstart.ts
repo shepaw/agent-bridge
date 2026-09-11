@@ -284,6 +284,7 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     console.log('╰──────────────────────────────────────────────╯');
     console.log('');
     console.log(`  Expires in:    ${Math.round((pairing.expiresAt - Date.now()) / 1000)}s`);
+    console.log(`  Device name:   ${pairing.deviceName}`);
     console.log(`  Local:         ${pairing.localEndpoint}`);
     console.log(`  Fingerprint:   ${pairing.fingerprint}`);
     console.log('');

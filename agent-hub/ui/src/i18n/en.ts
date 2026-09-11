@@ -271,6 +271,7 @@ export const en = {
   'peer.qrRemoteOk': 'Remote access is on — the phone can connect even off this network.',
   'peer.remoteWarn':
     'Remote access is configured (shared Channel or reverse proxy) but the tunnel router is not running. Remote pairing needs the router first.',
+  'peer.deviceName': 'Device name in the link: {name}',
   'peer.lan': 'LAN: {endpoint}',
   'peer.channel': 'Channel: {endpoint}',
   'peer.remote': 'Remote: {endpoint}',

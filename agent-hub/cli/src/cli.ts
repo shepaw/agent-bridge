@@ -891,11 +891,13 @@ async function printPeerPairing(opts: { qr?: boolean } = {}): Promise<void> {
   console.log('╰──────────────────────────────────────────────╯');
   console.log('');
   console.log(`  Expires in:    ${Math.round((res.expiresAt - Date.now()) / 1000)}s`);
+  console.log(`  Device name:   ${res.deviceName}`);
   console.log(`  Local:         ${res.localEndpoint}`);
   if (res.channelEndpoint) console.log(`  Channel:       ${res.channelEndpoint}`);
   console.log(`  Fingerprint:   ${res.fingerprint}`);
   console.log('');
   console.log('  Scan with the Shepaw app (Device Pairing / Scan to Connect).');
+  console.log('  The pasted link shows this device name — check it before connecting.');
   console.log('  One scan authorizes every local agent on this machine.');
   console.log('');
   if (opts.qr !== false) {
