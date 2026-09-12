@@ -70,6 +70,7 @@ import {
 } from './store-pouch-card.js';
 import { storeBackendConfigured } from './shepaw-cli-shim.js';
 import { resolveStoreClient } from './shepaw-cli.js';
+import { mergeShepawSessionCommands } from './shepaw-session-commands.js';
 import { sha256Hex } from './store-tools.js';
 import {
   buildFallbackResume,
@@ -424,7 +425,7 @@ export class AcpProxyAgent extends ACPAgentServer {
       source: 'sdk' as const,
     }));
 
-    return { commands };
+    return { commands: mergeShepawSessionCommands(commands) };
   }
 
   /**

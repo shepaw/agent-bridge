@@ -15,7 +15,7 @@
  * skips the app's manual "confirm" step, which a headless hub has no UI for.
  */
 
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
@@ -41,6 +41,8 @@ import {
 } from './peer-pairing.js';
 import { upsertPairedPeer, loadPairedPeers, type PairedPeer } from './peer-store.js';
 import { drivePeerConnection } from './peer-connection.js';
+import { handleCliExecuteHttp } from './peer-cli-execute.js';
+import { handleSessionCreateHttp } from './peer-session-create.js';
 import { handleStoreHttp } from './peer-store-http.js';
 import { getPeerLocalStore } from './peer-local-store.js';
 import { ensureAllAgentStoreMappings } from './agent-store-mapping.js';
@@ -49,6 +51,16 @@ export interface PeerServerOptions {
   host?: string;
   port?: number;
   log?: (line: string) => void;
+}
+
+/** Store first would 404 session-create / cli-execute — try those first. */
+export async function handlePeerHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  if (await handleSessionCreateHttp(req, res)) return true;
+  if (await handleCliExecuteHttp(req, res)) return true;
+  return handleStoreHttp(req, res);
 }
 
 export class PeerServer {
@@ -89,7 +101,7 @@ export class PeerServer {
       );
     }
     this.httpServer = createServer((req, res) => {
-      void handleStoreHttp(req, res).then((handled) => {
+      void handlePeerHttp(req, res).then((handled) => {
         if (!handled) {
           res.writeHead(404, { 'Content-Type': 'text/plain' });
           res.end('not found');

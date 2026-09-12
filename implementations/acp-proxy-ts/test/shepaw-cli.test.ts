@@ -265,7 +265,7 @@ describe('shepaw-cli against mock store API', () => {
     const io = makeIo({ NEXUSPOUCH_URL: base });
     const code = await runShepawCli(['os', 'file.read'], io.io);
     expect(code).toBe(1);
-    expect(lastJson(io.out().lines).error).toMatch(/shepaw store …/);
+    expect(lastJson(io.out().lines).error).toMatch(/shepaw chat session create/);
   });
 
   describe('context agents.resume-set / resume-get', () => {

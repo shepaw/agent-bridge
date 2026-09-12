@@ -38,6 +38,12 @@ import {
   resumeStoreUri,
   writeResumeToStore,
 } from './workspace-resume.js';
+import { joinSubcommand } from './shepaw-cli-route.js';
+import {
+  buildSessionCreatePayload,
+  postSessionCreate,
+  sessionCreateKind,
+} from './shepaw-cli-session.js';
 
 const DEFAULT_NEXUSPOUCH_URL = 'http://127.0.0.1:8787';
 
@@ -157,6 +163,13 @@ shepaw context — agent self-context (resume)
       "## 自我补充 / Self Notes" section — they survive rebuilds. The gateway
       adopts the change at the end of this turn and notifies the app.
 
+shepaw chat — new session with handoff (forwarded to the paired App)
+
+  shepaw chat session create --reason <code> --summary "..."
+  shepaw chat group session create --reason <code> --handoff-json '{...}'
+      Does not auto-switch. Channel / agent id fall back to SHEPAW_STORE_* /
+      store-context.json. Discover via /session-new or /group-session-new.
+
 Default write space is runtime:
   store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>
 Owner/channel fall back to SHEPAW_STORE_* env / store-context.json.
@@ -209,11 +222,17 @@ export async function runShepawCli(
   if (namespace === 'context' && command === 'agents.resume-set') {
     return runResumeSet(flags, env, io);
   }
+  const routed = joinSubcommand(positional);
+  const sessionKind = sessionCreateKind(routed.namespace, routed.subcommand);
+  if (sessionKind) {
+    return runSessionCreate(sessionKind, flags, env, io);
+  }
   if (namespace !== 'store' || !command) {
     return emit(io, {
       success: false,
       error:
-        "this shepaw shim implements 'shepaw store …', 'shepaw group …' and 'shepaw context agents.resume-*'",
+        "this shepaw shim implements 'shepaw store …', 'shepaw group …', " +
+        "'shepaw context agents.resume-*' and 'shepaw chat session create'",
       usage: USAGE,
     });
   }
@@ -281,6 +300,35 @@ export async function runShepawCli(
       'Shared on write (local-first, synced in background). Cite the URI / reference verbatim.';
   }
   return emit(io, envelope);
+}
+
+/** Forward `shepaw chat session create` to Hub → paired App. */
+async function runSessionCreate(
+  kind: 'dm' | 'group',
+  flags: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+  io: ShepawCliIO,
+): Promise<number> {
+  const built = buildSessionCreatePayload({ kind, flags, env });
+  if (!built.ok) {
+    return emit(io, { success: false, error: built.error });
+  }
+  try {
+    const out = await postSessionCreate(built.payload, {
+      env,
+      fetchImpl: io.fetchImpl,
+    });
+    const err = typeof out.error === 'string' ? out.error.trim() : '';
+    if (err) {
+      return emit(io, { success: false, ...out });
+    }
+    return emit(io, { success: true, ...out });
+  } catch (err) {
+    return emit(io, {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

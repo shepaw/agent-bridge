@@ -32,6 +32,8 @@ import {
   handleAgentSoulSet,
 } from './peer-agent-cognition.js';
 import { handleFsBrowseReq } from '../fs-browse.js';
+import { handleCliExecuteResp } from './peer-cli-execute.js';
+import { handleSessionCreateResp } from './peer-session-create.js';
 import { PeerAcpClient } from './peer-acp-client.js';
 import type { AcpChatHandlers } from './peer-acp-client.js';
 import {
@@ -197,6 +199,21 @@ export function sendToPeer(peerId: string, obj: Record<string, unknown>): boolea
   if (!s || s.liveRoutes.length === 0) return false;
   routeToPeer(s, obj);
   return true;
+}
+
+/** Live paired App for an optional in-flight [agentId], else any connected peer. */
+export function findLivePeerId(agentId?: string): string | undefined {
+  const live: string[] = [];
+  const wanted = agentId?.trim() ?? '';
+  for (const [peerId, s] of peerSessions) {
+    if (s.liveRoutes.length === 0) continue;
+    live.push(peerId);
+    if (wanted.length === 0) continue;
+    for (const t of s.turns.values()) {
+      if (t.status === 'streaming' && t.agentId === wanted) return peerId;
+    }
+  }
+  return live[0];
 }
 
 /**
@@ -1384,6 +1401,16 @@ export async function drivePeerConnection(opts: {
           if (resp !== null) send(resp);
           break;
         }
+        case 'session_create_resp':
+          if (!handleSessionCreateResp(obj)) {
+            log(`session_create_resp unmatched req_id=${String(obj.req_id ?? '')}`);
+          }
+          break;
+        case 'cli_execute_resp':
+          if (!handleCliExecuteResp(obj)) {
+            log(`cli_execute_resp unmatched req_id=${String(obj.req_id ?? '')}`);
+          }
+          break;
         default:
           log(`unknown peer message type: ${String(type)}`);
       }

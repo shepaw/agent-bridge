@@ -63,8 +63,9 @@ describe('buildStorePouchCard', () => {
     expect(card).toContain('352821253aefdfba');
     expect(card).toContain('`cognition`');
     expect(card).toContain('不要');
-    expect(card).toContain('本宿主 shepaw 仅 `store`');
-    expect(card).toMatch(/不要调 `os` \/ `chat` \/ `hub\.cli\.execute`/);
+    expect(card).toContain('shepaw store');
+    expect(card).toContain('不要 `hub.cli.execute`');
+    expect(card).not.toContain('仅 `store`');
     expect(card).not.toMatch(/`memory` — Soul/);
     expect(card).not.toMatch(/用户的袋子|agent 的袋子|你的产物根/);
   });
