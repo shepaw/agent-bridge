@@ -14,6 +14,13 @@
  * legacy flat paths.
  */
 
+import { resolveHubStoreBase } from './hub-store-env.js';
+import {
+  buildCliExecutePayload,
+  hubForwardEnabled,
+  postCliExecute,
+} from './shepaw-cli-forward.js';
+import { storeUriDevice } from './shepaw-cli-route.js';
 import {
   buildArtifactRelPath,
   formatStoreMarkdownLink,
@@ -94,8 +101,9 @@ export const storeToolDefs: StoreToolDef[] = [
     name: 'store_read',
     description:
       'Read a file by store:// URI (store://<space>/<device>/<path>). ' +
-      'Pass URIs verbatim. After device pairing, remote device IDs are readable over the peer channel ' +
-      '(prefer live owner; fall back to master mirror).',
+      'Pass URIs verbatim. This Hub serves its own device directly; another ' +
+      "device's URI runs on the paired App, which applies the same gate as " +
+      'the built-in CLI (allowlist / approval / She-only).',
     inputSchema: {
       type: 'object',
       properties: { uri: { type: 'string' } },
@@ -118,7 +126,8 @@ export const storeToolDefs: StoreToolDef[] = [
       'List a store directory by store:// URI (store://<space>/<device>/<prefix>). ' +
       'Use depth=1 (default) to browse one folder level at a time — required for ' +
       'cross-agent trees such as store://agents/<device>/ then store://agents/<device>/<agent-uuid>/. ' +
-      'Pass depth=0 for a full recursive file listing. Paired remote devices are readable over the peer channel.',
+      'Pass depth=0 for a full recursive file listing. Another device\'s tree is ' +
+      'listed on the paired App (same gate as the built-in CLI).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -147,7 +156,62 @@ export class StoreToolsClient {
     readonly token: string,
     readonly device: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly env: NodeJS.ProcessEnv = process.env,
   ) {}
+
+  /**
+   * Device of a foreign pouch that must be served by the paired App, or
+   * undefined when this Hub can answer itself.
+   *
+   * Only the peer-store Hub can relay (`/api/v1/cli/execute`); a Nexuspouch
+   * base has no phone behind it, and Hub-native reads stay as they are.
+   */
+  private foreignStoreDevice(uri: string): string | undefined {
+    if (!hubForwardEnabled(this.env)) return undefined;
+    const hubBase = resolveHubStoreBase(this.env);
+    if (!hubBase || hubBase !== this.base.replace(/\/$/, '')) return undefined;
+    const self = this.device.trim().toLowerCase();
+    // Unknown fingerprint (health never resolved) — keep the old path.
+    if (!self || /^0{16}$/.test(self)) return undefined;
+    const device = storeUriDevice(uri);
+    if (!device || device === self) return undefined;
+    return device;
+  }
+
+  /** Run a store command on the paired App (`/api/v1/cli/execute`). */
+  private async storeOnApp(
+    subcommand: 'read' | 'list',
+    flags: Record<string, string>,
+  ): Promise<StoreToolResult> {
+    const built = buildCliExecutePayload({
+      namespace: 'store',
+      subcommand,
+      flags,
+      env: this.env,
+    });
+    if (!built.ok) {
+      return { ok: false, code: 'no_agent_id', error: built.error };
+    }
+    let out: Record<string, unknown>;
+    try {
+      out = await postCliExecute(built.payload, {
+        env: this.env,
+        fetchImpl: this.fetchImpl,
+      });
+    } catch (e) {
+      return toResultError(e);
+    }
+    const err = typeof out.error === 'string' ? out.error.trim() : '';
+    if (out.ok === false || err) {
+      return {
+        ok: false,
+        code: typeof out.code === 'string' ? out.code : 'app_cli_error',
+        error: err || 'App rejected the store command',
+      };
+    }
+    const { ok: _ok, ...data } = out;
+    return { ok: true, data };
+  }
 
   private async json(path: string, init?: RequestInit): Promise<unknown> {
     const headers: Record<string, string> = {
@@ -296,6 +360,28 @@ export class StoreToolsClient {
     try {
       const uri = String(args.uri ?? '');
       if (!uri) return { ok: false, code: 'bad_op', error: 'uri required' };
+      if (this.foreignStoreDevice(uri)) {
+        const out = await this.storeOnApp('read', { uri });
+        if (!out.ok) return out;
+        const data = (out.data ?? {}) as Record<string, unknown>;
+        const b64 = data.content_base64;
+        const content =
+          typeof data.content === 'string'
+            ? data.content
+            : typeof b64 === 'string'
+              ? b64
+              : '';
+        return {
+          ok: true,
+          data: {
+            uri,
+            size: Number(data.size ?? content.length) || 0,
+            truncated: false,
+            encoding: b64 !== undefined ? 'base64' : 'text',
+            content,
+          },
+        };
+      }
       const meta = (await this.json(`/api/v1/uri/resolve?uri=${encodeURIComponent(uri)}`)) as {
         meta?: { size?: number };
       };
@@ -342,6 +428,14 @@ export class StoreToolsClient {
     try {
       const uri = String(args.uri ?? '');
       if (!uri) return { ok: false, code: 'bad_op', error: 'uri required' };
+      if (this.foreignStoreDevice(uri)) {
+        const depthArg = args.depth;
+        const depth =
+          depthArg === undefined || depthArg === null || depthArg === ''
+            ? undefined
+            : String(depthArg);
+        return this.storeOnApp('list', depth ? { uri, depth } : { uri });
+      }
       const depthRaw = args.depth;
       const depth =
         depthRaw === undefined || depthRaw === null || depthRaw === ''

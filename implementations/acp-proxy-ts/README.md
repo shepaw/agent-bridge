@@ -75,6 +75,12 @@ Gateway sessions then inject a stdio MCP (`shepaw-peer-store` →
 `store_meta` / `store_write` automatically (skipped if `NEXUSPOUCH_ROOT` is
 already set; force both with `SHEPAW_PEER_STORE_FORCE=1`).
 
+URIs of **another device** are served by the paired App, not by a direct peer
+read: `store_read` / `store_list` post `/api/v1/cli/execute`, so the App's
+`CliExecutionGate` decides (same as `shepaw store …` from the PATH shim, and
+same as ACP `hub.cli.execute`). This Hub's own pouch, plus `store_write` and
+`store_meta`, stay on `/api/v1`.
+
 `StoreToolsClient` (`src/store-tools.ts`) + `resolveHubStoreBase`
 (`src/hub-store-env.ts`) talk to that API. Agents should pass `store://`
 URIs verbatim (`store://files/<device-id>/…`); after pairing, remote device
@@ -157,8 +163,12 @@ Built-in `--engine` ids match Hub's catalog. Common ones:
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp@latest` |
 | `codex`       | `npx -y @agentclientprotocol/codex-acp@latest` |
 | `cursor`      | `agent acp` |
-| `gemini`      | `npx -y @google/gemini-cli@latest --acp` |
+| `gemini`      | `gemini --acp` |
+| `gemini-internal` | `gemini-internal --acp` |
 | `copilot`     | `copilot --acp` |
+| `tclaude`     | `npx -y @agentclientprotocol/claude-agent-acp@latest` (CLAUDE_CODE_EXECUTABLE=tclaude) |
+| `kiro`        | `kiro-cli acp --trust-all-tools` |
+| `knot`        | `knot-cli acp` |
 | `pi`          | `npx -y pi-acp` |
 | `qwen-code`   | `qwen --acp` |
 
