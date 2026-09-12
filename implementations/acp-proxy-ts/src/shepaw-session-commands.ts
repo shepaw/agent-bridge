@@ -72,30 +72,60 @@ export function parseInvokedSessionCommand(
   return null;
 }
 
-function modelInstruction(isGroup: boolean): string {
+function invokedFlags(raw: string): string {
+  const trimmed = raw.trimStart();
+  const space = trimmed.search(/\s/);
+  if (space === -1) return '';
+  return trimmed.slice(space + 1).trim();
+}
+
+/** Drop a leftover `/session-new …` first line from an older expand. */
+function withoutLeadingSlash(text: string): string {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith('/')) return text;
+  const nl = trimmed.indexOf('\n');
+  if (nl === -1) return text;
+  return trimmed.slice(nl + 1).replace(/^\n+/, '');
+}
+
+function modelInstruction(isGroup: boolean, flags: string): string {
+  const flagsLine = flags ? `\nUser-supplied flags: ${flags}\n` : '';
   if (isGroup) {
     return [
-      'The user invoked /group-session-new. Understand the current conversation intent, compress durable context into a handoff, then run:',
+      `The user invoked /group-session-new.${flagsLine}`,
+      'Understand the current conversation intent, compress durable context into a handoff, then run:',
       '',
       'shepaw chat group session create --reason <topic_shift|post_delivery|noise_reduction|context_too_long|agent_memory_reset|parallel_track|user_requested> --handoff-json \'{"task":{"user_goal":"...","acceptance_criteria":["..."],"status":"in_progress"}}\'',
+      '',
+      '`shepaw` is injected on PATH by this host (Hub shim, not Homebrew/npm). Do not search /opt/homebrew or /usr/local or assume it is missing. If the shell says command not found, run "$SHEPAW_BIN" the same way.',
       '',
       'Honor any flags the user already typed after the command. After the command succeeds, a switch card appears for the user to confirm. Do not assume they switched; continue here until they open the new session.',
     ].join('\n');
   }
   return [
-    'The user invoked /session-new. Understand the current conversation intent, compress durable context into a handoff summary, then run:',
+    `The user invoked /session-new.${flagsLine}`,
+    'Understand the current conversation intent, compress durable context into a handoff summary, then run:',
     '',
     'shepaw chat session create --reason <topic_shift|post_delivery|noise_reduction|context_too_long|agent_memory_reset|parallel_track|user_requested> --summary "<compressed key points>"',
+    '',
+    '`shepaw` is injected on PATH by this host (Hub shim, not Homebrew/npm). Do not search /opt/homebrew or /usr/local or assume it is missing. If the shell says command not found, run "$SHEPAW_BIN" the same way.',
     '',
     'Honor any flags the user already typed after the command. After the command succeeds, a switch card appears for the user to confirm. Do not assume they switched; continue here until they open the new session.',
   ].join('\n');
 }
 
-/** Expand `/session-new` for the engine prompt. Idempotent if already expanded. */
+/**
+ * Expand `/session-new` for the engine prompt. Idempotent if already expanded.
+ * Must not start with `/` — Claude Code treats a leading slash as its own
+ * command and replies `Unknown command: /session-new`.
+ */
 export function expandSessionSlashPrompt(raw: string): string {
-  if (isSessionSlashExpanded(raw)) return raw;
+  if (isSessionSlashExpanded(raw)) return withoutLeadingSlash(raw);
   const name = parseInvokedSessionCommand(raw);
   if (!name) return raw;
-  const instruction = modelInstruction(name === 'group-session-new');
-  return `${raw}\n\n${SESSION_NEW_EXPAND_OPEN}\n${instruction}\n${SESSION_NEW_EXPAND_CLOSE}`;
+  const instruction = modelInstruction(
+    name === 'group-session-new',
+    invokedFlags(raw),
+  );
+  return `${SESSION_NEW_EXPAND_OPEN}\n${instruction}\n${SESSION_NEW_EXPAND_CLOSE}`;
 }

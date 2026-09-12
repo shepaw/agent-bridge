@@ -64,6 +64,8 @@ describe('buildStorePouchCard', () => {
     expect(card).toContain('`cognition`');
     expect(card).toContain('不要');
     expect(card).toContain('shepaw store');
+    expect(card).toContain('SHEPAW_BIN');
+    expect(card).toContain('Hub shim');
     expect(card).toContain('不要 `hub.cli.execute`');
     expect(card).not.toContain('仅 `store`');
     expect(card).not.toMatch(/`memory` — Soul/);

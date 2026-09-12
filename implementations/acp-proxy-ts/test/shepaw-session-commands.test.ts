@@ -39,12 +39,15 @@ describe('mergeShepawSessionCommands', () => {
 });
 
 describe('expandSessionSlashPrompt', () => {
-  it('expands /session-new into a CLI instruction', () => {
+  it('expands /session-new into a CLI instruction without a leading slash', () => {
     const out = expandSessionSlashPrompt('/session-new --reason user_requested');
-    expect(out.startsWith('/session-new --reason user_requested')).toBe(true);
-    expect(out).toContain('[session-new]');
+    expect(out.startsWith('/')).toBe(false);
+    expect(out.startsWith('[session-new]')).toBe(true);
     expect(out).toContain('shepaw chat session create');
+    expect(out).toContain('User-supplied flags: --reason user_requested');
     expect(out).toContain('Do not assume they switched');
+    expect(out).toContain('SHEPAW_BIN');
+    expect(out).toContain('Hub shim');
   });
 
   it('expands /group-session-new and is idempotent', () => {
@@ -56,5 +59,13 @@ describe('expandSessionSlashPrompt', () => {
   it('leaves ordinary prompts unchanged', () => {
     expect(expandSessionSlashPrompt('hello')).toBe('hello');
     expect(expandSessionSlashPrompt('/compact')).toBe('/compact');
+  });
+
+  it('strips a leftover leading slash from older expands', () => {
+    const leftover =
+      '/session-new\n\n[session-new]\nrun cli\n[/session-new]';
+    const out = expandSessionSlashPrompt(leftover);
+    expect(out.startsWith('/')).toBe(false);
+    expect(out).toContain('[session-new]');
   });
 });

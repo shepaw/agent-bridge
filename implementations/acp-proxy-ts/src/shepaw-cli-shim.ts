@@ -22,7 +22,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { log } from './debug.js';
 
 /** dist layout: dist/shepaw-cli.js sits next to this module when bundled. */
@@ -62,6 +62,10 @@ function shimCmd(nodePath: string, scriptPath: string): string {
   return `@echo off\r\n"${nodePath}" "${scriptPath}" %*\r\n`;
 }
 
+export function shepawShimFileName(): string {
+  return process.platform === 'win32' ? 'shepaw.cmd' : 'shepaw';
+}
+
 function writeIfChanged(path: string, content: string, mode?: number): void {
   if (existsSync(path)) {
     try {
@@ -74,13 +78,55 @@ function writeIfChanged(path: string, content: string, mode?: number): void {
   if (mode !== undefined) chmodSync(path, mode);
 }
 
+function writeShim(
+  dir: string,
+  nodePath: string,
+  scriptPath: string,
+): string {
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, shepawShimFileName());
+  if (process.platform === 'win32') {
+    writeIfChanged(dest, shimCmd(nodePath, scriptPath));
+  } else {
+    writeIfChanged(dest, shimScript(nodePath, scriptPath), 0o755);
+  }
+  return dest;
+}
+
+function isOurShim(path: string, scriptPath: string): boolean {
+  try {
+    const body = readFileSync(path, 'utf8');
+    return body.includes('shepaw-cli.js') || body.includes(scriptPath);
+  } catch {
+    return false;
+  }
+}
+
+/** Claude Code Bash often uses a login PATH that misses /tmp shims. */
+function mirrorShimToLocalBin(nodePath: string, scriptPath: string): void {
+  const localBin = join(homedir(), '.local', 'bin');
+  const dest = join(localBin, shepawShimFileName());
+  if (existsSync(dest) && !isOurShim(dest, scriptPath)) {
+    log('leave existing %s (not the Hub shepaw shim)', dest);
+    return;
+  }
+  try {
+    writeShim(localBin, nodePath, scriptPath);
+  } catch (err) {
+    log(
+      'could not mirror shepaw into ~/.local/bin: %s',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
 /**
  * Ensure the `shepaw` shim exists and return the directory to prepend to
  * PATH, or undefined when disabled / no backend / no built CLI.
  */
 export function ensureShepawShim(
   env: NodeJS.ProcessEnv = process.env,
-  opts: { scriptPath?: string; shimDir?: string } = {},
+  opts: { scriptPath?: string; shimDir?: string; mirrorLocalBin?: boolean } = {},
 ): string | undefined {
   const flag = (env.SHEPAW_STORE_CLI ?? '').trim().toLowerCase();
   if (flag === '0' || flag === 'false' || flag === 'off') return undefined;
@@ -95,22 +141,21 @@ export function ensureShepawShim(
 
   const dir = (env.SHEPAW_STORE_CLI_SHIM_DIR ?? opts.shimDir ?? defaultShimDir()).trim();
   try {
-    mkdirSync(dir, { recursive: true });
-    if (process.platform === 'win32') {
-      writeIfChanged(join(dir, 'shepaw.cmd'), shimCmd(process.execPath, scriptPath));
-    } else {
-      writeIfChanged(
-        join(dir, 'shepaw'),
-        shimScript(process.execPath, scriptPath),
-        0o755,
-      );
-    }
+    writeShim(dir, process.execPath, scriptPath);
   } catch (err) {
     log(
       'shepaw store CLI shim unavailable: %s',
       err instanceof Error ? err.message : String(err),
     );
     return undefined;
+  }
+
+  const skipMirror =
+    opts.mirrorLocalBin === false ||
+    Boolean((env.SHEPAW_STORE_CLI_SHIM_DIR ?? '').trim()) ||
+    opts.shimDir !== undefined;
+  if (!skipMirror) {
+    mirrorShimToLocalBin(process.execPath, scriptPath);
   }
   return dir;
 }

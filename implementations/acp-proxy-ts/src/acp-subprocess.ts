@@ -55,7 +55,7 @@ import {
   resolvePeerStoreMcpServers,
   type GroupMcpSessionContext,
 } from './peer-store-mcp-resolve.js';
-import { ensureShepawShim } from './shepaw-cli-shim.js';
+import { ensureShepawShim, shepawShimFileName } from './shepaw-cli-shim.js';
 import { defaultStoreContextPath } from './store-write-context.js';
 import {
   promptToPlainText,
@@ -1752,6 +1752,10 @@ function augmentAgentEnv(env: NodeJS.ProcessEnv, engineId?: string): NodeJS.Proc
     if (!cur.split(sep).includes(shimDir)) {
       next = { ...next, [pathKey]: `${shimDir}${sep}${cur}` };
       log('shepaw store CLI shim on PATH: %s', shimDir);
+    }
+    const shepawBin = join(shimDir, shepawShimFileName());
+    if (!(next.SHEPAW_BIN ?? '').trim()) {
+      next = { ...next, SHEPAW_BIN: shepawBin };
     }
   }
 

@@ -77,6 +77,7 @@ export function buildStorePouchCard(opts: {
     ...(resumeLine ? [resumeLine] : []),
     '',
     '- 分区：`files` 沉淀 · `public` 公开引用 · `runtime` 会话产物 · `cognition` Soul/结构化记忆权威 · `workspaces` 工作区 · `backups` 本端灾备',
+    '- `shepaw` 由本宿主注入 PATH（Hub shim，不是 Homebrew/npm 包）。直接跑 `shepaw …`；若 shell 报 command not found，用 `"$SHEPAW_BIN"` 同样调用。不要在 /opt/homebrew 或 /usr/local 里找发行版',
     '- 读: `shepaw store read --uri <uri-as-is>` · 列: `shepaw store list --uri <uri> --depth 1`',
     '- 写产物: `shepaw store write --filename <名> --content "..."`（可选 `--task` / `--desc` / `--space public`）；**不要**传 `agent_id` / `owner`，由系统落到本机 device 目录',
     '- 本宿主 `shepaw store` 只直接碰本机 device；其他 `store://` 与 `os` / `chat` / `context` / `events` 由 shim 转到配对 App。不要 `hub.cli.execute`',

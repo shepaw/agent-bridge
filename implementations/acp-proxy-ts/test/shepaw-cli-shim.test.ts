@@ -88,4 +88,16 @@ describe('ensureShepawShim', () => {
       existsSync(join(shimDir, process.platform === 'win32' ? 'shepaw.cmd' : 'shepaw')),
     ).toBe(true);
   });
+
+  it('does not write ~/.local/bin when a test shimDir is provided', () => {
+    const scriptDir = tempDir('shepaw-cli-');
+    const scriptPath = join(scriptDir, 'shepaw-cli.js');
+    writeFileSync(scriptPath, '// cli\n');
+    const shimDir = tempDir('shepaw-shim-');
+    const dir = ensureShepawShim(
+      { NEXUSPOUCH_URL: 'http://x' },
+      { scriptPath, shimDir, mirrorLocalBin: false },
+    );
+    expect(dir).toBe(shimDir);
+  });
 });
