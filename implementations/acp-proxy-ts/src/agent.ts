@@ -70,7 +70,10 @@ import {
 } from './store-pouch-card.js';
 import { storeBackendConfigured } from './shepaw-cli-shim.js';
 import { resolveStoreClient } from './shepaw-cli.js';
-import { mergeShepawSessionCommands } from './shepaw-session-commands.js';
+import {
+  expandSessionSlashPrompt,
+  mergeShepawSessionCommands,
+} from './shepaw-session-commands.js';
 import { sha256Hex } from './store-tools.js';
 import {
   buildFallbackResume,
@@ -325,7 +328,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     // Peer / app attachments arrive as path refs (or small base64). Resolve
     // outside the project cwd and pass ContentBlocks into Cursor.
     const prepared = preparePromptFromAttachments(
-      message,
+      expandSessionSlashPrompt(message),
       kwargs.attachments,
     );
     if (prepared.materialized.length > 0) {
