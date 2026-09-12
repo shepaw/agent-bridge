@@ -10,31 +10,31 @@ import {
 
 describe('engine session mode catalogs', () => {
   it('exposes Cursor run modes and Claude / Codex / OpenCode native modes', () => {
-    expect(getEngineSessionCatalog('cursor').defaultModeId).toBe('auto-review');
+    expect(getEngineSessionCatalog('cursor').defaultModeId).toBe('unrestricted');
     expect(getEngineSessionCatalog('cursor').modes.map((m) => m.id)).toEqual([
       'auto-review', 'allowlist', 'unrestricted',
     ]);
-    expect(getEngineSessionCatalog('claude-code').defaultModeId).toBe('acceptEdits');
+    expect(getEngineSessionCatalog('claude-code').defaultModeId).toBe('bypassPermissions');
     expect(getEngineSessionCatalog('codex').modes.map((m) => m.id)).toEqual([
       'untrusted', 'on-request', 'on-failure', 'never',
     ]);
-    expect(getEngineSessionCatalog('codex').defaultModeId).toBe('on-request');
+    expect(getEngineSessionCatalog('codex').defaultModeId).toBe('never');
     expect(getEngineSessionCatalog('opencode').modes.map((m) => m.id)).toEqual([
       'build', 'plan',
     ]);
-    expect(getEngineSessionCatalog('zcode').defaultModeId).toBe('build');
+    expect(getEngineSessionCatalog('zcode').defaultModeId).toBe('yolo');
     expect(getEngineSessionCatalog('zcode').modes.map((m) => m.id)).toEqual([
       'plan', 'build', 'edit', 'yolo',
     ]);
-    expect(getEngineSessionCatalog('deepseek-harness').defaultModeId).toBe('workspace-write');
+    expect(getEngineSessionCatalog('deepseek-harness').defaultModeId).toBe('danger-full-access');
     expect(getEngineSessionCatalog('deepseek-harness').modes.map((m) => m.id)).toEqual([
       'read-only', 'workspace-write', 'danger-full-access',
     ]);
-    expect(getEngineSessionCatalog('qwen-code').defaultModeId).toBe('auto');
+    expect(getEngineSessionCatalog('qwen-code').defaultModeId).toBe('yolo');
     expect(getEngineSessionCatalog('qwen-code').modes.map((m) => m.id)).toEqual([
       'plan', 'default', 'auto-edit', 'auto', 'yolo',
     ]);
-    expect(getEngineSessionCatalog('codebuddy').defaultModeId).toBe('auto');
+    expect(getEngineSessionCatalog('codebuddy').defaultModeId).toBe('bypassPermissions');
     expect(getEngineSessionCatalog('codebuddy').modes.map((m) => m.id)).toEqual([
       'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions',
     ]);
@@ -109,12 +109,12 @@ describe('catalogModesWire', () => {
   });
 
   it('falls back to the engine default when current is missing', () => {
-    expect(catalogModesWire('cursor').current).toBe('auto-review');
-    expect(catalogModesWire('claude-code').current).toBe('acceptEdits');
-    expect(catalogModesWire('codex').current).toBe('on-request');
-    expect(catalogModesWire('deepseek-harness').current).toBe('workspace-write');
-    expect(catalogModesWire('qwen-code').current).toBe('auto');
-    expect(catalogModesWire('codebuddy').current).toBe('auto');
+    expect(catalogModesWire('cursor').current).toBe('unrestricted');
+    expect(catalogModesWire('claude-code').current).toBe('bypassPermissions');
+    expect(catalogModesWire('codex').current).toBe('never');
+    expect(catalogModesWire('deepseek-harness').current).toBe('danger-full-access');
+    expect(catalogModesWire('qwen-code').current).toBe('yolo');
+    expect(catalogModesWire('codebuddy').current).toBe('bypassPermissions');
   });
 
   it('leaves engines without a catalog empty', () => {

@@ -10,6 +10,14 @@
  * Catalogs are create/edit pickers and the App fallback when ACP has not
  * advertised modes yet (no live session). Unknown engines leave the picker
  * empty so we don't invent modes for them.
+ *
+ * `defaultModeId` is written onto the instance when the operator does not
+ * pick a mode at create time (dashboard Add Instance, `shepaw-hub instance
+ * add` without `--session-mode`). Defaults are each engine's unattended
+ * skip-approval mode so tools run without interactive review — operators
+ * can still choose a stricter mode in the picker. Engines with no catalog
+ * (Hermes / Kimi / OpenClaw / Pi) keep the agent's own default; leftover
+ * `request_permission` still goes to the App.
  */
 
 export interface EngineSessionMode {
@@ -37,7 +45,7 @@ export interface ParseSessionModeOptions {
  * @see https://cursor.com/docs/agent/security/run-modes
  */
 const CURSOR_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'auto-review',
+  defaultModeId: 'unrestricted',
   modes: [
     { id: 'auto-review', name: 'Auto-review', description: '白名单与沙箱自动执行，其余经分类器审核' },
     { id: 'allowlist', name: 'Allowlist', description: '仅白名单内自动执行，其余询问' },
@@ -54,7 +62,7 @@ const CURSOR_LEGACY_SESSION_MODE_IDS: Readonly<Record<string, string>> = {
 
 /** Claude Code permission modes. */
 const CLAUDE_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'acceptEdits',
+  defaultModeId: 'bypassPermissions',
   modes: [
     { id: 'default', name: 'Default', description: '读取自动放行，写入和命令需确认' },
     { id: 'acceptEdits', name: 'Accept Edits', description: '自动接受文件编辑，命令仍需确认' },
@@ -67,7 +75,7 @@ const CLAUDE_MODES: EngineSessionModeCatalog = {
 
 /** Codex `approval_policy` values (kebab-case). */
 const CODEX_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'on-request',
+  defaultModeId: 'never',
   modes: [
     { id: 'untrusted', name: 'Untrusted', description: '仅放行受信任命令，其余询问' },
     { id: 'on-request', name: 'On request', description: '运行命令前询问' },
@@ -90,7 +98,7 @@ const OPENCODE_MODES: EngineSessionModeCatalog = {
  * @see https://zcode.z.ai/en/docs/agents
  */
 const ZCODE_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'build',
+  defaultModeId: 'yolo',
   modes: [
     { id: 'plan', name: 'Plan', description: '先规划，确认后再改代码' },
     { id: 'build', name: 'Build', description: '改文件和命令前询问' },
@@ -104,7 +112,7 @@ const ZCODE_MODES: EngineSessionModeCatalog = {
  * ACP itself does not advertise modes; Hub injects the env at spawn.
  */
 const DEEPSEEK_HARNESS_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'workspace-write',
+  defaultModeId: 'danger-full-access',
   modes: [
     { id: 'read-only', name: 'Read only', description: '禁止写入工作区文件' },
     { id: 'workspace-write', name: 'Workspace write', description: '写入限于工作区与临时目录，其余询问' },
@@ -117,7 +125,7 @@ const DEEPSEEK_HARNESS_MODES: EngineSessionModeCatalog = {
  * @see https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/
  */
 const QWEN_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'auto',
+  defaultModeId: 'yolo',
   modes: [
     { id: 'plan', name: 'Plan', description: '只分析规划，不改文件、不跑命令' },
     { id: 'default', name: 'Ask Permissions', description: '文件编辑和命令均需确认' },
@@ -135,7 +143,7 @@ const QWEN_MODES: EngineSessionModeCatalog = {
  * @see https://www.codebuddy.cn/cli/
  */
 const CODEBUDDY_MODES: EngineSessionModeCatalog = {
-  defaultModeId: 'auto',
+  defaultModeId: 'bypassPermissions',
   modes: [
     { id: 'default', name: 'Default', description: '首次使用每个工具前确认' },
     { id: 'acceptEdits', name: 'Accept Edits', description: '自动接受文件编辑，命令仍需确认' },

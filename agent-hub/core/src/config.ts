@@ -239,9 +239,9 @@ export interface InstanceConfig {
   readonly tunnel?: TunnelConfig;
   /**
    * Native ACP mode for this instance's engine — usually a permission / run mode
-   * (Cursor `auto-review`/`allowlist`/`unrestricted`, Claude `acceptEdits`, Codex
-   * `on-request`, …). Injected as `PAW_ACP_SESSION_MODE` at spawn. Omitted →
-   * engine default.
+   * (Cursor `unrestricted`, Claude `bypassPermissions`, Codex `never`, …).
+   * Injected as `PAW_ACP_SESSION_MODE` at spawn. Omitted at create → engine
+   * default (the skip-approval mode; see `defaultSessionModeId`).
    */
   readonly sessionMode?: string;
   /**
