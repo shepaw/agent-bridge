@@ -38,7 +38,14 @@ import {
   resumeStoreUri,
   writeResumeToStore,
 } from './workspace-resume.js';
-import { joinSubcommand } from './shepaw-cli-route.js';
+import {
+  appCliRespToEnvelope,
+  buildCliExecutePayload,
+  hubForwardEnabled,
+  postCliExecute,
+  resolveHubDeviceId,
+} from './shepaw-cli-forward.js';
+import { joinSubcommand, shouldForwardToApp } from './shepaw-cli-route.js';
 import {
   buildSessionCreatePayload,
   postSessionCreate,
@@ -170,6 +177,11 @@ shepaw chat — new session with handoff (forwarded to the paired App)
       Does not auto-switch. Channel / agent id fall back to SHEPAW_STORE_* /
       store-context.json. Discover via /session-new or /group-session-new.
 
+Other namespaces (os, memory, …) and store:// URIs belonging to another
+device are forwarded to the paired App, which runs them through the same
+gate as the built-in CLI. Hub-native (group, resume) and this Hub's own
+pouch stay local.
+
 Default write space is runtime:
   store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>
 Owner/channel fall back to SHEPAW_STORE_* env / store-context.json.
@@ -227,12 +239,31 @@ export async function runShepawCli(
   if (sessionKind) {
     return runSessionCreate(sessionKind, flags, env, io);
   }
+
+  const forwardOn = hubForwardEnabled(env);
+  if (
+    routed.namespace &&
+    shouldForwardToApp({
+      namespace: routed.namespace,
+      subcommand: routed.subcommand,
+      flags,
+      hubDeviceId: forwardOn
+        ? await resolveHubDeviceId(env, io.fetchImpl ?? fetch)
+        : '',
+      hubForwardEnabled: forwardOn,
+    })
+  ) {
+    return runForwardedCli(routed.namespace, routed.subcommand, flags, env, io);
+  }
+
   if (namespace !== 'store' || !command) {
     return emit(io, {
       success: false,
-      error:
-        "this shepaw shim implements 'shepaw store …', 'shepaw group …', " +
-        "'shepaw context agents.resume-*' and 'shepaw chat session create'",
+      error: forwardOn
+        ? "command not handled locally; paired App may be offline or agent id missing in store-context.json"
+        : "this shepaw shim implements 'shepaw store …', 'shepaw group …', " +
+          "'shepaw context agents.resume-*' and 'shepaw chat session create' " +
+          '(enable SHEPAW_HUB_STORE_URL to forward other namespaces to the App)',
       usage: USAGE,
     });
   }
@@ -300,6 +331,32 @@ export async function runShepawCli(
       'Shared on write (local-first, synced in background). Cite the URI / reference verbatim.';
   }
   return emit(io, envelope);
+}
+
+/** Forward a CLI invocation to Hub HTTP → peer `cli_execute_req` → App gate. */
+async function runForwardedCli(
+  namespace: string,
+  subcommand: string,
+  flags: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+  io: ShepawCliIO,
+): Promise<number> {
+  const built = buildCliExecutePayload({ namespace, subcommand, flags, env });
+  if (!built.ok) {
+    return emit(io, { success: false, error: built.error });
+  }
+  try {
+    const out = await postCliExecute(built.payload, {
+      env,
+      fetchImpl: io.fetchImpl,
+    });
+    return emit(io, appCliRespToEnvelope(out));
+  } catch (err) {
+    return emit(io, {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** Forward `shepaw chat session create` to Hub → paired App. */

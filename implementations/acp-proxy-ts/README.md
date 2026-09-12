@@ -103,9 +103,15 @@ Default write space is **runtime** (aligned with the Shepaw App):
 `store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>`
 
 Writes land on **this Hub's `device_id`**. Cross-device reads use the store
-protocol (local / master / owner) — they do **not** forward ACP
-`hub.cli.execute` to the phone. Coding engines should only call `shepaw store`;
-use the engine's own filesystem/shell for the project, not `shepaw os`.
+protocol (local / master / owner).
+
+**Commands the phone must run:** Hub-native (`shepaw group …`, resume) and
+this Hub's own pouch stay local; everything else — foreign `store://` URIs
+and other namespaces (`shepaw os …`, `shepaw memory …`) — is posted to
+`/api/v1/cli/execute` on the Hub (see `src/shepaw-cli-forward.ts`), which
+relays a peer `cli_execute_req` to the paired App. The App runs the same
+`CliExecutionGate` as ACP `hub.cli.execute`, so allowlist / approval /
+she-only apply to Hub engines too. Opt out with `SHEPAW_HUB_CLI_FORWARD=0`.
 
 Owner/channel are taken from CLI flags, then `SHEPAW_STORE_OWNER` /
 `SHEPAW_STORE_CHANNEL` / `SHEPAW_STORE_AGENT_ID`, then the per-turn
