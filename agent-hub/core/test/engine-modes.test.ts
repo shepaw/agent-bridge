@@ -38,6 +38,12 @@ describe('engine session mode catalogs', () => {
     expect(getEngineSessionCatalog('codebuddy').modes.map((m) => m.id)).toEqual([
       'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions',
     ]);
+    expect(getEngineSessionCatalog('tclaude').defaultModeId).toBe('bypassPermissions');
+    expect(getEngineSessionCatalog('claude-internal').defaultModeId).toBe('bypassPermissions');
+    expect(getEngineSessionCatalog('tcodex').defaultModeId).toBe('never');
+    expect(getEngineSessionCatalog('copilot').defaultModeId).toBe('yolo');
+    expect(getEngineSessionCatalog('gemini').defaultModeId).toBe('yolo');
+    expect(getEngineSessionCatalog('gemini-internal').defaultModeId).toBe('yolo');
   });
 
   it('leaves Hermes / Kimi / OpenClaw without a native catalog', () => {
@@ -115,6 +121,8 @@ describe('catalogModesWire', () => {
     expect(catalogModesWire('deepseek-harness').current).toBe('danger-full-access');
     expect(catalogModesWire('qwen-code').current).toBe('yolo');
     expect(catalogModesWire('codebuddy').current).toBe('bypassPermissions');
+    expect(catalogModesWire('copilot').current).toBe('yolo');
+    expect(catalogModesWire('gemini').current).toBe('yolo');
   });
 
   it('leaves engines without a catalog empty', () => {

@@ -18,6 +18,7 @@ import type { AcpEngineSpec } from './engines.js';
 import {
   applyZcodeStdioBridge,
   resolveCodexCliBinary,
+  resolveNamedCliBinary,
   resolveZcodeCliBinary,
   sanitizeZcodeAgentEnv,
   spawnCommand,
@@ -476,13 +477,25 @@ export class AcpSubprocess {
     // Official codex-acp prefers CODEX_PATH over its bundled @openai/codex.
     // npx installs often omit the optional platform package; point at a real CLI.
     if (
-      this.spec.id === 'codex' &&
+      (this.spec.id === 'codex' || this.spec.id === 'tcodex') &&
       (mergedEnv.CODEX_PATH === undefined || mergedEnv.CODEX_PATH.length === 0)
     ) {
-      const codexBin = resolveCodexCliBinary();
+      const binName = this.spec.id === 'tcodex' ? 'tcodex' : 'codex';
+      const codexBin = resolveNamedCliBinary(binName) ?? (this.spec.id === 'codex' ? resolveCodexCliBinary() : null);
       if (codexBin !== null) {
         mergedEnv.CODEX_PATH = codexBin;
-        log('CODEX_PATH unset; using local Codex CLI: %s', codexBin);
+        log('CODEX_PATH unset; using local %s CLI: %s', binName, codexBin);
+      }
+    }
+    if (
+      (this.spec.id === 'tclaude' || this.spec.id === 'claude-internal') &&
+      (mergedEnv.CLAUDE_CODE_EXECUTABLE === undefined || mergedEnv.CLAUDE_CODE_EXECUTABLE.length === 0)
+    ) {
+      const binName = this.spec.id === 'tclaude' ? 'tclaude' : 'claude-internal';
+      const claudeBin = resolveNamedCliBinary(binName);
+      if (claudeBin !== null) {
+        mergedEnv.CLAUDE_CODE_EXECUTABLE = claudeBin;
+        log('CLAUDE_CODE_EXECUTABLE unset; using local %s CLI: %s', binName, claudeBin);
       }
     }
     if (this.spec.id === 'zcode') {

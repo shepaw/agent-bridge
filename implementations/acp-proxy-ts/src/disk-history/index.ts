@@ -24,10 +24,13 @@ export async function tryLoadDiskHistory(
 
   switch (engineId) {
     case 'claude-code':
+    case 'tclaude':
+    case 'claude-internal':
       return loadClaudeCodeHistory(sessionId, cwd);
     case 'codebuddy':
       return loadCodebuddyHistory(sessionId, cwd);
     case 'codex':
+    case 'tcodex':
       return loadCodexHistory(sessionId);
     case 'opencode':
       return loadOpencodeHistory(sessionId);

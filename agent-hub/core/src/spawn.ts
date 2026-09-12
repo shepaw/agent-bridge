@@ -213,14 +213,27 @@ export async function startInstance(instance: InstanceConfig): Promise<{
     }
 
     const instanceEnv = decryptEnvVars(instance.envVars ?? {}, hubRoot());
-    // Official @agentclientprotocol/codex-acp reads CODEX_PATH; without it the
-    // bundled @openai/codex under npx often fails (missing optional platform bin).
+    const codexBinName = instance.engine === 'tcodex' ? 'tcodex' : instance.engine === 'codex' ? 'codex' : undefined;
     const codexPath =
-      instance.engine === 'codex'
+      codexBinName !== undefined
         ? (instanceEnv.CODEX_PATH ??
           engineEnv.CODEX_PATH ??
           process.env.CODEX_PATH ??
-          resolveBinaryPath('codex', [...SPAWN_PATH_PREFIXES]) ??
+          resolveBinaryPath(codexBinName, [...SPAWN_PATH_PREFIXES]) ??
+          undefined)
+        : undefined;
+    const claudeBinName =
+      instance.engine === 'tclaude'
+        ? 'tclaude'
+        : instance.engine === 'claude-internal'
+          ? 'claude-internal'
+          : undefined;
+    const claudeExecutable =
+      claudeBinName !== undefined
+        ? (instanceEnv.CLAUDE_CODE_EXECUTABLE ??
+          engineEnv.CLAUDE_CODE_EXECUTABLE ??
+          process.env.CLAUDE_CODE_EXECUTABLE ??
+          resolveBinaryPath(claudeBinName, [...SPAWN_PATH_PREFIXES]) ??
           undefined)
         : undefined;
     const zcodeBin =
@@ -249,6 +262,9 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       // argv or hub.json in plaintext. Instance values override engine defaults.
       ...instanceEnv,
       ...(codexPath !== undefined && codexPath.length > 0 ? { CODEX_PATH: codexPath } : {}),
+      ...(claudeExecutable !== undefined && claudeExecutable.length > 0
+        ? { CLAUDE_CODE_EXECUTABLE: claudeExecutable }
+        : {}),
       ...(zcodeBin !== undefined && zcodeBin.length > 0 ? { ZCODE_BIN: zcodeBin } : {}),
       // Redirect SDK file-resolution to this instance's isolated dir.
       // These three vars are the entire integration surface between hub

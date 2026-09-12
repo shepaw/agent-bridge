@@ -10,7 +10,12 @@
  */
 
 import { parseShellCommand } from './command-line.js';
-import { cursorRunModeSpawnArgs, qwenApprovalModeSpawnArgs, requestedSessionMode } from './session-mode.js';
+import {
+  cursorRunModeSpawnArgs,
+  qwenApprovalModeSpawnArgs,
+  requestedSessionMode,
+  yoloFlagSpawnArgs,
+} from './session-mode.js';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -19,8 +24,11 @@ import { spawnSync } from 'node:child_process';
 
 export type BuiltinEngineId =
   | 'claude-code'
+  | 'tclaude'
+  | 'claude-internal'
   | 'codebuddy'
   | 'codex'
+  | 'tcodex'
   | 'opencode'
   | 'openclaw'
   | 'cursor'
@@ -28,7 +36,13 @@ export type BuiltinEngineId =
   | 'kimi'
   | 'deepseek-harness'
   | 'zcode'
-  | 'pi';
+  | 'pi'
+  | 'copilot'
+  | 'gemini'
+  | 'gemini-internal'
+  | 'kiro'
+  | 'knot'
+  | 'qwen-code';
 
 /** @deprecated Use BuiltinEngineId — kept for existing imports. */
 export type AcpEngineId = BuiltinEngineId;
@@ -60,6 +74,20 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     args: ['-y', '@agentclientprotocol/claude-agent-acp@latest'],
     defaultAgentName: 'Claude Code',
   },
+  tclaude: {
+    id: 'tclaude',
+    displayName: 'TClaude',
+    command: 'npx',
+    args: ['-y', '@agentclientprotocol/claude-agent-acp@latest'],
+    defaultAgentName: 'TClaude',
+  },
+  'claude-internal': {
+    id: 'claude-internal',
+    displayName: 'Claude Internal',
+    command: 'npx',
+    args: ['-y', '@agentclientprotocol/claude-agent-acp@latest'],
+    defaultAgentName: 'Claude Internal',
+  },
   codebuddy: {
     id: 'codebuddy',
     displayName: 'CodeBuddy Code',
@@ -75,6 +103,13 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     // @zed-industries/codex-acp, which cannot parse newer ~/.codex/models.json.
     args: ['-y', '@agentclientprotocol/codex-acp@latest'],
     defaultAgentName: 'Codex',
+  },
+  tcodex: {
+    id: 'tcodex',
+    displayName: 'TCodex',
+    command: 'npx',
+    args: ['-y', '@agentclientprotocol/codex-acp@latest'],
+    defaultAgentName: 'TCodex',
   },
   opencode: {
     id: 'opencode',
@@ -136,6 +171,50 @@ export const ACP_ENGINES: Record<BuiltinEngineId, AcpEngineSpec> = {
     command: 'npx',
     args: ['-y', 'pi-acp'],
     defaultAgentName: 'Pi',
+  },
+  copilot: {
+    id: 'copilot',
+    displayName: 'GitHub Copilot',
+    command: 'copilot',
+    args: ['--acp'],
+    defaultAgentName: 'GitHub Copilot',
+  },
+  gemini: {
+    id: 'gemini',
+    displayName: 'Gemini CLI',
+    command: 'gemini',
+    args: ['--acp'],
+    defaultAgentName: 'Gemini CLI',
+    spawnEnv: { GEMINI_CLI_TRUST_WORKSPACE: 'true' },
+  },
+  'gemini-internal': {
+    id: 'gemini-internal',
+    displayName: 'Gemini Internal',
+    command: 'gemini-internal',
+    args: ['--acp'],
+    defaultAgentName: 'Gemini Internal',
+    spawnEnv: { GEMINI_CLI_TRUST_WORKSPACE: 'true' },
+  },
+  kiro: {
+    id: 'kiro',
+    displayName: 'Kiro',
+    command: 'kiro-cli',
+    args: ['acp', '--trust-all-tools'],
+    defaultAgentName: 'Kiro',
+  },
+  knot: {
+    id: 'knot',
+    displayName: 'Knot',
+    command: 'knot-cli',
+    args: ['acp'],
+    defaultAgentName: 'Knot',
+  },
+  'qwen-code': {
+    id: 'qwen-code',
+    displayName: 'Qwen Code',
+    command: 'qwen',
+    args: ['--acp'],
+    defaultAgentName: 'Qwen Code',
   },
 };
 
@@ -239,6 +318,21 @@ function whichBinary(name: string): string | null {
   if (which.status !== 0) return null;
   const line = which.stdout.trim().split(/\r?\n/)[0]?.trim();
   return line && line.length > 0 ? line : null;
+}
+
+/** PATH + common CLI dirs for a named binary (tclaude, tcodex, gemini, …). */
+export function resolveNamedCliBinary(name: string): string | null {
+  const found = whichBinary(name);
+  if (found !== null) return found;
+  for (const dir of commonCliDirs()) {
+    const full = join(dir, process.platform === 'win32' ? `${name}.cmd` : name);
+    if (existsSync(full)) return full;
+    if (process.platform === 'win32') {
+      const exe = join(dir, `${name}.exe`);
+      if (existsSync(exe)) return exe;
+    }
+  }
+  return null;
 }
 
 function resolveCursorCliBinary(): string | null {
@@ -376,6 +470,12 @@ export function spawnCommand(
       args = ['--api-key', apiKey, ...args];
     }
     args = cursorRunModeSpawnArgs(requestedSessionMode(env), args);
+  }
+  if (spec.id === 'copilot') {
+    args = yoloFlagSpawnArgs(requestedSessionMode(env), args, '--allow-all');
+  }
+  if (spec.id === 'gemini' || spec.id === 'gemini-internal') {
+    args = yoloFlagSpawnArgs(requestedSessionMode(env), args, '--yolo');
   }
   if (spec.id === 'qwen-code') {
     args = qwenApprovalModeSpawnArgs(requestedSessionMode(env), args);

@@ -5,6 +5,7 @@ import {
   advertisedModesList,
   cursorRunModeSpawnArgs,
   qwenApprovalModeSpawnArgs,
+  yoloFlagSpawnArgs,
   findModeConfigOption,
   matchRequestedModeId,
   planRequestedMode,
@@ -241,6 +242,19 @@ describe('cursorRunModeSpawnArgs', () => {
 
   it('does not duplicate flags', () => {
     expect(cursorRunModeSpawnArgs('auto-review', ['--auto-review', 'acp'])).toEqual(['--auto-review', 'acp']);
+  });
+});
+
+describe('yoloFlagSpawnArgs', () => {
+  it('appends --allow-all / --yolo for skip-approval modes', () => {
+    expect(yoloFlagSpawnArgs('yolo', ['--acp'], '--allow-all')).toEqual(['--acp', '--allow-all']);
+    expect(yoloFlagSpawnArgs('unrestricted', ['--acp'], '--yolo')).toEqual(['--acp', '--yolo']);
+    expect(yoloFlagSpawnArgs('bypassPermissions', ['--acp'], '--yolo')).toEqual(['--acp', '--yolo']);
+  });
+
+  it('leaves ask / default unchanged', () => {
+    expect(yoloFlagSpawnArgs('default', ['--acp'], '--allow-all')).toEqual(['--acp']);
+    expect(yoloFlagSpawnArgs(undefined, ['--acp'], '--yolo')).toEqual(['--acp']);
   });
 });
 

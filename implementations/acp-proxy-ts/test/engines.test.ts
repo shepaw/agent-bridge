@@ -30,8 +30,17 @@ describe('engines', () => {
     expect(ids).toContain('openclaw');
     expect(ids).toContain('pi');
     expect(ids).toContain('codebuddy');
+    expect(ids).toContain('copilot');
+    expect(ids).toContain('gemini');
+    expect(ids).toContain('gemini-internal');
+    expect(ids).toContain('kiro');
+    expect(ids).toContain('knot');
+    expect(ids).toContain('qwen-code');
+    expect(ids).toContain('tclaude');
+    expect(ids).toContain('claude-internal');
+    expect(ids).toContain('tcodex');
     expect(ids.length).toBe(Object.keys(ACP_ENGINES).length);
-    expect(ids.length).toBe(11);
+    expect(ids.length).toBe(20);
   });
 
   it('resolves zcode to the community ACP adapter', () => {
@@ -97,11 +106,14 @@ describe('engines', () => {
     }
   });
 
-  it('spawnCommand adds Cursor run mode flags from PAW_ACP_SESSION_MODE', () => {
-    const spec = getBuiltinEngineSpec('cursor');
-    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'auto-review' }).args[0]).toBe('--auto-review');
-    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'unrestricted' }).args[0]).toBe('--force');
-    expect(spawnCommand(spec, { PAW_ACP_SESSION_MODE: 'allowlist' }).args).toEqual(['acp']);
+  it('spawnCommand adds Copilot / Gemini skip-approval flags from PAW_ACP_SESSION_MODE', () => {
+    expect(spawnCommand(getBuiltinEngineSpec('copilot'), { PAW_ACP_SESSION_MODE: 'yolo' }).args).toEqual([
+      '--acp', '--allow-all',
+    ]);
+    expect(spawnCommand(getBuiltinEngineSpec('gemini'), { PAW_ACP_SESSION_MODE: 'yolo' }).args).toEqual([
+      '--acp', '--yolo',
+    ]);
+    expect(spawnCommand(getBuiltinEngineSpec('copilot'), { PAW_ACP_SESSION_MODE: 'default' }).args).toEqual(['--acp']);
   });
 
   it('validates engine ids', () => {

@@ -265,6 +265,10 @@ describe('engine-setup', () => {
     const pi = getEngineSetupGuide('pi', 'darwin');
     expect(pi.acpCommand).toBe('npx -y pi-acp');
     expect(pi.checkBinary).toBe('pi');
+    expect(getEngineSetupGuide('copilot', 'darwin').acpCommand).toBe('copilot --acp');
+    expect(getEngineSetupGuide('kiro', 'darwin').acpCommand).toBe('kiro-cli acp --trust-all-tools');
+    expect(getEngineSetupGuide('qwen-code', 'darwin').checkBinary).toBe('qwen');
+    expect(getEngineSetupGuide('tclaude', 'darwin').checkBinary).toBe('tclaude');
   });
 
   it('returns a setup guide for every built-in engine', () => {

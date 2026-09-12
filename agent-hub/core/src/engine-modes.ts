@@ -153,6 +153,24 @@ const CODEBUDDY_MODES: EngineSessionModeCatalog = {
   ],
 };
 
+/** Copilot CLI: `--allow-all` / `--yolo` vs interactive ACP permission prompts. */
+const COPILOT_MODES: EngineSessionModeCatalog = {
+  defaultModeId: 'yolo',
+  modes: [
+    { id: 'default', name: 'Ask', description: '工具调用需确认' },
+    { id: 'yolo', name: 'YOLO', description: '跳过几乎所有确认（`--allow-all`）' },
+  ],
+};
+
+/** Gemini CLI ACP：`--yolo` 跳过工具确认。 */
+const GEMINI_MODES: EngineSessionModeCatalog = {
+  defaultModeId: 'yolo',
+  modes: [
+    { id: 'default', name: 'Ask', description: '工具调用需确认' },
+    { id: 'yolo', name: 'YOLO', description: '跳过几乎所有确认（`--yolo`）' },
+  ],
+};
+
 const EMPTY_CATALOG: EngineSessionModeCatalog = {
   defaultModeId: undefined,
   modes: [],
@@ -161,7 +179,10 @@ const EMPTY_CATALOG: EngineSessionModeCatalog = {
 const BY_ENGINE: Record<string, EngineSessionModeCatalog> = {
   cursor: CURSOR_MODES,
   'claude-code': CLAUDE_MODES,
+  tclaude: CLAUDE_MODES,
+  'claude-internal': CLAUDE_MODES,
   codex: CODEX_MODES,
+  tcodex: CODEX_MODES,
   opencode: OPENCODE_MODES,
   openclaw: EMPTY_CATALOG,
   hermes: EMPTY_CATALOG,
@@ -170,6 +191,11 @@ const BY_ENGINE: Record<string, EngineSessionModeCatalog> = {
   zcode: ZCODE_MODES,
   'deepseek-harness': DEEPSEEK_HARNESS_MODES,
   'qwen-code': QWEN_MODES,
+  copilot: COPILOT_MODES,
+  gemini: GEMINI_MODES,
+  'gemini-internal': GEMINI_MODES,
+  kiro: EMPTY_CATALOG,
+  knot: EMPTY_CATALOG,
 };
 
 export function getEngineSessionCatalog(engineId: string): EngineSessionModeCatalog {

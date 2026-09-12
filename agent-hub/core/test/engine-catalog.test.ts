@@ -12,7 +12,16 @@ describe('builtin engine catalog', () => {
   it('registers the well-known ACP engines', () => {
     for (const id of [
       'claude-code',
+      'tclaude',
+      'claude-internal',
       'codex',
+      'tcodex',
+      'copilot',
+      'gemini',
+      'gemini-internal',
+      'kiro',
+      'knot',
+      'qwen-code',
       'opencode',
       'cursor',
       'pi',
@@ -40,5 +49,12 @@ describe('builtin engine catalog', () => {
     expect(acpCommandForEngine('pi')).toBe('npx -y pi-acp');
     expect(acpCommandForEngine('codebuddy')).toBe('codebuddy --acp');
     expect(acpCommandForEngine('zcode')).toBe('npx -y zcode-acp-server@latest');
+    expect(acpCommandForEngine('copilot')).toBe('copilot --acp');
+    expect(acpCommandForEngine('gemini')).toBe('gemini --acp');
+    expect(acpCommandForEngine('kiro')).toBe('kiro-cli acp --trust-all-tools');
+    expect(acpCommandForEngine('knot')).toBe('knot-cli acp');
+    expect(acpCommandForEngine('qwen-code')).toBe('qwen --acp');
+    expect(acpCommandForEngine('tclaude')).toBe('npx -y @agentclientprotocol/claude-agent-acp@latest');
+    expect(acpCommandForEngine('tcodex')).toBe('npx -y @agentclientprotocol/codex-acp@latest');
   });
 });

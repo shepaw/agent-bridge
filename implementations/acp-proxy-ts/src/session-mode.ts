@@ -126,6 +126,27 @@ export function cursorRunModeSpawnArgs(
   return args;
 }
 
+/**
+ * Append a skip-approval CLI flag when Hub session mode is yolo / unrestricted
+ * / bypassPermissions (Copilot `--allow-all`, Gemini `--yolo`).
+ */
+export function yoloFlagSpawnArgs(
+  mode: string | undefined,
+  existingArgs: readonly string[],
+  flag: string,
+): string[] {
+  if (mode === undefined) return [...existingArgs];
+  const key = normalize(mode);
+  const args = [...existingArgs];
+  if (
+    (key === 'yolo' || key === 'unrestricted' || key === 'bypasspermissions' || key === 'force') &&
+    !args.includes(flag)
+  ) {
+    args.push(flag);
+  }
+  return args;
+}
+
 const QWEN_APPROVAL_MODE_BY_KEY: Readonly<Record<string, string>> = {
   plan: 'plan',
   default: 'default',
