@@ -213,7 +213,7 @@ export const zh: Record<MessageKey, string> = {
   'settings.enginesHint': '管理内置与自定义引擎，配置每个引擎的默认环境变量。',
   'settings.peerTitle': '接入客户端',
   'settings.peerHint':
-    '两步：先在手机上准备好惜宝 App，再选择手机怎么连到这台电脑——同一个 Wi-Fi 直连，或用 Channel 从外网穿透进来。',
+    '默认按内网或公网 IP 连接，扫码即可。需要被外部访问时，再配置公共或自建 Channel。',
   'settings.versionTitle': '版本与更新',
   'settings.versionHint': '当前 shepaw-agent-hub 版本、定期自动检查更新与服务重启。',
   'settings.installed': '已安装版本：{version}',
@@ -254,9 +254,6 @@ export const zh: Record<MessageKey, string> = {
   'peer.port': '端口 {port}',
   'peer.downloadApp': '下载惜宝 App',
   'peer.noAppHint': '还没有？点这里下载安装包（App 暂未上架应用商店）。',
-  'peer.step1': '在手机上安装「惜宝 App」',
-  'peer.step2': '打开 App，进入「设备配对 / Scan to Connect」',
-  'peer.step3': '用 App 扫描下方二维码完成配对',
   'peer.heroEmptyHint': '还没有可用的二维码，点下面的按钮生成。',
   'peer.mintStart': '启动并生成二维码',
   'peer.preparingQr': '正在准备配对二维码…',
@@ -264,9 +261,9 @@ export const zh: Record<MessageKey, string> = {
   'peer.minting': '生成中…',
   'peer.expiresIn': '{seconds}s 后过期',
   'peer.expired': '已过期',
-  'peer.qrNote': '让手机与这台电脑连同一个 Wi-Fi / 局域网后扫码。',
+  'peer.qrNote': '默认按内网或公网 IP 连接。手机与电脑同一网络，或电脑已有公网地址时，直接扫码即可。',
   'peer.qrRemoteOk': '已开启远程访问，手机不在同一网络也能连接。',
-  'peer.remoteWarn': '已配置远程访问（共享 Channel 或反向代理），但隧道路由器未运行。远程配对需先启动路由器。',
+  'peer.remoteWarn': '已配置远程访问（共享 Channel），但隧道路由器未运行。远程配对需先启动路由器。',
   'peer.deviceName': '链接中的设备名：{name}',
   'peer.lan': '局域网：{endpoint}',
   'peer.channel': 'Channel：{endpoint}',
@@ -278,35 +275,27 @@ export const zh: Record<MessageKey, string> = {
   'peer.pairedBanner': '✓ 已连接「{name}」，现在可以用手机管理这台电脑了。',
   'peer.advancedTitle': '高级选项',
   'peer.advancedHint':
-    'Peer 服务状态、手动配对链接与自建反向代理。遇到问题或需要外网访问时再展开——Channel 配置在第二步。',
-  'peer.reverseProxyTitle': '反向代理（远程访问）',
-  'peer.reverseProxyCollapsed':
-    '不想用 Channel？把自建的 nginx / 反向代理指到 Hub 路由器，局域网外的设备即可通过它配对与连接。',
+    'Peer 服务状态与手动配对链接。一般不需要展开。',
   'peer.devicesTitle': '已配对设备（{count}）',
   'peer.noDevices': '尚未配对设备。',
   'peer.openStore': '打开储物袋',
   'peer.revoke': '撤销',
   'peer.authFail': 'API 鉴权失败。请先配置 Dashboard Token（与启动时的 SHEPAW_HUB_TOKEN 相同）：',
 
-  'connect.stepClient': '① 准备客户端',
-  'connect.stepNetwork': '② 选择连接方式',
-  'connect.next': '下一步：选择连接方式 →',
-  'connect.back': '← 返回第一步',
+  'connect.appHint': '用惜宝 App 扫描下方二维码即可连接。',
+  'connect.needExternal': '需要被外部访问？',
+  'connect.needExternalHint':
+    '电脑在内网、手机要用移动网络访问时，点这里配置 Channel。',
+  'connect.externalTitle': '选择外部访问方式',
+  'connect.externalConfigured': '外部访问已开启',
+  'connect.configureExternal': '去配置 →',
 
-  'connect.pickTitle': '我属于哪一种？',
-  'connect.pickQ1': '手机和这台电脑连的是同一个 Wi-Fi → 选 1',
-  'connect.pickQ2': '这台电脑本身就有公网地址（公网 IP / 域名 / 你自己的反向代理）→ 选 1',
-  'connect.pickQ3': '电脑在公司或家里的内网，手机要用移动网络访问 → 选 2 或 3',
-
-  'connect.optLan.title': '1 · 同一局域网，或本机已有公网入口',
-  'connect.optLan.desc':
-    '什么都不用配。让手机和这台电脑连同一个 Wi-Fi，直接扫下方二维码。如果这台机器本身就有公网地址，App 也能直接连上。',
-  'connect.optChannel.title': '2 · 用公共 Channel 服务穿透',
+  'connect.optChannel.title': '使用公共 Channel',
   'connect.optChannel.desc':
-    '由 Hub 主动外连到 Channel 服务，流量沿这条连接回流——不需要在路由器上开任何入站端口。用现成的托管服务（或你们已经在用的）即可，填好 地址 / Channel ID / Secret 就行。',
-  'connect.optSelfHost.title': '3 · 自建公网 Channel 服务',
+    '由 Hub 主动外连到托管 Channel，不需要在路由器上开入站端口。填好 地址 / Channel ID / Secret 即可。',
+  'connect.optSelfHost.title': '自建 Channel',
   'connect.optSelfHost.desc':
-    '把中继服务部署到你自己的服务器和域名上。先把服务搭起来，再回到选项 2 填同样的三项。',
+    '把中继服务部署到你自己的服务器和域名上，再填同样的三项。',
 
   'connect.qrChannelHint':
     '保存 Channel 后本二维码会自动刷新并带上 channel= 远程入口，此后手机用移动网络也能扫。',
@@ -327,7 +316,7 @@ export const zh: Record<MessageKey, string> = {
 
   'connect.selfhost.whoTitle': '适合谁',
   'connect.selfhost.whoBody':
-    '不想让第三方经手数据、合规要求用自己的域名、或团队本来就有自己的基础设施。如果只是现在就要外网访问，先用选项 2（托管 Channel），以后再迁也可以。',
+    '不想让第三方经手数据、合规要求用自己的域名、或团队本来就有自己的基础设施。如果只是现在就要外网访问，先用公共 Channel，以后再迁也可以。',
   'connect.selfhost.reqTitle': '需要准备什么',
   'connect.selfhost.reqBody':
     '一台有公网 IP 的服务器（1 核 2G 就够）。域名可选。开放 80（HTTP）或 443（HTTPS）端口即可，没有 TLS 证书也能用。',
@@ -351,7 +340,7 @@ export const zh: Record<MessageKey, string> = {
     '打开 http(s)://channel.你的域名.com，登录后点「创建 Channel」，复制 Secret（只显示一次）。',
   'connect.selfhost.backTitle': '第 5 步 · 回到本页',
   'connect.selfhost.backBody':
-    '选择上面的选项 2，服务地址填你的公网 http 或 https 地址，再填刚创建的 Channel ID 和 Secret，然后保存。',
+    '选择上方的「使用公共 Channel」，服务地址填你的公网 http 或 https 地址，再填刚创建的 Channel ID 和 Secret，然后保存。',
   'connect.selfhost.noInbound':
     '不需要开任何入站端口：Hub 是主动外连到 Channel 服务的，路由器上无需做端口映射。',
   'connect.selfhost.troubleTitle': '连不上时这样排查',
@@ -744,7 +733,7 @@ export const zh: Record<MessageKey, string> = {
   'setup.skip': '跳过引导',
   'setup.pairTitle': '最后一步：手机配对',
   'setup.pairLead':
-    '实例已就绪。按下方步骤安装并打开惜宝 App，然后扫码即可。',
+    '实例已就绪。用惜宝 App 扫描下方二维码即可。',
   'setup.done': '完成',
 
   'wizard.title': '开始使用 Shepaw Hub',

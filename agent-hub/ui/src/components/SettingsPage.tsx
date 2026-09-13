@@ -8,7 +8,7 @@ import { useI18n } from '../i18n/index.js';
 /**
  * Settings content panels (nav lives in App shell).
  *   - 全局: dashboard auth token + device name
- *   - 扫码配对: peer service + shepaw://peer QR + shared Channel
+ *   - 扫码配对: peer service + shepaw://peer QR（默认内网 / 公网 IP，可选 Channel）
  *
  * Per-engine configuration moved to the per-engine page (#engine/<id>), so the
  * engine management section no longer lives here.

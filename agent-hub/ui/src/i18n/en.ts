@@ -212,7 +212,7 @@ export const en = {
   'settings.enginesHint': 'Manage built-in and custom engines, and default environment variables per engine.',
   'settings.peerTitle': 'Connect client',
   'settings.peerHint':
-    'Two steps: get the Shepaw app ready on your phone, then pick how the phone reaches this computer — same Wi-Fi, or a Channel tunnel from outside the network.',
+    'Scan to connect over the LAN or a public IP. If the phone needs to reach this machine from outside, set up a public or self-hosted Channel.',
   'settings.versionTitle': 'Version & update',
   'settings.versionHint':
     'Installed shepaw-agent-hub release, automatic periodic npm update checks, and dashboard server restart.',
@@ -259,9 +259,6 @@ export const en = {
   'peer.downloadApp': 'Download the Shepaw app',
   'peer.noAppHint':
     "Don't have it yet? Grab the installer here (not on the app stores yet).",
-  'peer.step1': 'Install the Shepaw app on your phone',
-  'peer.step2': 'Open the app and go to “Pair Device / Scan to Connect”',
-  'peer.step3': 'Scan the QR code below with the app to finish pairing',
   'peer.heroEmptyHint': 'No active QR yet — click below to generate one.',
   'peer.mintStart': 'Start Peer and show QR',
   'peer.preparingQr': 'Preparing pairing QR…',
@@ -269,10 +266,11 @@ export const en = {
   'peer.minting': 'Generating…',
   'peer.expiresIn': 'Expires in {seconds}s',
   'peer.expired': 'Expired',
-  'peer.qrNote': 'Keep the phone on the same Wi-Fi / LAN as this computer, then scan.',
+  'peer.qrNote':
+    'Connects over the LAN or a public IP by default. Scan when the phone is on the same network, or when this machine already has a public address.',
   'peer.qrRemoteOk': 'Remote access is on — the phone can connect even off this network.',
   'peer.remoteWarn':
-    'Remote access is configured (shared Channel or reverse proxy) but the tunnel router is not running. Remote pairing needs the router first.',
+    'Remote access is configured (shared Channel) but the tunnel router is not running. Remote pairing needs the router first.',
   'peer.deviceName': 'Device name in the link: {name}',
   'peer.lan': 'LAN: {endpoint}',
   'peer.channel': 'Channel: {endpoint}',
@@ -285,10 +283,7 @@ export const en = {
     '✓ Paired as {name} — you can now manage this computer from your phone.',
   'peer.advancedTitle': 'Advanced options',
   'peer.advancedHint':
-    'Service status, manual link pairing and your own reverse proxy. Expand only when you need them — Channel setup is in step ②.',
-  'peer.reverseProxyTitle': 'Reverse proxy (remote access)',
-  'peer.reverseProxyCollapsed':
-    'No Channel Service? Point your own nginx / reverse proxy at the hub router, and devices off the LAN can pair and connect through it.',
+    'Peer service status and the manual pairing link. Expand only when you need them.',
   'peer.devicesTitle': 'Paired devices ({count})',
   'peer.noDevices': 'No paired devices yet.',
   'peer.openStore': 'Open Nexus Pouch',
@@ -296,25 +291,20 @@ export const en = {
   'peer.authFail':
     'API authentication failed. Set the dashboard token (same as SHEPAW_HUB_TOKEN at start) first:',
 
-  'connect.stepClient': '① Get the app ready',
-  'connect.stepNetwork': '② Choose how to connect',
-  'connect.next': 'Next: choose how to connect →',
-  'connect.back': '← Back to step 1',
+  'connect.appHint': 'Scan the QR below with the Shepaw app.',
+  'connect.needExternal': 'Need access from outside?',
+  'connect.needExternalHint':
+    'The computer is on a private network and the phone will use mobile data — set up a Channel here.',
+  'connect.externalTitle': 'How should the phone reach this machine?',
+  'connect.externalConfigured': 'External access is on',
+  'connect.configureExternal': 'Set up →',
 
-  'connect.pickTitle': 'Which one sounds like you?',
-  'connect.pickQ1': 'Phone and this computer are on the same Wi-Fi → pick 1',
-  'connect.pickQ2': 'This computer already has a public address (public IP / domain / your own reverse proxy) → pick 1',
-  'connect.pickQ3': 'The computer sits on a home/office intranet and the phone uses mobile data → pick 2 or 3',
-
-  'connect.optLan.title': '1 · Same network, or already reachable from the internet',
-  'connect.optLan.desc':
-    'Nothing to configure. Keep the phone on the same Wi-Fi as this computer and scan the QR below. If this machine already answers on a public address, the app can reach it directly.',
-  'connect.optChannel.title': '2 · Tunnel through a public Channel service',
+  'connect.optChannel.title': 'Use a public Channel service',
   'connect.optChannel.desc':
-    'The Hub dials out to a Channel service and traffic is relayed back down that connection — no inbound port to open. Use the hosted service (or one your team already runs), then fill in URL / Channel ID / Secret.',
-  'connect.optSelfHost.title': '3 · Run your own public Channel service',
+    'The Hub dials out to a hosted Channel — no inbound port to open. Fill in URL / Channel ID / Secret.',
+  'connect.optSelfHost.title': 'Run your own Channel service',
   'connect.optSelfHost.desc':
-    'Self-host the relay on your own server and domain. Deploy it first, then come back and fill in the same three values under option 2.',
+    'Deploy the relay on your own server and domain, then fill in the same three values.',
 
   'connect.qrChannelHint':
     'Saving a Channel refreshes this QR with a channel= entry — after that the phone can scan over mobile data.',
@@ -335,7 +325,7 @@ export const en = {
 
   'connect.selfhost.whoTitle': 'Who is this for',
   'connect.selfhost.whoBody':
-    'You don’t want a third party in the path, you need your own domain for compliance, or your team already runs its own infrastructure. If you only need remote access right now, use option 2 (hosted Channel) — you can migrate later.',
+    'You don’t want a third party in the path, you need your own domain for compliance, or your team already runs its own infrastructure. If you only need remote access right now, use the public Channel — you can migrate later.',
   'connect.selfhost.reqTitle': 'What you need',
   'connect.selfhost.reqBody':
     'A server with a public IP (1 vCPU / 2 GB is plenty). A domain is optional. Open port 80 (HTTP) or 443 (HTTPS). A TLS certificate is not required.',
@@ -359,7 +349,7 @@ export const en = {
     'Open http(s)://channel.your-domain.com, log in, click Create Channel, then copy the Secret (shown only once).',
   'connect.selfhost.backTitle': 'Step 5 · Back to this page',
   'connect.selfhost.backBody':
-    'Pick option 2 above and fill Server URL with your public http or https address plus the Channel ID and Secret you just created, then save.',
+    'Pick “Use a public Channel service” above and fill Server URL with your public http or https address plus the Channel ID and Secret you just created, then save.',
   'connect.selfhost.noInbound':
     'No inbound port to open: the Hub dials out to the Channel service, so your router needs no port forwarding.',
   'connect.selfhost.troubleTitle': 'If it does not work',
@@ -761,7 +751,7 @@ export const en = {
   'setup.skip': 'Skip guide',
   'setup.pairTitle': 'Last step: pair your phone',
   'setup.pairLead':
-    'Your instance is ready. Install and open the Shepaw app below, then scan to pair.',
+    'Your instance is ready. Scan the QR below with the Shepaw app to pair.',
   'setup.done': 'Finish',
 
   'wizard.title': 'Get started with Shepaw Hub',
