@@ -20,6 +20,7 @@ import { connect } from 'node:net';
 import { createRequire } from 'node:module';
 
 import {
+  detectTencentIntranet,
   hubRoot,
   hubConfigPath,
   instancePaths,
@@ -155,7 +156,9 @@ function checkGatewayPackage(r: Reporter): void {
 
 function checkEngines(r: Reporter, cfg: HubConfig | undefined, full: boolean): void {
   console.log(full ? '\nEngines (full probes)' : '\nEngines');
-  const infos = listEngineInfos(cfg?.customEngines ?? []);
+  const infos = listEngineInfos(cfg?.customEngines ?? [], cfg?.engineOverrides, {
+    usedEngineIds: cfg?.instances.map((i) => i.engine),
+  });
   for (const info of infos) {
     const disabled = cfg !== undefined && isEngineDisabled(cfg, info.id);
     // decryptEnvVars can fail on a damaged secrets file — a diagnostics
@@ -243,6 +246,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<number> {
   await checkCliVersion(r);
   const cfg = checkHubConfig(r);
   checkGatewayPackage(r);
+  await detectTencentIntranet();
   checkEngines(r, cfg, full);
   await checkInstances(r, cfg);
   checkPeerAndGateway(r, cfg);

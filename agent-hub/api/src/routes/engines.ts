@@ -32,6 +32,7 @@ import {
   hubPlatformLabel,
   isKnownEngineForOverrides,
   isSensitiveEnvVarKey,
+  detectTencentIntranet,
   listEngineInfos,
   loadOrCreateHubConfig,
   removeCustomEngineFromHub,
@@ -77,11 +78,13 @@ function requireKnownEngine(id: string): void {
 enginesRouter.get('/', async (req: Request, res: Response) => {
   try {
     const probe = req.query.probe !== '0';
+    await detectTencentIntranet();
     const cfg = loadOrCreateHubConfig();
     const overrides = cfg.engineOverrides ?? {};
     const engines: Array<EngineInfo & { disabled: boolean; envVarKeys: string[] }> = [];
     for (const info of listEngineInfos(cfg.customEngines, overrides, {
       resolveCommands: probe,
+      usedEngineIds: cfg.instances.map((i) => i.engine),
     })) {
       const disabled = overrides[info.id]?.disabled === true;
       const engineEnv = resolveEngineEnvVars(cfg, info.id);

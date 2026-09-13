@@ -30,7 +30,7 @@ import { gatewayRouter } from './routes/gateway.js';
 import { peerRouter } from './routes/peer.js';
 import { fsRouter } from './routes/fs.js';
 import { storeRouter } from './routes/store.js';
-import { systemRouter } from './routes/system.js';
+import { startHubUpdateAutoCheck, systemRouter } from './routes/system.js';
 import { attachLogsWss } from './ws.js';
 import {
   authorizeWsUpgrade,
@@ -195,6 +195,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     httpServer.listen(port, host, () => resolve());
     httpServer.once('error', reject);
   });
+  startHubUpdateAutoCheck();
 
   const scheme = tlsEnabled ? 'https' : 'http';
   if (!isLoopbackHost(host)) {

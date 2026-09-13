@@ -57,4 +57,11 @@ describe('builtin engine catalog', () => {
     expect(acpCommandForEngine('tclaude')).toBe('npx -y @agentclientprotocol/claude-agent-acp@latest');
     expect(acpCommandForEngine('tcodex')).toBe('npx -y @agentclientprotocol/codex-acp@latest');
   });
+
+  it('marks Tencent-intranet CLIs', () => {
+    for (const id of ['tclaude', 'tcodex', 'knot'] as const) {
+      expect(BUILTIN_ENGINE_BY_ID[id].intranetOnly).toBe(true);
+    }
+    expect(BUILTIN_ENGINE_BY_ID['claude-code'].intranetOnly).toBeUndefined();
+  });
 });

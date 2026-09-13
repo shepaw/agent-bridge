@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isAlive, type StopResult } from '../spawn.js';
-import { loadOrCreateHubConfig, resolvePeerDeviceName, setHubPeer, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
+import { loadOrCreateHubConfig, resolvePeerDeviceName, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from '../config.js';
 import { authorizePeerServiceOnAllInstances } from './peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import {
@@ -54,6 +54,13 @@ export function isPeerServiceRunning(): boolean {
   return state !== undefined && state.pid > 0 && isAlive(state.pid);
 }
 
+/** Live bind of the running peer daemon, if any. Used by the tunnel router. */
+export function readRunningPeerBind(): { host: string; port: number } | undefined {
+  const state = readPeerState();
+  if (state === undefined || state.pid <= 0 || !isAlive(state.pid)) return undefined;
+  return { host: state.host, port: state.port };
+}
+
 /** Start the peer service (detached). Idempotent. Relocates if the preferred port is busy. */
 export async function startPeerService(
   cfg = loadOrCreateHubConfig(),
@@ -87,9 +94,9 @@ export async function startPeerService(
       const alloc = await allocateListenPort(preferred, { host });
       const port = alloc.port;
       const relocated = port !== configuredPort;
-      if (relocated) {
-        setHubPeer(cfg, { host, port });
-      }
+      // Do not persist a relocated port into hub.json. The live bind lives in
+      // peer-state.json; overwriting preferred would pin phones to a temporary
+      // port after Shepaw desktop / another hub vacated 18793.
 
       const child = nodeSpawn(process.execPath, [daemonPath], {
         detached: true,

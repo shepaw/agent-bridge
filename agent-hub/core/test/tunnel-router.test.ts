@@ -5,6 +5,9 @@
  * unknown routing keys must be rejected.
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 
@@ -78,8 +81,13 @@ let router: GatewayTunnelRouter;
 let agentA: { port: number; close: () => void };
 let agentB: { port: number; close: () => void };
 let routerPort: number;
+let home: string;
+let prevHome: string | undefined;
 
 beforeEach(async () => {
+  home = mkdtempSync(join(tmpdir(), 'shepaw-router-'));
+  prevHome = process.env.SHEPAW_HUB_HOME;
+  process.env.SHEPAW_HUB_HOME = home;
   agentA = await mockAgent(() => 'A');
   agentB = await mockAgent(() => 'B');
   routerPort = await freePort();
@@ -102,6 +110,9 @@ afterEach(async () => {
   await router.stop();
   agentA.close();
   agentB.close();
+  if (prevHome === undefined) delete process.env.SHEPAW_HUB_HOME;
+  else process.env.SHEPAW_HUB_HOME = prevHome;
+  rmSync(home, { recursive: true, force: true });
 });
 
 describe('GatewayTunnelRouter dispatch', () => {

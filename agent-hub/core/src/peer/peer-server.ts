@@ -318,7 +318,18 @@ export class PeerServer {
       ws.close();
       return;
     }
-    const ack = { type: 'reconnect_ack', device_id: this.identity.fingerprint };
+    // Advertise the *current* LAN / channel URLs so a phone that reconnects
+    // after we relocated the listen port (18793 busy → 18794) can persist the
+    // new local_endpoint without scanning a QR again.
+    const cfg = loadOrCreateHubConfig();
+    const localEndpoint = resolveLocalEndpoint(this.port, this.host);
+    const channelEndpoint = resolvePeerChannelEndpoint(cfg);
+    const ack = {
+      type: 'reconnect_ack',
+      device_id: this.identity.fingerprint,
+      local_endpoint: localEndpoint,
+      ...(channelEndpoint !== undefined ? { channel_endpoint: channelEndpoint } : {}),
+    };
     try {
       const msg2 = session.writeHandshake2(Buffer.from(JSON.stringify(ack), 'utf-8'));
       ws.send(encodeFrame({ t: 'hs', payload: msg2 }));

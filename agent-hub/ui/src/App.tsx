@@ -9,6 +9,8 @@ import { AgentsHubPage } from './components/AgentsHubPage.js';
 import { EngineConfigPage } from './components/EngineConfigPage.js';
 import { StoreBrowserPanel } from './components/StoreBrowserPanel.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher.js';
+import { HUB_UPDATE_POLL_MS } from './components/VersionPanel.js';
+import type { SystemVersion } from './api/types.js';
 import { useI18n } from './i18n/index.js';
 import {
   buildEngineHash,
@@ -111,6 +113,7 @@ export function App() {
   const [showRestartAllConfirm, setShowRestartAllConfirm] = useState(false);
   const [restartAllBusy, setRestartAllBusy] = useState(false);
   const [restartAllErr, setRestartAllErr] = useState<string | null>(null);
+  const [hubVersion, setHubVersion] = useState<SystemVersion | null>(null);
 
   const goInstances = useCallback(() => {
     setNav('instances');
@@ -252,6 +255,24 @@ export function App() {
       /* ignore */
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const v = await api.system.version();
+        if (!cancelled) setHubVersion(v);
+      } catch {
+        /* registry / network — banner stays hidden */
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), HUB_UPDATE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   // Keep URL hash in sync with the active view
   useEffect(() => {
@@ -417,6 +438,15 @@ export function App() {
         <LanguageSwitcher />
       </div>
 
+      {hubVersion?.outdated === true && hubVersion.latest && (
+        <div style={updateBanner} role="status">
+          <span>{t('settings.updateBanner', { latest: hubVersion.latest })}</span>
+          <button type="button" style={updateBannerBtn} onClick={() => goSettings('global')}>
+            {t('settings.updateBannerAction')}
+          </button>
+        </div>
+      )}
+
       <div style={pageLayout}>
         <nav style={sidebar} aria-label={t('nav.aria')}>
           {NAV_IDS.map((id) => (
@@ -562,6 +592,32 @@ const topbar: React.CSSProperties = {
   marginBottom: 24,
   flexWrap: 'wrap',
   gap: 12,
+};
+
+const updateBanner: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  flexWrap: 'wrap',
+  margin: '-8px 0 16px',
+  padding: '10px 14px',
+  background: '#313244',
+  border: '1px solid #f9e2af',
+  borderRadius: 8,
+  color: '#f9e2af',
+  fontSize: 13,
+};
+
+const updateBannerBtn: React.CSSProperties = {
+  background: '#f9e2af',
+  color: '#11111b',
+  border: 'none',
+  borderRadius: 6,
+  padding: '6px 12px',
+  cursor: 'pointer',
+  fontWeight: 600,
+  fontSize: 12,
 };
 
 const title: React.CSSProperties = {

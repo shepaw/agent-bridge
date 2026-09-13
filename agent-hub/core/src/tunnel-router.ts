@@ -30,6 +30,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { ChannelTunnelConfig, TunnelClient, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 
 import { loadOrCreateHubConfig, type HubConfig, type InstanceConfig, DEFAULT_PEER_HOST, DEFAULT_PEER_PORT } from './config.js';
+import { readRunningPeerBind } from './peer/peer-process.js';
 import { instancePaths } from './paths.js';
 import { AgentRegistry } from './registry.js';
 
@@ -319,8 +320,9 @@ export class GatewayTunnelRouter {
     const url = new URL(rawUrl, 'http://localhost');
     if (!url.pathname.startsWith('/peer')) return undefined;
     const cfg = this.loadConfig();
-    const peerPort = cfg.peer?.port ?? DEFAULT_PEER_PORT;
-    const peerHost = cfg.peer?.host ?? DEFAULT_PEER_HOST;
+    const live = readRunningPeerBind();
+    const peerPort = live?.port ?? cfg.peer?.port ?? DEFAULT_PEER_PORT;
+    const peerHost = live?.host ?? cfg.peer?.host ?? DEFAULT_PEER_HOST;
     const host = WILDCARD_HOSTS.has(peerHost) ? '127.0.0.1' : peerHost;
     return { instanceId: '__peer__', host, port: peerPort };
   }

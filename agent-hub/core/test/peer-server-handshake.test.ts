@@ -117,7 +117,9 @@ async function reconnectOverWs(
   });
   const hsFrame = decodeFrame(msg2Raw);
   expect(hsFrame.t).toBe('hs');
-  session.readHandshake2(hsFrame.payload);
+  const ack = JSON.parse(
+    Buffer.from(session.readHandshake2(hsFrame.payload)).toString('utf-8'),
+  ) as Record<string, unknown>;
 
   const listMsg = await new Promise<Record<string, unknown>>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('agent_list timeout')), 5_000);
@@ -143,7 +145,7 @@ async function reconnectOverWs(
     }));
   });
   ws.close();
-  return listMsg;
+  return { ack, listMsg };
 }
 
 beforeEach(async () => {
@@ -262,7 +264,10 @@ describe('peer pairing handshake', () => {
       createdAt: Date.now(),
     });
     const { initiatorKeys } = await pairOverWs(`ws://127.0.0.1:${peerPort}/peer/ws`, 'XYZ789');
-    const listMsg = await reconnectOverWs(`ws://127.0.0.1:${peerPort}/peer/ws`, initiatorKeys);
+    const { ack, listMsg } = await reconnectOverWs(`ws://127.0.0.1:${peerPort}/peer/ws`, initiatorKeys);
+    expect(ack.type).toBe('reconnect_ack');
+    expect(String(ack.local_endpoint)).toMatch(new RegExp(`:${peerPort}/peer/ws$`));
+    expect(ack.channel_endpoint).toBe('wss://channel.example.com/proxy/ch_peer/peer/ws');
     expect(listMsg.type).toBe('agent_list_resp');
     const agents = listMsg.agents as Array<Record<string, unknown>>;
     expect(agents).toHaveLength(1);

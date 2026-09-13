@@ -10,7 +10,7 @@ import { CHANNEL_CONSOLE_URL, CHANNEL_REPO_URL } from '../utils/appLinks.js';
  */
 const DOCKER_CMD = `git clone https://github.com/shepaw/channel.git
 cd channel
-cp .env.example .env   # then set BASE_URL=https://channel.your-domain.com
+cp .env.example .env   # then set BASE_URL=http(s)://channel.your-domain.com
 docker-compose up -d`;
 
 const BINARY_CMD = `# download channel-service_<os>_<arch> from
@@ -31,6 +31,20 @@ const NGINX_CMD = `server {
     listen 443 ssl;
     server_name channel.your-domain.com;
     # ssl_certificate / ssl_certificate_key ...
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+}`;
+
+const HTTP_NGINX_CMD = `server {
+    listen 80;
+    server_name channel.your-domain.com;
 
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -123,6 +137,9 @@ export function SelfHostChannelGuide({ onDone }: { onDone?: () => void }) {
 
       <h5 style={guideTitle}>{t('connect.selfhost.tlsTitle')}</h5>
       <p style={para}>{t('connect.selfhost.tlsBody')}</p>
+      <p style={subTitle}>{t('connect.selfhost.tlsHttp')}</p>
+      <CopyableCommand command={HTTP_NGINX_CMD} />
+      <p style={subTitle}>{t('connect.selfhost.tlsHttps')}</p>
       <CopyableCommand command={CADDY_CMD} />
       <CopyableCommand command={NGINX_CMD} />
 

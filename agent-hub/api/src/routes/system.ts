@@ -36,6 +36,24 @@ function installedVersion(): string {
   return process.env.SHEPAW_HUB_INSTALLED_VERSION?.trim() || readInstalledVersion();
 }
 
+const AUTO_CHECK_MS = 12 * 60 * 60 * 1000;
+let autoCheckStarted = false;
+
+/** Background npm check so the dashboard can show outdated without a click. */
+export function startHubUpdateAutoCheck(): void {
+  if (autoCheckStarted) return;
+  autoCheckStarted = true;
+  void checkHubUpdate({ installed: installedVersion() }).catch(() => {
+    /* registry unreachable — dashboard still starts */
+  });
+  const timer = setInterval(() => {
+    void checkHubUpdate({ skipCache: true, installed: installedVersion() }).catch(() => {
+      /* ignore */
+    });
+  }, AUTO_CHECK_MS);
+  timer.unref();
+}
+
 // GET /api/system/version?refresh=1
 systemRouter.get('/version', async (req: Request, res: Response) => {
   const installed = installedVersion();
@@ -44,18 +62,19 @@ systemRouter.get('/version', async (req: Request, res: Response) => {
     npmInstall: isNpmPackageInstall(),
     supervised: process.env.SHEPAW_HUB_SUPERVISED === '1',
   };
-  if (req.query.refresh !== '1' && req.query.refresh !== 'true') {
-    res.json(base);
-    return;
-  }
+  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
   try {
-    const info = await checkHubUpdate({ skipCache: true, installed });
+    const info = await checkHubUpdate({ skipCache: refresh, installed });
     res.json({ ...base, latest: info.latest, outdated: info.outdated });
   } catch (err) {
-    res.status(502).json({
-      error: `Could not reach npm registry: ${err instanceof Error ? err.message : String(err)}`,
-      code: 'registry-unreachable',
-    });
+    if (refresh) {
+      res.status(502).json({
+        error: `Could not reach npm registry: ${err instanceof Error ? err.message : String(err)}`,
+        code: 'registry-unreachable',
+      });
+      return;
+    }
+    res.json(base);
   }
 });
 

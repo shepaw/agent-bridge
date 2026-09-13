@@ -70,6 +70,7 @@ export {
   isPeerServiceRunning,
   mintPairingQr,
   peerServiceStatus,
+  readRunningPeerBind,
   startPeerService,
   stopPeerService,
 } from './peer/peer-process.js';
@@ -334,6 +335,13 @@ export {
   validateCustomEngineId,
 } from './engines.js';
 export type { BuiltinAgentEngine, CustomEngineDefinition, EngineInfo, EngineOverrideInstanceion } from './engines.js';
+export {
+  detectTencentIntranet,
+  isIntranetEngineVisible,
+  isIntranetOnlyEngine,
+  peekTencentIntranet,
+  TENCENT_INTRANET_ENV,
+} from './intranet.js';
 export {
   BUILTIN_ENGINE_BY_ID,
   BUILTIN_ENGINE_CATALOG,

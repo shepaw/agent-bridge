@@ -66,6 +66,7 @@ import {
   findInstance,
   getInstance,
   loadOrCreateHubConfig,
+  detectTencentIntranet,
   listEngineInfos,
   InstanceExistsError,
   InstanceNotFoundError,
@@ -1122,10 +1123,13 @@ cli
 
 cli
   .command('engine list', 'List built-in and custom ACP engines')
-  .action(() => {
+  .action(async () => {
     try {
+      await detectTencentIntranet();
       const cfg = loadOrCreateHubConfig();
-      const engines = listEngineInfos(cfg.customEngines);
+      const engines = listEngineInfos(cfg.customEngines, cfg.engineOverrides, {
+        usedEngineIds: cfg.instances.map((i) => i.engine),
+      });
       console.log('  ID              DISPLAY NAME           TYPE       ACP COMMAND');
       for (const e of engines) {
         const cmd = e.acpCommand.length > 40 ? `${e.acpCommand.slice(0, 37)}...` : e.acpCommand;

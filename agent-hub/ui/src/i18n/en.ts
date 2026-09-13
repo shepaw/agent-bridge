@@ -215,8 +215,10 @@ export const en = {
     'Two steps: get the Shepaw app ready on your phone, then pick how the phone reaches this computer — same Wi-Fi, or a Channel tunnel from outside the network.',
   'settings.versionTitle': 'Version & update',
   'settings.versionHint':
-    'Installed shepaw-agent-hub release, npm update check, and dashboard server restart.',
+    'Installed shepaw-agent-hub release, automatic periodic npm update checks, and dashboard server restart.',
   'settings.installed': 'Installed: {version}',
+  'settings.updateBanner': 'Update available: {latest}',
+  'settings.updateBannerAction': 'View update',
   'settings.checkUpdates': 'Check for updates',
   'settings.checkingUpdates': 'Checking…',
   'settings.checkFailed': 'Update check failed: {message}',
@@ -336,7 +338,7 @@ export const en = {
     'You don’t want a third party in the path, you need your own domain for compliance, or your team already runs its own infrastructure. If you only need remote access right now, use option 2 (hosted Channel) — you can migrate later.',
   'connect.selfhost.reqTitle': 'What you need',
   'connect.selfhost.reqBody':
-    'A server with a public IP (1 vCPU / 2 GB is plenty), a domain such as channel.your-domain.com, and ports 80 / 443 reachable.',
+    'A server with a public IP (1 vCPU / 2 GB is plenty). A domain is optional. Open port 80 (HTTP) or 443 (HTTPS). A TLS certificate is not required.',
   'connect.selfhost.deployTitle': 'Step 1 · Deploy the service (pick one)',
   'connect.selfhost.deployDocker': 'Docker Compose (recommended)',
   'connect.selfhost.deployBinary': 'Prebuilt binary',
@@ -344,18 +346,20 @@ export const en = {
   'connect.selfhost.openRepo': 'Open repository ↗',
   'connect.selfhost.envTitle': 'Step 2 · Set the environment',
   'connect.selfhost.envBody':
-    'Edit .env: BASE_URL must be your public https address; leave AUTH_MODE empty so login stays required. DATABASE_URL defaults to SQLite, REDIS is optional, MAX_CHANNELS caps channels per user (default 5).',
+    'Edit .env: BASE_URL must be your public address (http or https); leave AUTH_MODE empty so login stays required. DATABASE_URL defaults to SQLite, REDIS is optional, MAX_CHANNELS caps channels per user (default 5).',
   'connect.selfhost.envWarn':
     'AUTH_MODE=open turns off all login — anyone who finds the URL owns the instance. Never use it on a public deployment.',
-  'connect.selfhost.tlsTitle': 'Step 3 · Put HTTPS in front',
+  'connect.selfhost.tlsTitle': 'Step 3 · Expose HTTP or HTTPS',
   'connect.selfhost.tlsBody':
-    'The app connects over wss, so plain HTTP will not work. Caddy fetches the certificate for you; nginx works the same way — just proxy to 127.0.0.1:8080.',
+    'HTTPS (wss) is recommended when you have a certificate, but the app also works over plain HTTP (ws). Skip Caddy/nginx TLS if you do not have a cert — set BASE_URL to your public http address instead.',
+  'connect.selfhost.tlsHttp': 'Plain HTTP (no certificate)',
+  'connect.selfhost.tlsHttps': 'HTTPS with a certificate (optional)',
   'connect.selfhost.createTitle': 'Step 4 · Create a Channel in your own console',
   'connect.selfhost.createBody':
-    'Open https://channel.your-domain.com, log in, click Create Channel, then copy the Secret (shown only once).',
+    'Open http(s)://channel.your-domain.com, log in, click Create Channel, then copy the Secret (shown only once).',
   'connect.selfhost.backTitle': 'Step 5 · Back to this page',
   'connect.selfhost.backBody':
-    'Pick option 2 above and fill Server URL with your https address plus the Channel ID and Secret you just created, then save.',
+    'Pick option 2 above and fill Server URL with your public http or https address plus the Channel ID and Secret you just created, then save.',
   'connect.selfhost.noInbound':
     'No inbound port to open: the Hub dials out to the Channel service, so your router needs no port forwarding.',
   'connect.selfhost.troubleTitle': 'If it does not work',

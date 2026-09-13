@@ -18,6 +18,7 @@ import qrcode from 'qrcode-terminal';
 import {
   addInstance,
   allocateInstanceId,
+  detectTencentIntranet,
   ensureInstanceDir,
   getEngineSetupGuide,
   isEngineDisabled,
@@ -176,6 +177,7 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     console.log(`\nHub: ${cfg.path}`);
 
     // 2. Probe engines.
+    await detectTencentIntranet();
     const engines = probeEngines(cfg);
     const available = engines.filter((e) => e.available);
     if (available.length === 0) {

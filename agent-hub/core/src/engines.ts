@@ -10,6 +10,7 @@ import {
   type BuiltinAgentEngine,
 } from './engine-catalog.js';
 import { getEngineSessionCatalog } from './engine-modes.js';
+import { isIntranetEngineVisible } from './intranet.js';
 import { validateInstanceId } from './paths.js';
 
 export {
@@ -171,8 +172,16 @@ export function listEngineInfos(
    * `resolveCommands: false` skips per-engine local binary detection (Cursor
    * CLI lookup) so callers that only need the catalog — e.g. the dashboard's
    * first paint — get a pure config read with no subprocess spawns.
+   * `includeIntranetOnly: true` keeps Tencent-intranet CLIs even when the
+   * machine is not on that network (tests / operator override listing).
+   * `usedEngineIds` also keeps those CLIs when an existing instance still
+   * references them (so settings stay reachable off-intranet).
    */
-  opts: { resolveCommands?: boolean } = {},
+  opts: {
+    resolveCommands?: boolean;
+    includeIntranetOnly?: boolean;
+    usedEngineIds?: readonly string[];
+  } = {},
 ): EngineInfo[] {
   const withModes = (id: string, info: EngineInfo): EngineInfo => {
     const catalog = getEngineSessionCatalog(id);
@@ -210,7 +219,10 @@ export function listEngineInfos(
     });
   });
 
-  return [...builtin, ...custom];
+  const all = [...builtin, ...custom];
+  if (opts.includeIntranetOnly === true) return all;
+  const used = new Set(opts.usedEngineIds ?? []);
+  return all.filter((e) => isIntranetEngineVisible(e.id) || used.has(e.id));
 }
 
 export function addCustomEngine(

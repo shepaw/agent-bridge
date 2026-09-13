@@ -11,9 +11,9 @@ import { SessionModeSelect } from './SessionModeSelect.js';
 import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
 const FALLBACK_ENGINES = [
-  'codebuddy', 'claude-code', 'tclaude', 'claude-internal', 'codex', 'tcodex',
+  'codebuddy', 'claude-code', 'claude-internal', 'codex',
   'opencode', 'openclaw', 'cursor', 'hermes', 'kimi', 'zcode', 'deepseek-harness',
-  'pi', 'copilot', 'gemini', 'gemini-internal', 'kiro', 'knot', 'qwen-code',
+  'pi', 'copilot', 'gemini', 'gemini-internal', 'kiro', 'qwen-code',
 ];
 
 /** Survives modal unmount so closing without submit keeps the draft. */

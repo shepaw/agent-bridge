@@ -34,6 +34,11 @@ export interface BuiltinEngineDefinition {
    * (auth probes, non-PATH binaries, extra install steps).
    */
   readonly customSetup?: boolean;
+  /**
+   * Tencent-intranet CLIs. Hidden from the catalog unless this machine is
+   * on that network (or `SHEPAW_HUB_TENCENT_INTRANET=1`).
+   */
+  readonly intranetOnly?: boolean;
 }
 
 function defineCatalog<const T extends readonly BuiltinEngineDefinition[]>(catalog: T): T {
@@ -73,6 +78,7 @@ export const BUILTIN_ENGINE_CATALOG = defineCatalog([
     args: ['-y', '@agentclientprotocol/claude-agent-acp@latest'],
     checkBinary: 'tclaude',
     installable: false,
+    intranetOnly: true,
   },
   {
     id: 'claude-internal',
@@ -102,6 +108,7 @@ export const BUILTIN_ENGINE_CATALOG = defineCatalog([
     args: ['-y', '@agentclientprotocol/codex-acp@latest'],
     checkBinary: 'tcodex',
     installable: false,
+    intranetOnly: true,
   },
   {
     id: 'opencode',
@@ -239,6 +246,7 @@ export const BUILTIN_ENGINE_CATALOG = defineCatalog([
     args: ['acp'],
     checkBinary: 'knot-cli',
     installable: false,
+    intranetOnly: true,
   },
   {
     id: 'qwen-code',

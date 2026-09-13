@@ -5,6 +5,9 @@ import type { SystemVersion } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 import { ConfirmModal } from './ConfirmModal.js';
 
+/** Re-check npm (via the 12h server cache) while the settings page stays open. */
+export const HUB_UPDATE_POLL_MS = 60 * 60 * 1000;
+
 /**
  * Version & update card (Settings → 全局): installed version, npm update
  * check, one-click upgrade, and dashboard server restart. The restart
@@ -30,6 +33,8 @@ export function VersionPanel() {
 
   useEffect(() => {
     void loadVersion();
+    const id = setInterval(() => void loadVersion(), HUB_UPDATE_POLL_MS);
+    return () => clearInterval(id);
   }, []);
 
   const checkUpdates = async () => {

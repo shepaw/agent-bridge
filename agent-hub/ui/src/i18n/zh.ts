@@ -215,8 +215,10 @@ export const zh: Record<MessageKey, string> = {
   'settings.peerHint':
     '两步：先在手机上准备好惜宝 App，再选择手机怎么连到这台电脑——同一个 Wi-Fi 直连，或用 Channel 从外网穿透进来。',
   'settings.versionTitle': '版本与更新',
-  'settings.versionHint': '当前 shepaw-agent-hub 版本、npm 更新检查与服务重启。',
+  'settings.versionHint': '当前 shepaw-agent-hub 版本、定期自动检查更新与服务重启。',
   'settings.installed': '已安装版本：{version}',
+  'settings.updateBanner': '发现新版本：{latest}',
+  'settings.updateBannerAction': '查看更新',
   'settings.checkUpdates': '检查更新',
   'settings.checkingUpdates': '检查中…',
   'settings.checkFailed': '检查更新失败：{message}',
@@ -328,7 +330,7 @@ export const zh: Record<MessageKey, string> = {
     '不想让第三方经手数据、合规要求用自己的域名、或团队本来就有自己的基础设施。如果只是现在就要外网访问，先用选项 2（托管 Channel），以后再迁也可以。',
   'connect.selfhost.reqTitle': '需要准备什么',
   'connect.selfhost.reqBody':
-    '一台有公网 IP 的服务器（1 核 2G 就够）、一个域名（如 channel.你的域名.com），以及 80 / 443 端口可被访问。',
+    '一台有公网 IP 的服务器（1 核 2G 就够）。域名可选。开放 80（HTTP）或 443（HTTPS）端口即可，没有 TLS 证书也能用。',
   'connect.selfhost.deployTitle': '第 1 步 · 部署服务（三选一）',
   'connect.selfhost.deployDocker': 'Docker Compose（推荐）',
   'connect.selfhost.deployBinary': '预编译二进制',
@@ -336,18 +338,20 @@ export const zh: Record<MessageKey, string> = {
   'connect.selfhost.openRepo': '打开仓库 ↗',
   'connect.selfhost.envTitle': '第 2 步 · 配置环境',
   'connect.selfhost.envBody':
-    '编辑 .env：BASE_URL 必须填你的公网 https 地址；AUTH_MODE 留空（保持需要登录）。DATABASE_URL 默认是 SQLite，Redis 可选，MAX_CHANNELS 是每个用户的 Channel 上限（默认 5）。',
+    '编辑 .env：BASE_URL 填你的公网地址（http 或 https 均可）；AUTH_MODE 留空（保持需要登录）。DATABASE_URL 默认是 SQLite，Redis 可选，MAX_CHANNELS 是每个用户的 Channel 上限（默认 5）。',
   'connect.selfhost.envWarn':
     'AUTH_MODE=open 会关掉所有登录校验——任何拿到 URL 的人都能完全控制这个实例。公网部署绝不要开。',
-  'connect.selfhost.tlsTitle': '第 3 步 · 套上 HTTPS',
+  'connect.selfhost.tlsTitle': '第 3 步 · 对外暴露（HTTP 或 HTTPS）',
   'connect.selfhost.tlsBody':
-    'App 走的是 wss，纯 HTTP 连不上。用 Caddy 可以自动申请证书；nginx 同理，把请求反代到 127.0.0.1:8080 即可。',
+    '有证书时推荐上 HTTPS（App 走 wss）；没有证书也可以直接用 HTTP（ws）。没有证书就跳过下面的 TLS 配置，把 BASE_URL 设成你的公网 http 地址即可。',
+  'connect.selfhost.tlsHttp': '纯 HTTP（没有证书时）',
+  'connect.selfhost.tlsHttps': 'HTTPS（有证书时，可选）',
   'connect.selfhost.createTitle': '第 4 步 · 在你自己的控制台里创建 Channel',
   'connect.selfhost.createBody':
-    '打开 https://channel.你的域名.com，登录后点「创建 Channel」，复制 Secret（只显示一次）。',
+    '打开 http(s)://channel.你的域名.com，登录后点「创建 Channel」，复制 Secret（只显示一次）。',
   'connect.selfhost.backTitle': '第 5 步 · 回到本页',
   'connect.selfhost.backBody':
-    '选择上面的选项 2，服务地址填你的 https 地址，再填刚创建的 Channel ID 和 Secret，然后保存。',
+    '选择上面的选项 2，服务地址填你的公网 http 或 https 地址，再填刚创建的 Channel ID 和 Secret，然后保存。',
   'connect.selfhost.noInbound':
     '不需要开任何入站端口：Hub 是主动外连到 Channel 服务的，路由器上无需做端口映射。',
   'connect.selfhost.troubleTitle': '连不上时这样排查',
