@@ -8,6 +8,7 @@ import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { EngineIcon } from './EngineIcon.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
+import { CursorIdeSyncModal } from './CursorIdeSyncModal.js';
 import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
 
 const FALLBACK_ENGINES = [
@@ -94,6 +95,17 @@ export function AddInstanceModal({
   const [dirPickerTarget, setDirPickerTarget] = useState<'cwd' | number>('cwd');
   const [seedPaths, setSeedPaths] = useState<string[]>([]);
   const [engineQuery, setEngineQuery] = useState('');
+  const [postCreateOffer, setPostCreateOffer] = useState<{
+    instanceId: string;
+    pendingCount: number;
+    started: boolean;
+    startError?: string;
+  } | null>(null);
+  const [showCursorIdeSync, setShowCursorIdeSync] = useState(false);
+
+  const finishCreate = () => {
+    onClose();
+  };
 
   // Keep draft in sync while editing; reopen restores these values.
   useEffect(() => {
@@ -224,6 +236,27 @@ export function AddInstanceModal({
       });
       rememberCwd(cwd);
       clearDraft();
+      const started = !created.startError;
+
+      if (engine === 'cursor') {
+        try {
+          const preview = await api.cursorIde.preview(created.id);
+          if (preview.pending.length > 0) {
+            onCreated({ started });
+            setPostCreateOffer({
+              instanceId: created.id,
+              pendingCount: preview.pending.length,
+              started,
+              startError: created.startError,
+            });
+            setLoading(false);
+            return;
+          }
+        } catch {
+          /* preview is optional — do not block instance creation */
+        }
+      }
+
       if (created.startError) {
         setErr(t('add.errStartFailed', { error: created.startError }));
         setLoading(false);
@@ -243,10 +276,39 @@ export function AddInstanceModal({
     <div style={overlay}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('add.title')}</h3>
-          <button style={closeBtn} onClick={onClose}>✕</button>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>
+            {postCreateOffer ? t('cursorIde.postCreateTitle') : t('add.title')}
+          </h3>
+          <button style={closeBtn} onClick={finishCreate}>✕</button>
         </div>
 
+        {postCreateOffer ? (
+          <div style={form}>
+            <p style={{ color: '#a6e3a1', fontSize: 14, margin: '0 0 8px' }}>
+              {t('cursorIde.postCreateSuccess')}
+            </p>
+            {postCreateOffer.startError && (
+              <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>
+                {t('add.errStartFailed', { error: postCreateOffer.startError })}
+              </p>
+            )}
+            <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 16px' }}>
+              {t('cursorIde.postCreateHint', { count: postCreateOffer.pendingCount })}
+            </p>
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              <button
+                type="button"
+                style={submitBtn}
+                onClick={() => setShowCursorIdeSync(true)}
+              >
+                {t('cursorIde.postCreateSyncBtn', { count: postCreateOffer.pendingCount })}
+              </button>
+              <button type="button" style={cancelBtn} onClick={finishCreate}>
+                {t('cursorIde.postCreateSkip')}
+              </button>
+            </div>
+          </div>
+        ) : (
         <form onSubmit={(e) => void submit(e)} style={form}>
           <p style={{ color: '#6c7086', fontSize: 12, margin: '0 0 8px' }}>
             {t('add.hint')}
@@ -529,7 +591,18 @@ export function AddInstanceModal({
             <button type="button" style={cancelBtn} onClick={onClose}>{t('common.cancel')}</button>
           </div>
         </form>
+        )}
       </div>
+
+      {showCursorIdeSync && postCreateOffer && (
+        <CursorIdeSyncModal
+          instanceId={postCreateOffer.instanceId}
+          onClose={() => {
+            setShowCursorIdeSync(false);
+            finishCreate();
+          }}
+        />
+      )}
 
       {showDirPicker && (
         <DirectoryPickerModal

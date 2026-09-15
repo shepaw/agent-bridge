@@ -531,6 +531,28 @@ export const zh: Record<MessageKey, string> = {
   'sessions.noSaved': '尚无已保存会话。从 Shepaw App 开始对话后映射会出现在这里。',
   'sessions.useSessionId': '在 Shepaw App 中使用此会话 ID：',
 
+  'cursorIde.openBtn': '同步 Cursor IDE',
+  'cursorIde.title': '同步 Cursor IDE 会话',
+  'cursorIde.hint':
+    '仅同步当前工作区在 Cursor IDE 中的对话。不会自动同步——点击按钮后才会写入。同步后可在 Shepaw App 中选择同一会话 ID 继续聊。',
+  'cursorIde.loading': '正在扫描 IDE 会话…',
+  'cursorIde.workspace': '工作区：{cwd}',
+  'cursorIde.onDisk': '磁盘 {count}',
+  'cursorIde.synced': '已同步 {count}',
+  'cursorIde.pending': '待同步 {count}',
+  'cursorIde.messages': '条',
+  'cursorIde.more': '还有 {count} 个…',
+  'cursorIde.noPending': '没有新的 IDE 会话可同步（已全部同步或磁盘上无对话）。',
+  'cursorIde.syncBtn': '同步 {count} 个会话',
+  'cursorIde.syncing': '同步中…',
+  'cursorIde.syncDone': '完成：新增 {added}，更新 {updated}，共 {total} 个已同步。',
+  'cursorIde.postCreateTitle': '实例已创建',
+  'cursorIde.postCreateSuccess': 'Agent 实例创建成功。',
+  'cursorIde.postCreateHint':
+    '检测到相同工作区有 {count} 个 Cursor IDE 会话。是否同步到 App，以便在手机上继续对话？',
+  'cursorIde.postCreateSyncBtn': '同步 {count} 个会话',
+  'cursorIde.postCreateSkip': '稍后再说',
+
   'enroll.title': '配对设备 — {id}',
   'enroll.deviceLabel': '设备名称（可选）',
   'enroll.devicePlaceholder': '我的 iPhone',

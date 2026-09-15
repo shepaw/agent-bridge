@@ -15,6 +15,22 @@ export {
 } from './engines.js';
 export { formatShellCommand, parseShellCommand } from './command-line.js';
 export {
+  previewCursorIdeSync,
+  runCursorIdeSync,
+  loadCursorIdeSyncManifest,
+  cursorIdeSyncPathFromSessionStore,
+  CURSOR_IDE_SYNC_FILENAME,
+  type CursorIdeSyncManifest,
+  type CursorIdeSyncPreview,
+  type CursorIdeSyncResult,
+} from './cursor-ide-sync.js';
+export {
+  listCursorIdeDiskSessions,
+  loadCursorIdeHistory,
+  parseCursorIdeUserText,
+  cursorIdeCwdMatches,
+} from './disk-history/cursor-ide.js';
+export {
   PermissionPolicy,
   loadPolicyFromEnv,
   DEFAULT_POLICY,

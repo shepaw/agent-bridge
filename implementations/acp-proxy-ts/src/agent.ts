@@ -45,6 +45,13 @@ import { AcpSubprocess } from './acp-subprocess.js';
 import { createHubFanoutHandler } from './hub-fanout.js';
 import { tryLoadDiskHistory } from './disk-history/index.js';
 import { listCodebuddyDiskSessions } from './disk-history/codebuddy.js';
+import { loadCursorIdeHistory } from './disk-history/cursor-ide.js';
+import {
+  cursorIdeSyncPathFromSessionStore,
+  isCursorIdeSessionSynced,
+  loadCursorIdeSyncManifest,
+  listSyncedCursorIdeSessions,
+} from './cursor-ide-sync.js';
 import { ensureHistoryCreatedAt } from './history-created-at.js';
 import { SessionHistoryCache } from './session-history-cache.js';
 import {
@@ -144,6 +151,8 @@ export interface AcpProxyAgentOptions {
   /** Extra absolute workspace roots (ACP additionalDirectories). */
   additionalDirectories?: readonly string[];
   sessionStoreOptions?: SessionStoreOptions;
+  /** Path to cursor-ide-sync.json (Hub manual IDE session sync manifest). */
+  cursorIdeSyncPath?: string;
   tunnelConfig?: ChannelTunnelConfig;
   /** Shared-device channel mailbox (no per-instance reverse tunnel). */
   mailboxConfig?: ChannelMailboxConfig;
@@ -182,6 +191,9 @@ export class AcpProxyAgent extends ACPAgentServer {
   /** Sessions that already received the device pouch card (once per Shepaw session). */
   private readonly pouchCardSessions = new Set<string>();
 
+  /** Manual Cursor IDE sync manifest (Hub writes; gateway reads on list/history). */
+  private readonly cursorIdeSyncPath: string | undefined;
+
   constructor(opts: AcpProxyAgentOptions) {
     const spec = opts.engineSpec ?? resolveEngineSpec(opts.engine);
 
@@ -215,6 +227,11 @@ export class AcpProxyAgent extends ACPAgentServer {
       gatewayDirName: GATEWAY_DIR_NAME,
       ...opts.sessionStoreOptions,
     });
+    this.cursorIdeSyncPath =
+      opts.cursorIdeSyncPath ??
+      (opts.sessionStoreOptions?.path !== undefined
+        ? cursorIdeSyncPathFromSessionStore(opts.sessionStoreOptions.path)
+        : process.env.SHEPAW_CURSOR_IDE_SYNC_PATH?.trim() || undefined);
   }
 
   async init(): Promise<void> {
@@ -438,23 +455,46 @@ export class AcpProxyAgent extends ACPAgentServer {
    * with a real label. Returns `[]` for other engines or on any I/O error.
    */
   private async listEngineDiskSessions(cwd?: string): Promise<acp.SessionInfo[]> {
-    if (this.engineId !== 'codebuddy') return [];
     const scanCwd = cwd ?? this.cwd;
-    try {
-      const list = await listCodebuddyDiskSessions(scanCwd);
-      return list.map((s) => ({
-        sessionId: s.sessionId,
-        title: s.title,
-        ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
-        cwd: scanCwd,
-      }));
-    } catch (err) {
-      log(
-        'codebuddy disk session scan failed: %s',
-        err instanceof Error ? err.message : String(err),
-      );
-      return [];
+    if (this.engineId === 'codebuddy') {
+      try {
+        const list = await listCodebuddyDiskSessions(scanCwd);
+        return list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+          cwd: scanCwd,
+        }));
+      } catch (err) {
+        log(
+          'codebuddy disk session scan failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
     }
+    // Cursor IDE: only sessions the user explicitly synced via Hub (never auto-scan).
+    if (this.engineId === 'cursor' && this.cursorIdeSyncPath !== undefined) {
+      try {
+        const list = await listSyncedCursorIdeSessions({
+          cwd: scanCwd,
+          syncPath: this.cursorIdeSyncPath,
+        });
+        return list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+          cwd: s.cwd,
+        }));
+      } catch (err) {
+        log(
+          'cursor IDE synced session list failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
+    }
+    return [];
   }
 
   override async onSessionsList(params: SessionsListParams): Promise<SessionsListResult> {
@@ -511,6 +551,24 @@ export class AcpProxyAgent extends ACPAgentServer {
     // session id (pre-seeded / recorded in the SessionStore). Falls back to the
     // id itself for adopted-verbatim sessions.
     const upstreamId = this.sessionStore.get(sessionId) ?? sessionId;
+
+    // Cursor IDE transcripts (manual sync manifest only).
+    if (this.engineId === 'cursor' && this.cursorIdeSyncPath !== undefined) {
+      const manifest = await loadCursorIdeSyncManifest(this.cursorIdeSyncPath);
+      if (isCursorIdeSessionSynced(manifest, upstreamId, this.cwd)) {
+        const fromIde = await loadCursorIdeHistory(upstreamId, this.cwd);
+        if (fromIde !== null && fromIde.length > 0) {
+          const messages = ensureHistoryCreatedAt(fromIde);
+          log(
+            'session history from cursor IDE disk session=%s messages=%d',
+            upstreamId,
+            messages.length,
+          );
+          this.sessionHistoryCache.set(sessionId, messages);
+          return { messages };
+        }
+      }
+    }
 
     // Prefer durable engine stores that already carry per-message timestamps.
     const fromDisk = await tryLoadDiskHistory(this.engineId, upstreamId, this.cwd);

@@ -542,6 +542,28 @@ export const en = {
   'sessions.noSaved': 'No saved sessions yet. Mappings appear here after you chat from the Shepaw app.',
   'sessions.useSessionId': 'Use this session ID in the Shepaw app:',
 
+  'cursorIde.openBtn': 'Sync Cursor IDE',
+  'cursorIde.title': 'Sync Cursor IDE sessions',
+  'cursorIde.hint':
+    'Only conversations from this instance\'s workspace in Cursor IDE. Nothing syncs automatically — click Sync to publish them. After sync, pick the same session ID in the Shepaw app to continue.',
+  'cursorIde.loading': 'Scanning IDE sessions…',
+  'cursorIde.workspace': 'Workspace: {cwd}',
+  'cursorIde.onDisk': '{count} on disk',
+  'cursorIde.synced': '{count} synced',
+  'cursorIde.pending': '{count} pending',
+  'cursorIde.messages': 'msgs',
+  'cursorIde.more': '+{count} more…',
+  'cursorIde.noPending': 'No new IDE sessions to sync (all synced or none on disk).',
+  'cursorIde.syncBtn': 'Sync {count} session(s)',
+  'cursorIde.syncing': 'Syncing…',
+  'cursorIde.syncDone': 'Done: {added} added, {updated} updated, {total} total synced.',
+  'cursorIde.postCreateTitle': 'Instance created',
+  'cursorIde.postCreateSuccess': 'Agent instance created successfully.',
+  'cursorIde.postCreateHint':
+    'Found {count} Cursor IDE session(s) for this workspace. Sync them to the app so you can continue on your phone?',
+  'cursorIde.postCreateSyncBtn': 'Sync {count} session(s)',
+  'cursorIde.postCreateSkip': 'Not now',
+
   'enroll.title': 'Pair device — {id}',
   'enroll.deviceLabel': 'Device label (optional)',
   'enroll.devicePlaceholder': 'My iPhone',

@@ -47,6 +47,7 @@
   },
   "dependencies": {
     "rotating-file-stream": "^3.2.3",
+    "shepaw-acp-proxy-gateway": "^0.1.10",
     "shepaw-acp-sdk": "^0.1.10",
     "ws": "^8.18.0"
   },

@@ -252,6 +252,30 @@ export interface LiveSession {
   cwd?: string;
 }
 
+/** Cursor IDE session on disk (GET /cursor-ide/preview). */
+export interface CursorIdeSessionSummary {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export interface CursorIdeSyncPreview {
+  cwd: string;
+  workspaceSlug: string;
+  onDisk: CursorIdeSessionSummary[];
+  synced: Array<CursorIdeSessionSummary & { syncedAt: string }>;
+  pending: CursorIdeSessionSummary[];
+}
+
+export interface CursorIdeSyncResult {
+  cwd: string;
+  added: number;
+  updated: number;
+  total: number;
+  sessions: Array<CursorIdeSessionSummary & { syncedAt: string }>;
+}
+
 /** One message from agent.sessions.history. */
 export interface SessionHistoryMessage {
   role: 'user' | 'agent';

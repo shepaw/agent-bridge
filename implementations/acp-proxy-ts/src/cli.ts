@@ -67,6 +67,7 @@ cli
   .option('--enrollments-path <path>', 'Override enrollments.json path')
   .option('--identity-path <path>', 'Override identity.json path')
   .option('--session-store-path <path>', 'Override sessions.json path')
+  .option('--cursor-ide-sync-path <path>', 'Override cursor-ide-sync.json path (Hub manual IDE sync)')
   .option('--tunnel', 'Open reverse tunnel (PAW_ACP_TUNNEL_* env vars)')
   .option('--tunnel-server <url>', 'Channel Service base URL')
   .option('--tunnel-channel-id <id>', 'Channel ID')
@@ -85,6 +86,7 @@ cli
     enrollmentsPath?: string;
     identityPath?: string;
     sessionStorePath?: string;
+    cursorIdeSyncPath?: string;
     tunnel?: boolean;
     tunnelServer?: string;
     tunnelChannelId?: string;
@@ -163,6 +165,7 @@ cli
       enrollmentsPath: opts.enrollmentsPath,
       identityPath: opts.identityPath,
       sessionStoreOptions: opts.sessionStorePath ? { path: opts.sessionStorePath } : undefined,
+      cursorIdeSyncPath: opts.cursorIdeSyncPath,
       tunnelConfig,
       mailboxConfig,
     });

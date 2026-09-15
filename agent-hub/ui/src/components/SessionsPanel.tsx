@@ -1,11 +1,14 @@
+import { useState } from 'react';
 import { useConversations } from '../hooks/useConversations.js';
 import type { InstanceStatus } from '../api/types.js';
 import { SessionList } from './SessionList.js';
 import { SessionTranscript } from './SessionTranscript.js';
+import { CursorIdeSyncModal } from './CursorIdeSyncModal.js';
 import { useI18n } from '../i18n/index.js';
 
 interface SessionsPanelProps {
   instanceId: string;
+  engine: string;
   status: InstanceStatus;
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string | null) => void;
@@ -16,6 +19,7 @@ interface SessionsPanelProps {
 
 export function SessionsPanel({
   instanceId,
+  engine,
   status,
   selectedSessionId,
   onSelectSession,
@@ -24,6 +28,8 @@ export function SessionsPanel({
   onOpenStore,
 }: SessionsPanelProps) {
   const { t } = useI18n();
+  const [showCursorIdeSync, setShowCursorIdeSync] = useState(false);
+  const isCursor = engine === 'cursor';
   const {
     sessions,
     listLoading,
@@ -57,6 +63,15 @@ export function SessionsPanel({
           {gatewayReady ? sessionCountLabel : status.availability}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
+          {isCursor && (
+            <button
+              type="button"
+              style={linkBtn}
+              onClick={() => setShowCursorIdeSync(true)}
+            >
+              {t('cursorIde.openBtn')}
+            </button>
+          )}
           {onManageMappings !== undefined && (
             <button type="button" style={linkBtn} onClick={onManageMappings}>
               {t('sessions.manage')}
@@ -102,6 +117,14 @@ export function SessionsPanel({
             />
           </div>
         </div>
+      )}
+
+      {showCursorIdeSync && (
+        <CursorIdeSyncModal
+          instanceId={instanceId}
+          onClose={() => setShowCursorIdeSync(false)}
+          onSynced={() => void loadSessions('manual')}
+        />
       )}
     </div>
   );

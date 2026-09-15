@@ -20,6 +20,8 @@
  * GET    /api/instances/:id/conversations/:sessionId/history — session transcript
  * GET    /api/instances/:id/sessions   — list persisted Shepaw→ACP session mappings
  * DELETE /api/instances/:id/sessions/:shepawSessionId — remove a stale mapping
+ * GET    /api/instances/:id/cursor-ide/preview — scan IDE transcripts for this cwd
+ * POST   /api/instances/:id/cursor-ide/sync — manually sync IDE sessions into manifest
  * GET    /api/instances/:id/envvars   — list env var keys (values masked)
  * PUT    /api/instances/:id/envvars/:key — set a single env var (also updates credential hints cache)
  * DELETE /api/instances/:id/envvars/:key — delete a single env var
@@ -52,6 +54,9 @@ import {
   hubRoot,
   listInstanceSessions,
   deleteInstanceSession,
+  previewInstanceCursorIdeSync,
+  syncInstanceCursorIdeSessions,
+  CursorIdeSyncNotSupportedError,
   listInstanceConversations,
   getInstanceConversationHistory,
   getInstanceAgentCard,
@@ -980,6 +985,46 @@ instancesRouter.get('/:id/conversations/:sessionId/history', async (req: Request
       res.status(503).json({ error: err.message });
     } else {
       res.status(500).json({ error: String(err) });
+    }
+  }
+});
+
+// ── Cursor IDE manual sync ───────────────────────────────────────
+
+instancesRouter.get('/:id/cursor-ide/preview', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const preview = await previewInstanceCursorIdeSync(req.params.id!);
+    res.json(preview);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof CursorIdeSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+instancesRouter.post('/:id/cursor-ide/sync', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sessionIds = Array.isArray(body.sessionIds)
+      ? body.sessionIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const result = await syncInstanceCursorIdeSessions(req.params.id!, { sessionIds });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof CursorIdeSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   }
 });

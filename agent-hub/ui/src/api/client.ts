@@ -24,6 +24,8 @@ import type {
   StoredSession,
   LiveSession,
   SessionHistoryMessage,
+  CursorIdeSyncPreview,
+  CursorIdeSyncResult,
   UpdateCustomEngineInput,
   UpdateInstanceInput,
   FsBrowseResult,
@@ -244,6 +246,20 @@ export const api = {
     remove: (instanceId: string, shepawSessionId: string): Promise<void> =>
       request(`/instances/${instanceId}/sessions/${encodeURIComponent(shepawSessionId)}`, {
         method: 'DELETE',
+      }),
+  },
+
+  cursorIde: {
+    preview: (instanceId: string): Promise<CursorIdeSyncPreview> =>
+      request(`/instances/${instanceId}/cursor-ide/preview`),
+
+    sync: (
+      instanceId: string,
+      opts?: { sessionIds?: string[] },
+    ): Promise<CursorIdeSyncResult> =>
+      request(`/instances/${instanceId}/cursor-ide/sync`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {}),
       }),
   },
 

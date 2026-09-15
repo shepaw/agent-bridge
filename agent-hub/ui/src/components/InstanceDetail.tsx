@@ -637,6 +637,7 @@ export function InstanceDetail({
               </div>
               <SessionsPanel
                 instanceId={instanceId}
+                engine={instance.engine}
                 status={instance.status}
                 selectedSessionId={selectedSessionId}
                 onSelectSession={handleSessionSelect}

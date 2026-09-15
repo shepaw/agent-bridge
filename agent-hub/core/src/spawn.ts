@@ -191,6 +191,7 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       '--port', String(instance.port),
       '--host', instance.host,
       '--session-store-path', paths.sessionsPath,
+      '--cursor-ide-sync-path', paths.cursorIdeSyncPath,
       ...((instance.additionalDirectories ?? []).flatMap((dir) => [
         '--additional-directory',
         dir,

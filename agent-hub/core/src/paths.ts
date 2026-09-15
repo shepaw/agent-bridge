@@ -12,6 +12,7 @@
  *         ├── enrollments.json        — per-instance pairing-code store
  *         ├── state.json              — pid / port / startedAt / exitCode
  *         ├── sessions.json           — Shepaw session_id → upstream ACP session_id
+ *         ├── cursor-ide-sync.json    — manually synced Cursor IDE conversations
  *         ├── peer-attachments/       — files pushed over peer agent_chat
  *         └── logs/
  *             └── agent.log           — stdout+stderr from the gateway child
@@ -45,6 +46,8 @@ export interface InstancePaths {
   readonly enrollmentsPath: string;
   readonly statePath: string;
   readonly sessionsPath: string;
+  /** Manual Cursor IDE → App session sync manifest (cursor-ide-sync.json). */
+  readonly cursorIdeSyncPath: string;
   readonly logsDir: string;
   readonly logFile: string;
 }
@@ -171,6 +174,7 @@ export function instancePaths(instanceId: string, root: string = hubRoot()): Ins
     enrollmentsPath: join(instanceRoot, 'enrollments.json'),
     statePath: join(instanceRoot, 'state.json'),
     sessionsPath: join(instanceRoot, 'sessions.json'),
+    cursorIdeSyncPath: join(instanceRoot, 'cursor-ide-sync.json'),
     logsDir: join(instanceRoot, 'logs'),
     logFile: join(instanceRoot, 'logs', 'agent.log'),
   };

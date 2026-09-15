@@ -260,6 +260,13 @@ export type {
   InstanceRuntimeStatus,
 } from './runtime-status.js';
 export { deleteInstanceSession, listInstanceSessions } from './sessions.js';
+export {
+  previewInstanceCursorIdeSync,
+  syncInstanceCursorIdeSessions,
+  CursorIdeSyncNotSupportedError,
+  type CursorIdeSyncPreview,
+  type CursorIdeSyncResult,
+} from './cursor-ide-sync.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {
