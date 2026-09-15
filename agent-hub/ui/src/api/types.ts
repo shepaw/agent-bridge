@@ -276,6 +276,15 @@ export interface CursorIdeSyncResult {
   sessions: Array<CursorIdeSessionSummary & { syncedAt: string }>;
 }
 
+/** Claude Code CLI session on disk (GET /claude-code/preview). */
+export type ClaudeCodeSessionSummary = CursorIdeSessionSummary;
+export type ClaudeCodeSyncPreview = CursorIdeSyncPreview;
+export type ClaudeCodeSyncResult = CursorIdeSyncResult;
+
+export type CliSessionSyncSource = 'cursor' | 'claude-code';
+export type CliSessionSyncPreview = CursorIdeSyncPreview;
+export type CliSessionSyncResult = CursorIdeSyncResult;
+
 /** One message from agent.sessions.history. */
 export interface SessionHistoryMessage {
   role: 'user' | 'agent';

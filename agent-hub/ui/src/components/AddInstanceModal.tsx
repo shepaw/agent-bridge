@@ -1,15 +1,57 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../api/client.js';
-import type { EngineInfo, HubMeta } from '../api/types.js';
+import type { CliSessionSyncSource, EngineInfo, HubMeta } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
+import type { MessageKey } from '../i18n/index.js';
 import { rememberCwd } from '../utils/cwdHistory.js';
 import { filterAndSortEngines } from '../utils/enginePicker.js';
 import { CwdPathInput } from './CwdPathInput.js';
 import { DirectoryPickerModal } from './DirectoryPickerModal.js';
 import { EngineIcon } from './EngineIcon.js';
 import { SessionModeSelect } from './SessionModeSelect.js';
-import { CursorIdeSyncModal } from './CursorIdeSyncModal.js';
+import { CliSessionSyncModal } from './CliSessionSyncModal.js';
 import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
+
+const POST_CREATE_I18N: Record<
+  CliSessionSyncSource,
+  { title: MessageKey; success: MessageKey; hint: MessageKey; syncBtn: MessageKey; skip: MessageKey }
+> = {
+  cursor: {
+    title: 'cursorIde.postCreateTitle',
+    success: 'cursorIde.postCreateSuccess',
+    hint: 'cursorIde.postCreateHint',
+    syncBtn: 'cursorIde.postCreateSyncBtn',
+    skip: 'cursorIde.postCreateSkip',
+  },
+  'claude-code': {
+    title: 'claudeCode.postCreateTitle',
+    success: 'claudeCode.postCreateSuccess',
+    hint: 'claudeCode.postCreateHint',
+    syncBtn: 'claudeCode.postCreateSyncBtn',
+    skip: 'claudeCode.postCreateSkip',
+  },
+};
+
+async function previewPendingCliSessions(
+  engine: string,
+  instanceId: string,
+): Promise<{ syncSource: CliSessionSyncSource; pendingCount: number } | null> {
+  if (engine === 'cursor') {
+    const preview = await api.cursorIde.preview(instanceId);
+    if (preview.pending.length > 0) {
+      return { syncSource: 'cursor', pendingCount: preview.pending.length };
+    }
+    return null;
+  }
+  if (engine === 'claude-code') {
+    const preview = await api.claudeCode.preview(instanceId);
+    if (preview.pending.length > 0) {
+      return { syncSource: 'claude-code', pendingCount: preview.pending.length };
+    }
+    return null;
+  }
+  return null;
+}
 
 const FALLBACK_ENGINES = [
   'codebuddy', 'claude-code', 'claude-internal', 'codex',
@@ -100,8 +142,9 @@ export function AddInstanceModal({
     pendingCount: number;
     started: boolean;
     startError?: string;
+    syncSource: CliSessionSyncSource;
   } | null>(null);
-  const [showCursorIdeSync, setShowCursorIdeSync] = useState(false);
+  const [showCliSync, setShowCliSync] = useState(false);
 
   const finishCreate = () => {
     onClose();
@@ -238,23 +281,22 @@ export function AddInstanceModal({
       clearDraft();
       const started = !created.startError;
 
-      if (engine === 'cursor') {
-        try {
-          const preview = await api.cursorIde.preview(created.id);
-          if (preview.pending.length > 0) {
-            onCreated({ started });
-            setPostCreateOffer({
-              instanceId: created.id,
-              pendingCount: preview.pending.length,
-              started,
-              startError: created.startError,
-            });
-            setLoading(false);
-            return;
-          }
-        } catch {
-          /* preview is optional — do not block instance creation */
+      try {
+        const pendingOffer = await previewPendingCliSessions(engine, created.id);
+        if (pendingOffer !== null) {
+          onCreated({ started });
+          setPostCreateOffer({
+            instanceId: created.id,
+            pendingCount: pendingOffer.pendingCount,
+            started,
+            startError: created.startError,
+            syncSource: pendingOffer.syncSource,
+          });
+          setLoading(false);
+          return;
         }
+      } catch {
+        /* preview is optional — do not block instance creation */
       }
 
       if (created.startError) {
@@ -277,7 +319,9 @@ export function AddInstanceModal({
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
           <h3 style={{ margin: 0, color: '#cdd6f4' }}>
-            {postCreateOffer ? t('cursorIde.postCreateTitle') : t('add.title')}
+            {postCreateOffer
+              ? t(POST_CREATE_I18N[postCreateOffer.syncSource].title)
+              : t('add.title')}
           </h3>
           <button style={closeBtn} onClick={finishCreate}>✕</button>
         </div>
@@ -285,7 +329,7 @@ export function AddInstanceModal({
         {postCreateOffer ? (
           <div style={form}>
             <p style={{ color: '#a6e3a1', fontSize: 14, margin: '0 0 8px' }}>
-              {t('cursorIde.postCreateSuccess')}
+              {t(POST_CREATE_I18N[postCreateOffer.syncSource].success)}
             </p>
             {postCreateOffer.startError && (
               <p style={{ color: '#f38ba8', fontSize: 13, margin: '0 0 8px' }}>
@@ -293,18 +337,22 @@ export function AddInstanceModal({
               </p>
             )}
             <p style={{ color: '#a6adc8', fontSize: 13, margin: '0 0 16px' }}>
-              {t('cursorIde.postCreateHint', { count: postCreateOffer.pendingCount })}
+              {t(POST_CREATE_I18N[postCreateOffer.syncSource].hint, {
+                count: postCreateOffer.pendingCount,
+              })}
             </p>
             <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
               <button
                 type="button"
                 style={submitBtn}
-                onClick={() => setShowCursorIdeSync(true)}
+                onClick={() => setShowCliSync(true)}
               >
-                {t('cursorIde.postCreateSyncBtn', { count: postCreateOffer.pendingCount })}
+                {t(POST_CREATE_I18N[postCreateOffer.syncSource].syncBtn, {
+                  count: postCreateOffer.pendingCount,
+                })}
               </button>
               <button type="button" style={cancelBtn} onClick={finishCreate}>
-                {t('cursorIde.postCreateSkip')}
+                {t(POST_CREATE_I18N[postCreateOffer.syncSource].skip)}
               </button>
             </div>
           </div>
@@ -594,11 +642,12 @@ export function AddInstanceModal({
         )}
       </div>
 
-      {showCursorIdeSync && postCreateOffer && (
-        <CursorIdeSyncModal
+      {showCliSync && postCreateOffer && (
+        <CliSessionSyncModal
           instanceId={postCreateOffer.instanceId}
+          source={postCreateOffer.syncSource}
           onClose={() => {
-            setShowCursorIdeSync(false);
+            setShowCliSync(false);
             finishCreate();
           }}
         />

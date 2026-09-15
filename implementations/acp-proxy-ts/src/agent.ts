@@ -45,7 +45,15 @@ import { AcpSubprocess } from './acp-subprocess.js';
 import { createHubFanoutHandler } from './hub-fanout.js';
 import { tryLoadDiskHistory } from './disk-history/index.js';
 import { listCodebuddyDiskSessions } from './disk-history/codebuddy.js';
+import { loadClaudeCodeHistory } from './disk-history/claude-code.js';
 import { loadCursorIdeHistory } from './disk-history/cursor-ide.js';
+import {
+  claudeCodeSyncPathFromSessionStore,
+  isClaudeCodeDiskEngine,
+  isClaudeCodeSessionSynced,
+  loadClaudeCodeSyncManifest,
+  listSyncedClaudeCodeSessions,
+} from './claude-code-sync.js';
 import {
   cursorIdeSyncPathFromSessionStore,
   isCursorIdeSessionSynced,
@@ -153,6 +161,8 @@ export interface AcpProxyAgentOptions {
   sessionStoreOptions?: SessionStoreOptions;
   /** Path to cursor-ide-sync.json (Hub manual IDE session sync manifest). */
   cursorIdeSyncPath?: string;
+  /** Path to claude-code-sync.json (Hub manual Claude Code CLI sync manifest). */
+  claudeCodeSyncPath?: string;
   tunnelConfig?: ChannelTunnelConfig;
   /** Shared-device channel mailbox (no per-instance reverse tunnel). */
   mailboxConfig?: ChannelMailboxConfig;
@@ -194,6 +204,9 @@ export class AcpProxyAgent extends ACPAgentServer {
   /** Manual Cursor IDE sync manifest (Hub writes; gateway reads on list/history). */
   private readonly cursorIdeSyncPath: string | undefined;
 
+  /** Manual Claude Code CLI sync manifest (Hub writes; gateway reads on list/history). */
+  private readonly claudeCodeSyncPath: string | undefined;
+
   constructor(opts: AcpProxyAgentOptions) {
     const spec = opts.engineSpec ?? resolveEngineSpec(opts.engine);
 
@@ -232,6 +245,11 @@ export class AcpProxyAgent extends ACPAgentServer {
       (opts.sessionStoreOptions?.path !== undefined
         ? cursorIdeSyncPathFromSessionStore(opts.sessionStoreOptions.path)
         : process.env.SHEPAW_CURSOR_IDE_SYNC_PATH?.trim() || undefined);
+    this.claudeCodeSyncPath =
+      opts.claudeCodeSyncPath ??
+      (opts.sessionStoreOptions?.path !== undefined
+        ? claudeCodeSyncPathFromSessionStore(opts.sessionStoreOptions.path)
+        : process.env.SHEPAW_CLAUDE_CODE_SYNC_PATH?.trim() || undefined);
   }
 
   async init(): Promise<void> {
@@ -494,6 +512,27 @@ export class AcpProxyAgent extends ACPAgentServer {
         return [];
       }
     }
+    // Claude Code CLI: only sessions the user explicitly synced via Hub (never auto-scan).
+    if (isClaudeCodeDiskEngine(this.engineId) && this.claudeCodeSyncPath !== undefined) {
+      try {
+        const list = await listSyncedClaudeCodeSessions({
+          cwd: scanCwd,
+          syncPath: this.claudeCodeSyncPath,
+        });
+        return list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+          cwd: s.cwd,
+        }));
+      } catch (err) {
+        log(
+          'claude code synced session list failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
+    }
     return [];
   }
 
@@ -561,6 +600,24 @@ export class AcpProxyAgent extends ACPAgentServer {
           const messages = ensureHistoryCreatedAt(fromIde);
           log(
             'session history from cursor IDE disk session=%s messages=%d',
+            upstreamId,
+            messages.length,
+          );
+          this.sessionHistoryCache.set(sessionId, messages);
+          return { messages };
+        }
+      }
+    }
+
+    // Claude Code CLI transcripts (manual sync manifest only).
+    if (isClaudeCodeDiskEngine(this.engineId) && this.claudeCodeSyncPath !== undefined) {
+      const manifest = await loadClaudeCodeSyncManifest(this.claudeCodeSyncPath);
+      if (isClaudeCodeSessionSynced(manifest, upstreamId, this.cwd)) {
+        const fromCli = await loadClaudeCodeHistory(upstreamId, this.cwd);
+        if (fromCli !== null && fromCli.length > 0) {
+          const messages = ensureHistoryCreatedAt(fromCli);
+          log(
+            'session history from claude code CLI disk session=%s messages=%d',
             upstreamId,
             messages.length,
           );

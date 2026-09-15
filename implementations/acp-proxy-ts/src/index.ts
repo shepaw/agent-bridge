@@ -25,6 +25,22 @@ export {
   type CursorIdeSyncResult,
 } from './cursor-ide-sync.js';
 export {
+  previewClaudeCodeSync,
+  runClaudeCodeSync,
+  loadClaudeCodeSyncManifest,
+  claudeCodeSyncPathFromSessionStore,
+  isClaudeCodeDiskEngine,
+  CLAUDE_CODE_SYNC_FILENAME,
+  type ClaudeCodeSyncManifest,
+  type ClaudeCodeSyncPreview,
+  type ClaudeCodeSyncResult,
+} from './claude-code-sync.js';
+export {
+  listClaudeCodeDiskSessions,
+  loadClaudeCodeHistory,
+  claudeCodeCwdMatches,
+} from './disk-history/claude-code.js';
+export {
   listCursorIdeDiskSessions,
   loadCursorIdeHistory,
   parseCursorIdeUserText,

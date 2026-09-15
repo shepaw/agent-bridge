@@ -564,6 +564,22 @@ export const en = {
   'cursorIde.postCreateSyncBtn': 'Sync {count} session(s)',
   'cursorIde.postCreateSkip': 'Not now',
 
+  'claudeCode.openBtn': 'Sync Claude Code CLI',
+  'claudeCode.title': 'Sync Claude Code CLI sessions',
+  'claudeCode.hint':
+    'Only conversations from this instance\'s workspace in the Claude Code CLI (`~/.claude/projects/...`). Nothing syncs automatically — click Sync to publish them. After sync, pick the same session ID in the Shepaw app to continue.',
+  'claudeCode.loading': 'Scanning CLI sessions…',
+  'claudeCode.noPending': 'No new CLI sessions to sync (all synced or none on disk).',
+  'claudeCode.syncBtn': 'Sync {count} session(s)',
+  'claudeCode.syncing': 'Syncing…',
+  'claudeCode.syncDone': 'Done: {added} added, {updated} updated, {total} total synced.',
+  'claudeCode.postCreateTitle': 'Instance created',
+  'claudeCode.postCreateSuccess': 'Agent instance created successfully.',
+  'claudeCode.postCreateHint':
+    'Found {count} Claude Code CLI session(s) for this workspace. Sync them to the app so you can continue on your phone?',
+  'claudeCode.postCreateSyncBtn': 'Sync {count} session(s)',
+  'claudeCode.postCreateSkip': 'Not now',
+
   'enroll.title': 'Pair device — {id}',
   'enroll.deviceLabel': 'Device label (optional)',
   'enroll.devicePlaceholder': 'My iPhone',

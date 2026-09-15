@@ -3,7 +3,8 @@ import { useConversations } from '../hooks/useConversations.js';
 import type { InstanceStatus } from '../api/types.js';
 import { SessionList } from './SessionList.js';
 import { SessionTranscript } from './SessionTranscript.js';
-import { CursorIdeSyncModal } from './CursorIdeSyncModal.js';
+import { CliSessionSyncModal } from './CliSessionSyncModal.js';
+import type { CliSessionSyncSource } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 
 interface SessionsPanelProps {
@@ -28,8 +29,9 @@ export function SessionsPanel({
   onOpenStore,
 }: SessionsPanelProps) {
   const { t } = useI18n();
-  const [showCursorIdeSync, setShowCursorIdeSync] = useState(false);
-  const isCursor = engine === 'cursor';
+  const [showCliSync, setShowCliSync] = useState(false);
+  const cliSyncSource: CliSessionSyncSource | null =
+    engine === 'cursor' ? 'cursor' : engine === 'claude-code' ? 'claude-code' : null;
   const {
     sessions,
     listLoading,
@@ -63,13 +65,13 @@ export function SessionsPanel({
           {gatewayReady ? sessionCountLabel : status.availability}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
-          {isCursor && (
+          {cliSyncSource !== null && (
             <button
               type="button"
               style={linkBtn}
-              onClick={() => setShowCursorIdeSync(true)}
+              onClick={() => setShowCliSync(true)}
             >
-              {t('cursorIde.openBtn')}
+              {t(cliSyncSource === 'cursor' ? 'cursorIde.openBtn' : 'claudeCode.openBtn')}
             </button>
           )}
           {onManageMappings !== undefined && (
@@ -119,10 +121,11 @@ export function SessionsPanel({
         </div>
       )}
 
-      {showCursorIdeSync && (
-        <CursorIdeSyncModal
+      {showCliSync && cliSyncSource !== null && (
+        <CliSessionSyncModal
           instanceId={instanceId}
-          onClose={() => setShowCursorIdeSync(false)}
+          source={cliSyncSource}
+          onClose={() => setShowCliSync(false)}
           onSynced={() => void loadSessions('manual')}
         />
       )}

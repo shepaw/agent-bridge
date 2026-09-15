@@ -267,6 +267,13 @@ export {
   type CursorIdeSyncPreview,
   type CursorIdeSyncResult,
 } from './cursor-ide-sync.js';
+export {
+  previewInstanceClaudeCodeSync,
+  syncInstanceClaudeCodeSessions,
+  ClaudeCodeSyncNotSupportedError,
+  type ClaudeCodeSyncPreview,
+  type ClaudeCodeSyncResult,
+} from './claude-code-sync.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {

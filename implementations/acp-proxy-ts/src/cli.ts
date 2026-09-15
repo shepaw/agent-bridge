@@ -68,6 +68,7 @@ cli
   .option('--identity-path <path>', 'Override identity.json path')
   .option('--session-store-path <path>', 'Override sessions.json path')
   .option('--cursor-ide-sync-path <path>', 'Override cursor-ide-sync.json path (Hub manual IDE sync)')
+  .option('--claude-code-sync-path <path>', 'Override claude-code-sync.json path (Hub manual CLI sync)')
   .option('--tunnel', 'Open reverse tunnel (PAW_ACP_TUNNEL_* env vars)')
   .option('--tunnel-server <url>', 'Channel Service base URL')
   .option('--tunnel-channel-id <id>', 'Channel ID')
@@ -87,6 +88,7 @@ cli
     identityPath?: string;
     sessionStorePath?: string;
     cursorIdeSyncPath?: string;
+    claudeCodeSyncPath?: string;
     tunnel?: boolean;
     tunnelServer?: string;
     tunnelChannelId?: string;
@@ -166,6 +168,7 @@ cli
       identityPath: opts.identityPath,
       sessionStoreOptions: opts.sessionStorePath ? { path: opts.sessionStorePath } : undefined,
       cursorIdeSyncPath: opts.cursorIdeSyncPath,
+      claudeCodeSyncPath: opts.claudeCodeSyncPath,
       tunnelConfig,
       mailboxConfig,
     });

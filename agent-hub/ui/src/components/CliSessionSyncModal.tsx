@@ -1,17 +1,58 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
-import type { CursorIdeSyncPreview } from '../api/types.js';
+import type { CliSessionSyncPreview, CliSessionSyncSource } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
+import type { MessageKey } from '../i18n/index.js';
 
-interface CursorIdeSyncModalProps {
+interface CliSessionSyncModalProps {
   instanceId: string;
+  source: CliSessionSyncSource;
   onClose: () => void;
   onSynced?: () => void;
 }
 
-export function CursorIdeSyncModal({ instanceId, onClose, onSynced }: CursorIdeSyncModalProps) {
+const I18N: Record<
+  CliSessionSyncSource,
+  Record<'title' | 'hint' | 'loading' | 'openBtn' | 'noPending' | 'syncBtn' | 'syncing' | 'syncDone', MessageKey>
+> = {
+  cursor: {
+    openBtn: 'cursorIde.openBtn',
+    title: 'cursorIde.title',
+    hint: 'cursorIde.hint',
+    loading: 'cursorIde.loading',
+    noPending: 'cursorIde.noPending',
+    syncBtn: 'cursorIde.syncBtn',
+    syncing: 'cursorIde.syncing',
+    syncDone: 'cursorIde.syncDone',
+  },
+  'claude-code': {
+    openBtn: 'claudeCode.openBtn',
+    title: 'claudeCode.title',
+    hint: 'claudeCode.hint',
+    loading: 'claudeCode.loading',
+    noPending: 'claudeCode.noPending',
+    syncBtn: 'claudeCode.syncBtn',
+    syncing: 'claudeCode.syncing',
+    syncDone: 'claudeCode.syncDone',
+  },
+};
+
+async function previewSync(source: CliSessionSyncSource, instanceId: string): Promise<CliSessionSyncPreview> {
+  return source === 'cursor'
+    ? api.cursorIde.preview(instanceId)
+    : api.claudeCode.preview(instanceId);
+}
+
+async function runSync(source: CliSessionSyncSource, instanceId: string) {
+  return source === 'cursor'
+    ? api.cursorIde.sync(instanceId)
+    : api.claudeCode.sync(instanceId);
+}
+
+export function CliSessionSyncModal({ instanceId, source, onClose, onSynced }: CliSessionSyncModalProps) {
   const { t } = useI18n();
-  const [preview, setPreview] = useState<CursorIdeSyncPreview | null>(null);
+  const keys = I18N[source];
+  const [preview, setPreview] = useState<CliSessionSyncPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -21,27 +62,27 @@ export function CursorIdeSyncModal({ instanceId, onClose, onSynced }: CursorIdeS
     setLoading(true);
     setErr(null);
     try {
-      const data = await api.cursorIde.preview(instanceId);
+      const data = await previewSync(source, instanceId);
       setPreview(data);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [instanceId]);
+  }, [instanceId, source]);
 
   useEffect(() => {
     void loadPreview();
   }, [loadPreview]);
 
-  const runSync = async () => {
+  const handleSync = async () => {
     setSyncing(true);
     setErr(null);
     setResultMsg(null);
     try {
-      const result = await api.cursorIde.sync(instanceId);
+      const result = await runSync(source, instanceId);
       setResultMsg(
-        t('cursorIde.syncDone', {
+        t(keys.syncDone, {
           added: result.added,
           updated: result.updated,
           total: result.total,
@@ -60,14 +101,14 @@ export function CursorIdeSyncModal({ instanceId, onClose, onSynced }: CursorIdeS
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={header}>
-          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t('cursorIde.title')}</h3>
+          <h3 style={{ margin: 0, color: '#cdd6f4' }}>{t(keys.title)}</h3>
           <button type="button" style={closeBtn} onClick={onClose}>✕</button>
         </div>
 
         <div style={body}>
-          <p style={hint}>{t('cursorIde.hint')}</p>
+          <p style={hint}>{t(keys.hint)}</p>
 
-          {loading && <p style={muted}>{t('cursorIde.loading')}</p>}
+          {loading && <p style={muted}>{t(keys.loading)}</p>}
           {err && <p style={errorText}>{err}</p>}
           {resultMsg && <p style={okText}>{resultMsg}</p>}
 
@@ -95,7 +136,7 @@ export function CursorIdeSyncModal({ instanceId, onClose, onSynced }: CursorIdeS
                   )}
                 </ul>
               ) : (
-                <p style={muted}>{t('cursorIde.noPending')}</p>
+                <p style={muted}>{t(keys.noPending)}</p>
               )}
             </>
           )}
@@ -112,14 +153,19 @@ export function CursorIdeSyncModal({ instanceId, onClose, onSynced }: CursorIdeS
               opacity: syncing || (preview?.pending.length ?? 0) === 0 ? 0.55 : 1,
             }}
             disabled={syncing || loading || (preview?.pending.length ?? 0) === 0}
-            onClick={() => void runSync()}
+            onClick={() => void handleSync()}
           >
-            {syncing ? t('cursorIde.syncing') : t('cursorIde.syncBtn', { count: preview?.pending.length ?? 0 })}
+            {syncing ? t(keys.syncing) : t(keys.syncBtn, { count: preview?.pending.length ?? 0 })}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+/** @deprecated Use CliSessionSyncModal with source="cursor" */
+export function CursorIdeSyncModal(props: Omit<CliSessionSyncModalProps, 'source'>) {
+  return <CliSessionSyncModal {...props} source="cursor" />;
 }
 
 const overlay: React.CSSProperties = {

@@ -553,6 +553,22 @@ export const zh: Record<MessageKey, string> = {
   'cursorIde.postCreateSyncBtn': '同步 {count} 个会话',
   'cursorIde.postCreateSkip': '稍后再说',
 
+  'claudeCode.openBtn': '同步 Claude Code CLI',
+  'claudeCode.title': '同步 Claude Code CLI 会话',
+  'claudeCode.hint':
+    '仅同步当前工作区在 Claude Code CLI 中的对话（`~/.claude/projects/...`）。不会自动同步——点击按钮后才会写入。同步后可在 Shepaw App 中选择同一会话 ID 继续聊。',
+  'claudeCode.loading': '正在扫描 CLI 会话…',
+  'claudeCode.noPending': '没有新的 CLI 会话可同步（已全部同步或磁盘上无对话）。',
+  'claudeCode.syncBtn': '同步 {count} 个会话',
+  'claudeCode.syncing': '同步中…',
+  'claudeCode.syncDone': '完成：新增 {added}，更新 {updated}，共 {total} 个已同步。',
+  'claudeCode.postCreateTitle': '实例已创建',
+  'claudeCode.postCreateSuccess': 'Agent 实例创建成功。',
+  'claudeCode.postCreateHint':
+    '检测到相同工作区有 {count} 个 Claude Code CLI 会话。是否同步到 App，以便在手机上继续对话？',
+  'claudeCode.postCreateSyncBtn': '同步 {count} 个会话',
+  'claudeCode.postCreateSkip': '稍后再说',
+
   'enroll.title': '配对设备 — {id}',
   'enroll.deviceLabel': '设备名称（可选）',
   'enroll.devicePlaceholder': '我的 iPhone',

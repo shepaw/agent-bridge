@@ -1,9 +1,10 @@
 /**
- * Claude Code — `~/.claude/projects/{slug}/{sessionId}.jsonl`
+ * Claude Code CLI — `~/.claude/projects/{slug}/{sessionId}.jsonl`
  * Lines of type `user` / `assistant` carry ISO `timestamp`.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 import {
   claudeProjectSlug,
@@ -14,11 +15,22 @@ import {
   type DiskHistoryMessage,
 } from './util.js';
 
+export interface ClaudeCodeSessionSummary {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+function claudeCodeProjectsDir(cwd: string): string {
+  return homePath('.claude', 'projects', claudeProjectSlug(cwd));
+}
+
 export async function loadClaudeCodeHistory(
   sessionId: string,
   cwd: string,
 ): Promise<DiskHistoryMessage[] | null> {
-  const path = homePath('.claude', 'projects', claudeProjectSlug(cwd), `${sessionId}.jsonl`);
+  const path = joinClaudeCodeSessionPath(cwd, sessionId);
   let raw: string;
   try {
     raw = await readFile(path, 'utf-8');
@@ -55,4 +67,66 @@ export async function loadClaudeCodeHistory(
     });
   }
   return out.length > 0 ? out : null;
+}
+
+function joinClaudeCodeSessionPath(cwd: string, sessionId: string): string {
+  return homePath('.claude', 'projects', claudeProjectSlug(cwd), `${sessionId}.jsonl`);
+}
+
+function deriveTitle(messages: DiskHistoryMessage[]): string {
+  const firstUser = messages.find((m) => m.role === 'user' && m.content.trim().length > 0);
+  if (firstUser === undefined) return '';
+  return firstUser.content.trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function latestCreatedAt(messages: DiskHistoryMessage[]): string {
+  let updatedAt = '';
+  for (const m of messages) {
+    if (m.created_at !== undefined && m.created_at.length > 0 && m.created_at > updatedAt) {
+      updatedAt = m.created_at;
+    }
+  }
+  return updatedAt;
+}
+
+/**
+ * List Claude Code CLI sessions on disk for `cwd`. Only reads
+ * `~/.claude/projects/{slug}/*.jsonl` for the matching workspace slug.
+ */
+export async function listClaudeCodeDiskSessions(cwd: string): Promise<ClaudeCodeSessionSummary[]> {
+  const dir = claudeCodeProjectsDir(cwd);
+  let files: string[];
+  try {
+    files = await readdir(dir);
+  } catch {
+    return [];
+  }
+
+  const out: ClaudeCodeSessionSummary[] = [];
+  for (const file of files) {
+    if (!file.endsWith('.jsonl')) continue;
+    const sessionId = file.slice(0, -'.jsonl'.length);
+    const messages = await loadClaudeCodeHistory(sessionId, cwd);
+    if (messages === null || messages.length === 0) continue;
+
+    const title = deriveTitle(messages);
+    if (title.length === 0) continue;
+
+    out.push({
+      sessionId,
+      title,
+      updatedAt: latestCreatedAt(messages),
+      messageCount: messages.length,
+    });
+  }
+
+  out.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0));
+  return out;
+}
+
+/** True when `candidateCwd` resolves to the same Claude Code project slug as `instanceCwd`. */
+export function claudeCodeCwdMatches(instanceCwd: string, candidateCwd?: string): boolean {
+  const base = resolve(instanceCwd);
+  const other = resolve(candidateCwd ?? instanceCwd);
+  return claudeProjectSlug(base) === claudeProjectSlug(other);
 }

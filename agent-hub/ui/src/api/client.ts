@@ -26,6 +26,8 @@ import type {
   SessionHistoryMessage,
   CursorIdeSyncPreview,
   CursorIdeSyncResult,
+  ClaudeCodeSyncPreview,
+  ClaudeCodeSyncResult,
   UpdateCustomEngineInput,
   UpdateInstanceInput,
   FsBrowseResult,
@@ -258,6 +260,20 @@ export const api = {
       opts?: { sessionIds?: string[] },
     ): Promise<CursorIdeSyncResult> =>
       request(`/instances/${instanceId}/cursor-ide/sync`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {}),
+      }),
+  },
+
+  claudeCode: {
+    preview: (instanceId: string): Promise<ClaudeCodeSyncPreview> =>
+      request(`/instances/${instanceId}/claude-code/preview`),
+
+    sync: (
+      instanceId: string,
+      opts?: { sessionIds?: string[] },
+    ): Promise<ClaudeCodeSyncResult> =>
+      request(`/instances/${instanceId}/claude-code/sync`, {
         method: 'POST',
         body: JSON.stringify(opts ?? {}),
       }),
