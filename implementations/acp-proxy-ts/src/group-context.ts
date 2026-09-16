@@ -64,6 +64,24 @@ export function buildGroupTaskContextBlock(gc: GroupChatContext): string | null 
   if (gc.orchestration_tools !== undefined) {
     lines.push('你是本群管理员：可用 group_dispatch / group_finish 编排群任务。');
   }
+  const delivery = gc.delivery;
+  if (delivery && typeof delivery === 'object') {
+    const hints: string[] = [];
+    const mode = typeof delivery.mode === 'string' ? delivery.mode.trim() : '';
+    if (mode) hints.push(`宿主=${mode}`);
+    const storeCli =
+      typeof delivery.store_cli === 'string' ? delivery.store_cli.trim() : '';
+    if (storeCli) hints.push(`store=${storeCli}`);
+    if (delivery.prefer_workspace_mount === true) {
+      hints.push('产物优先写 workspace 挂载路径或群 shared/（跨设备可读）');
+    }
+    if (delivery.chat_only_accepted === true) {
+      hints.push('聊天条目化回答可算交付');
+    }
+    if (hints.length > 0) {
+      lines.push(`交付约束：${hints.join('；')}`);
+    }
+  }
   return lines.join('\n');
 }
 

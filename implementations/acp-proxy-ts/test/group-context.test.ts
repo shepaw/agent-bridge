@@ -59,6 +59,22 @@ describe('buildGroupTaskContextBlock', () => {
   it('returns null without group_id', () => {
     expect(buildGroupTaskContextBlock({ group_id: '' })).toBeNull();
   });
+
+  it('renders delivery constraints from group_context.delivery', () => {
+    const block = buildGroupTaskContextBlock({
+      ...groupContext,
+      orchestration_tools: undefined,
+      delivery: {
+        mode: 'hub_peer',
+        store_cli: 'shepaw_path',
+        prefer_workspace_mount: true,
+        chat_only_accepted: true,
+      },
+    });
+    expect(block).toContain('交付约束');
+    expect(block).toContain('hub_peer');
+    expect(block).toContain('workspace 挂载路径');
+  });
 });
 
 describe('groupStoreWriteScope', () => {

@@ -56,7 +56,11 @@ import {
   resolvePeerStoreMcpServers,
   type GroupMcpSessionContext,
 } from './peer-store-mcp-resolve.js';
-import { ensureShepawShim, shepawShimFileName } from './shepaw-cli-shim.js';
+import {
+  ensureShepawShim,
+  shepawShimFileName,
+  storeBackendConfigured,
+} from './shepaw-cli-shim.js';
 import { defaultStoreContextPath } from './store-write-context.js';
 import {
   promptToPlainText,
@@ -1760,6 +1764,11 @@ function augmentAgentEnv(env: NodeJS.ProcessEnv, engineId?: string): NodeJS.Proc
   // Give upstream agents the `shepaw store …` CLI shim so the app's
   // [implicit] store:// hint works verbatim (see shepaw-cli-shim.ts).
   const shimDir = ensureShepawShim(next);
+  if (shimDir === undefined && storeBackendConfigured(next)) {
+    log(
+      'shepaw store backend configured but CLI shim unavailable — upstream shell `shepaw store` will fail; use workspace mount paths',
+    );
+  }
   if (shimDir !== undefined) {
     const cur = next[pathKey] ?? '';
     if (!cur.split(sep).includes(shimDir)) {

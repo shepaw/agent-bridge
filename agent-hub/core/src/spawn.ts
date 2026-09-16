@@ -32,6 +32,7 @@
 
 import {
   existsSync,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -279,6 +280,10 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       SHEPAW_ENROLLMENTS_PATH: paths.enrollmentsPath,
       // Point the gateway at this hub's peer-store HTTP (not App :18792).
       ...hubStoreClientEnv(hubCfg),
+      ...((): Record<string, string> => {
+        const script = resolveShepawStoreCliScript();
+        return script ? { SHEPAW_STORE_CLI_SCRIPT: script } : {};
+      })(),
       ...(() => {
         try {
           const deviceId = hubStoreDeviceId();
@@ -666,6 +671,18 @@ function resolveEngineCliPath(): string {
         `installed alongside shepaw-hub (via npm/pnpm/yarn). ` +
         `Original error: ${formatErr(err)}`,
     );
+  }
+}
+
+/** Resolve dist/shepaw-cli.js so spawned gateways can install the PATH shim. */
+function resolveShepawStoreCliScript(): string | undefined {
+  const require = createRequire(import.meta.url);
+  try {
+    return require.resolve('shepaw-acp-proxy-gateway/dist/shepaw-cli.js');
+  } catch {
+    const gatewayCli = resolveEngineCliPath();
+    const sibling = join(dirname(gatewayCli), 'shepaw-cli.js');
+    return existsSync(sibling) ? sibling : undefined;
   }
 }
 

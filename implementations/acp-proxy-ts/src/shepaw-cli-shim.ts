@@ -35,6 +35,33 @@ export function defaultCliScriptPath(): string {
   }
 }
 
+/**
+ * Resolve shepaw-cli.js for shim creation. Hub-spawned gateways often run
+ * from a global install where the CLI sits beside dist/cli.js, not next to
+ * this bundled module path.
+ */
+export function resolveShepawCliScriptPath(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { scriptPath?: string } = {},
+): string | undefined {
+  const explicit = (
+    env.SHEPAW_STORE_CLI_SCRIPT ??
+    opts.scriptPath ??
+    ''
+  ).trim();
+  if (explicit && existsSync(explicit)) return explicit;
+
+  const candidates = [defaultCliScriptPath()];
+  const argv1 = process.argv[1];
+  if (argv1) {
+    candidates.push(join(dirname(argv1), 'shepaw-cli.js'));
+  }
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 function defaultShimDir(): string {
   const uid =
     typeof process.getuid === 'function' ? String(process.getuid()) : 'shared';
@@ -132,12 +159,13 @@ export function ensureShepawShim(
   if (flag === '0' || flag === 'false' || flag === 'off') return undefined;
   if (!storeBackendConfigured(env)) return undefined;
 
-  const scriptPath = (
-    env.SHEPAW_STORE_CLI_SCRIPT ??
-    opts.scriptPath ??
-    defaultCliScriptPath()
-  ).trim();
-  if (!existsSync(scriptPath)) return undefined;
+  const scriptPath = resolveShepawCliScriptPath(env, opts);
+  if (!scriptPath) {
+    log(
+      'shepaw store CLI shim skipped: shepaw-cli.js not found (set SHEPAW_STORE_CLI_SCRIPT)',
+    );
+    return undefined;
+  }
 
   const dir = (env.SHEPAW_STORE_CLI_SHIM_DIR ?? opts.shimDir ?? defaultShimDir()).trim();
   try {

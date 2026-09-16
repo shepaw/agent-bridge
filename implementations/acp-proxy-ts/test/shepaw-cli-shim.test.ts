@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   ensureShepawShim,
+  resolveShepawCliScriptPath,
   storeBackendConfigured,
 } from '../src/shepaw-cli-shim.js';
 
@@ -87,6 +88,15 @@ describe('ensureShepawShim', () => {
     expect(
       existsSync(join(shimDir, process.platform === 'win32' ? 'shepaw.cmd' : 'shepaw')),
     ).toBe(true);
+  });
+
+  it('resolveShepawCliScriptPath honors SHEPAW_STORE_CLI_SCRIPT', () => {
+    const scriptDir = tempDir('shepaw-cli-');
+    const scriptPath = join(scriptDir, 'shepaw-cli.js');
+    writeFileSync(scriptPath, '// cli\n');
+    expect(
+      resolveShepawCliScriptPath({ SHEPAW_STORE_CLI_SCRIPT: scriptPath }),
+    ).toBe(scriptPath);
   });
 
   it('does not write ~/.local/bin when a test shimDir is provided', () => {

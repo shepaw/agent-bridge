@@ -202,6 +202,18 @@ export interface GroupChatContext {
   orchestration_tools?: unknown;
   /** Group workspace shared area (`store://workspaces/<device>/group_<gid>/shared`). */
   workspace_uri?: string;
+  /** Bound member DM session id (`gmd_<group>__<agent>`) — metadata only. */
+  member_session_id?: string;
+  /**
+   * Member delivery constraints from the app (store CLI surface, preferred
+   * artifact paths). Rendered into the group context block, not user message.
+   */
+  delivery?: {
+    mode?: string;
+    store_cli?: string;
+    prefer_workspace_mount?: boolean;
+    chat_only_accepted?: boolean;
+  };
 }
 
 // ── Slash command discovery (agent.commands.list) ──────────────────
