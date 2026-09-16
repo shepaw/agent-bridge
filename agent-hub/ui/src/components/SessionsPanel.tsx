@@ -30,8 +30,14 @@ export function SessionsPanel({
 }: SessionsPanelProps) {
   const { t } = useI18n();
   const [showCliSync, setShowCliSync] = useState(false);
-  const cliSyncSource: CliSessionSyncSource | null =
-    engine === 'cursor' ? 'cursor' : engine === 'claude-code' ? 'claude-code' : null;
+  const CLI_SYNC_BY_ENGINE: Partial<Record<string, CliSessionSyncSource>> = {
+    cursor: 'cursor',
+    'claude-code': 'claude-code',
+    codex: 'codex',
+    opencode: 'opencode',
+    openclaw: 'openclaw',
+  };
+  const cliSyncSource = CLI_SYNC_BY_ENGINE[engine] ?? null;
   const {
     sessions,
     listLoading,
@@ -71,7 +77,17 @@ export function SessionsPanel({
               style={linkBtn}
               onClick={() => setShowCliSync(true)}
             >
-              {t(cliSyncSource === 'cursor' ? 'cursorIde.openBtn' : 'claudeCode.openBtn')}
+              {t(
+                cliSyncSource === 'cursor'
+                  ? 'cursorIde.openBtn'
+                  : cliSyncSource === 'claude-code'
+                    ? 'claudeCode.openBtn'
+                    : cliSyncSource === 'codex'
+                      ? 'codex.openBtn'
+                      : cliSyncSource === 'opencode'
+                        ? 'opencode.openBtn'
+                        : 'openclaw.openBtn',
+              )}
             </button>
           )}
           {onManageMappings !== undefined && (

@@ -30,25 +30,48 @@ const POST_CREATE_I18N: Record<
     syncBtn: 'claudeCode.postCreateSyncBtn',
     skip: 'claudeCode.postCreateSkip',
   },
+  codex: {
+    title: 'codex.postCreateTitle',
+    success: 'codex.postCreateSuccess',
+    hint: 'codex.postCreateHint',
+    syncBtn: 'codex.postCreateSyncBtn',
+    skip: 'codex.postCreateSkip',
+  },
+  opencode: {
+    title: 'opencode.postCreateTitle',
+    success: 'opencode.postCreateSuccess',
+    hint: 'opencode.postCreateHint',
+    syncBtn: 'opencode.postCreateSyncBtn',
+    skip: 'opencode.postCreateSkip',
+  },
+  openclaw: {
+    title: 'openclaw.postCreateTitle',
+    success: 'openclaw.postCreateSuccess',
+    hint: 'openclaw.postCreateHint',
+    syncBtn: 'openclaw.postCreateSyncBtn',
+    skip: 'openclaw.postCreateSkip',
+  },
+};
+
+const CLI_SYNC_PREVIEW: Partial<
+  Record<string, (instanceId: string) => Promise<{ pending: { length: number } }>>
+> = {
+  cursor: (id) => api.cursorIde.preview(id),
+  'claude-code': (id) => api.claudeCode.preview(id),
+  codex: (id) => api.codex.preview(id),
+  opencode: (id) => api.opencode.preview(id),
+  openclaw: (id) => api.openclaw.preview(id),
 };
 
 async function previewPendingCliSessions(
   engine: string,
   instanceId: string,
 ): Promise<{ syncSource: CliSessionSyncSource; pendingCount: number } | null> {
-  if (engine === 'cursor') {
-    const preview = await api.cursorIde.preview(instanceId);
-    if (preview.pending.length > 0) {
-      return { syncSource: 'cursor', pendingCount: preview.pending.length };
-    }
-    return null;
-  }
-  if (engine === 'claude-code') {
-    const preview = await api.claudeCode.preview(instanceId);
-    if (preview.pending.length > 0) {
-      return { syncSource: 'claude-code', pendingCount: preview.pending.length };
-    }
-    return null;
+  const previewFn = CLI_SYNC_PREVIEW[engine];
+  if (previewFn === undefined) return null;
+  const preview = await previewFn(instanceId);
+  if (preview.pending.length > 0) {
+    return { syncSource: engine as CliSessionSyncSource, pendingCount: preview.pending.length };
   }
   return null;
 }

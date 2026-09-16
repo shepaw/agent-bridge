@@ -14,6 +14,9 @@
  *         ├── sessions.json           — Shepaw session_id → upstream ACP session_id
  *         ├── cursor-ide-sync.json    — manually synced Cursor IDE conversations
  *         ├── claude-code-sync.json   — manually synced Claude Code CLI conversations
+ *         ├── codex-sync.json         — manually synced Codex CLI conversations
+ *         ├── opencode-sync.json      — manually synced OpenCode CLI conversations
+ *         ├── openclaw-sync.json      — manually synced OpenClaw CLI conversations
  *         ├── peer-attachments/       — files pushed over peer agent_chat
  *         └── logs/
  *             └── agent.log           — stdout+stderr from the gateway child
@@ -51,6 +54,12 @@ export interface InstancePaths {
   readonly cursorIdeSyncPath: string;
   /** Manual Claude Code CLI → App session sync manifest (claude-code-sync.json). */
   readonly claudeCodeSyncPath: string;
+  /** Manual Codex CLI → App session sync manifest (codex-sync.json). */
+  readonly codexSyncPath: string;
+  /** Manual OpenCode CLI → App session sync manifest (opencode-sync.json). */
+  readonly opencodeSyncPath: string;
+  /** Manual OpenClaw CLI → App session sync manifest (openclaw-sync.json). */
+  readonly openclawSyncPath: string;
   readonly logsDir: string;
   readonly logFile: string;
 }
@@ -179,6 +188,9 @@ export function instancePaths(instanceId: string, root: string = hubRoot()): Ins
     sessionsPath: join(instanceRoot, 'sessions.json'),
     cursorIdeSyncPath: join(instanceRoot, 'cursor-ide-sync.json'),
     claudeCodeSyncPath: join(instanceRoot, 'claude-code-sync.json'),
+    codexSyncPath: join(instanceRoot, 'codex-sync.json'),
+    opencodeSyncPath: join(instanceRoot, 'opencode-sync.json'),
+    openclawSyncPath: join(instanceRoot, 'openclaw-sync.json'),
     logsDir: join(instanceRoot, 'logs'),
     logFile: join(instanceRoot, 'logs', 'agent.log'),
   };

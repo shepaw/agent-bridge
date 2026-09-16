@@ -35,19 +35,59 @@ const I18N: Record<
     syncing: 'claudeCode.syncing',
     syncDone: 'claudeCode.syncDone',
   },
+  codex: {
+    openBtn: 'codex.openBtn',
+    title: 'codex.title',
+    hint: 'codex.hint',
+    loading: 'codex.loading',
+    noPending: 'codex.noPending',
+    syncBtn: 'codex.syncBtn',
+    syncing: 'codex.syncing',
+    syncDone: 'codex.syncDone',
+  },
+  opencode: {
+    openBtn: 'opencode.openBtn',
+    title: 'opencode.title',
+    hint: 'opencode.hint',
+    loading: 'opencode.loading',
+    noPending: 'opencode.noPending',
+    syncBtn: 'opencode.syncBtn',
+    syncing: 'opencode.syncing',
+    syncDone: 'opencode.syncDone',
+  },
+  openclaw: {
+    openBtn: 'openclaw.openBtn',
+    title: 'openclaw.title',
+    hint: 'openclaw.hint',
+    loading: 'openclaw.loading',
+    noPending: 'openclaw.noPending',
+    syncBtn: 'openclaw.syncBtn',
+    syncing: 'openclaw.syncing',
+    syncDone: 'openclaw.syncDone',
+  },
 };
 
-async function previewSync(source: CliSessionSyncSource, instanceId: string): Promise<CliSessionSyncPreview> {
-  return source === 'cursor'
-    ? api.cursorIde.preview(instanceId)
-    : api.claudeCode.preview(instanceId);
-}
+const PREVIEW_API: Record<
+  CliSessionSyncSource,
+  (instanceId: string) => Promise<CliSessionSyncPreview>
+> = {
+  cursor: (instanceId) => api.cursorIde.preview(instanceId),
+  'claude-code': (instanceId) => api.claudeCode.preview(instanceId),
+  codex: (instanceId) => api.codex.preview(instanceId),
+  opencode: (instanceId) => api.opencode.preview(instanceId),
+  openclaw: (instanceId) => api.openclaw.preview(instanceId),
+};
 
-async function runSync(source: CliSessionSyncSource, instanceId: string) {
-  return source === 'cursor'
-    ? api.cursorIde.sync(instanceId)
-    : api.claudeCode.sync(instanceId);
-}
+const SYNC_API: Record<
+  CliSessionSyncSource,
+  (instanceId: string) => ReturnType<typeof api.cursorIde.sync>
+> = {
+  cursor: (instanceId) => api.cursorIde.sync(instanceId),
+  'claude-code': (instanceId) => api.claudeCode.sync(instanceId),
+  codex: (instanceId) => api.codex.sync(instanceId),
+  opencode: (instanceId) => api.opencode.sync(instanceId),
+  openclaw: (instanceId) => api.openclaw.sync(instanceId),
+};
 
 export function CliSessionSyncModal({ instanceId, source, onClose, onSynced }: CliSessionSyncModalProps) {
   const { t } = useI18n();
@@ -62,7 +102,7 @@ export function CliSessionSyncModal({ instanceId, source, onClose, onSynced }: C
     setLoading(true);
     setErr(null);
     try {
-      const data = await previewSync(source, instanceId);
+      const data = await PREVIEW_API[source](instanceId);
       setPreview(data);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -80,7 +120,7 @@ export function CliSessionSyncModal({ instanceId, source, onClose, onSynced }: C
     setErr(null);
     setResultMsg(null);
     try {
-      const result = await runSync(source, instanceId);
+      const result = await SYNC_API[source](instanceId);
       setResultMsg(
         t(keys.syncDone, {
           added: result.added,

@@ -36,6 +36,37 @@ export {
   type ClaudeCodeSyncResult,
 } from './claude-code-sync.js';
 export {
+  previewCodexSync,
+  runCodexSync,
+  loadCodexSyncManifest,
+  codexSyncPathFromSessionStore,
+  isCodexDiskEngine,
+  CODEX_SYNC_FILENAME,
+  type CodexSyncManifest,
+  type CodexSyncPreview,
+  type CodexSyncResult,
+} from './codex-sync.js';
+export {
+  previewOpencodeSync,
+  runOpencodeSync,
+  loadOpencodeSyncManifest,
+  opencodeSyncPathFromSessionStore,
+  OPENCODE_SYNC_FILENAME,
+  type OpencodeSyncManifest,
+  type OpencodeSyncPreview,
+  type OpencodeSyncResult,
+} from './opencode-sync.js';
+export {
+  previewOpenclawSync,
+  runOpenclawSync,
+  loadOpenclawSyncManifest,
+  openclawSyncPathFromSessionStore,
+  OPENCLAW_SYNC_FILENAME,
+  type OpenclawSyncManifest,
+  type OpenclawSyncPreview,
+  type OpenclawSyncResult,
+} from './openclaw-sync.js';
+export {
   listClaudeCodeDiskSessions,
   loadClaudeCodeHistory,
   claudeCodeCwdMatches,

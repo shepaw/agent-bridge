@@ -281,7 +281,7 @@ export type ClaudeCodeSessionSummary = CursorIdeSessionSummary;
 export type ClaudeCodeSyncPreview = CursorIdeSyncPreview;
 export type ClaudeCodeSyncResult = CursorIdeSyncResult;
 
-export type CliSessionSyncSource = 'cursor' | 'claude-code';
+export type CliSessionSyncSource = 'cursor' | 'claude-code' | 'codex' | 'opencode' | 'openclaw';
 export type CliSessionSyncPreview = CursorIdeSyncPreview;
 export type CliSessionSyncResult = CursorIdeSyncResult;
 

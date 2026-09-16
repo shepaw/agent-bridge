@@ -274,6 +274,27 @@ export {
   type ClaudeCodeSyncPreview,
   type ClaudeCodeSyncResult,
 } from './claude-code-sync.js';
+export {
+  previewInstanceCodexSync,
+  syncInstanceCodexSessions,
+  CodexSyncNotSupportedError,
+  type CodexSyncPreview,
+  type CodexSyncResult,
+} from './codex-sync.js';
+export {
+  previewInstanceOpencodeSync,
+  syncInstanceOpencodeSessions,
+  OpencodeSyncNotSupportedError,
+  type OpencodeSyncPreview,
+  type OpencodeSyncResult,
+} from './opencode-sync.js';
+export {
+  previewInstanceOpenclawSync,
+  syncInstanceOpenclawSessions,
+  OpenclawSyncNotSupportedError,
+  type OpenclawSyncPreview,
+  type OpenclawSyncResult,
+} from './openclaw-sync.js';
 export type { InstanceSessionEntry } from './sessions.js';
 
 export {

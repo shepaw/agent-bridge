@@ -7,9 +7,10 @@
  */
 
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import {
+  diskCwdMatches,
   homePath,
   pushTurn,
   textFromContentBlocks,
@@ -53,6 +54,122 @@ function toolCallText(payload: Record<string, unknown>): { text: string; title: 
     return { text: formatToolLines('completed', 'Shell', command, undefined).trimEnd(), title: 'Shell' };
   }
   return null;
+}
+
+export interface CodexSessionSummary {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+function cwdFromRecord(obj: Record<string, unknown>): string | undefined {
+  for (const key of ['cwd', 'workspace', 'directory', 'workingDirectory'] as const) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+  }
+  return undefined;
+}
+
+/** Read session id + cwd from the rollout's session_meta line (first pass only). */
+async function readCodexRolloutMeta(
+  path: string,
+): Promise<{ sessionId: string; cwd: string } | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf-8');
+  } catch {
+    return null;
+  }
+  for (const line of raw.split('\n').slice(0, 8)) {
+    if (line.trim().length === 0) continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (obj.type !== 'session_meta') continue;
+    const payload = (obj.payload ?? {}) as Record<string, unknown>;
+    const sessionId = typeof payload.id === 'string' ? payload.id : undefined;
+    const cwd = cwdFromRecord(payload);
+    if (sessionId === undefined || cwd === undefined) return null;
+    return { sessionId, cwd };
+  }
+  return null;
+}
+
+function deriveTitle(messages: DiskHistoryMessage[]): string {
+  const firstUser = messages.find((m) => m.role === 'user' && m.content.trim().length > 0);
+  if (firstUser === undefined) return '';
+  return firstUser.content.trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function latestCreatedAt(messages: DiskHistoryMessage[]): string {
+  let updatedAt = '';
+  for (const m of messages) {
+    if (m.created_at !== undefined && m.created_at.length > 0 && m.created_at > updatedAt) {
+      updatedAt = m.created_at;
+    }
+  }
+  return updatedAt;
+}
+
+/**
+ * List Codex CLI sessions on disk whose session_meta cwd matches `cwd`.
+ * Scans ~/.codex/sessions recursively but filters by session_meta cwd.
+ */
+export async function listCodexDiskSessions(cwd: string): Promise<CodexSessionSummary[]> {
+  const targetCwd = resolve(cwd);
+  const root = homePath('.codex', 'sessions');
+  const stack = [root];
+  const byId = new Map<string, CodexSessionSummary>();
+
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!ent.isFile() || !ent.name.endsWith('.jsonl')) continue;
+
+      const meta = await readCodexRolloutMeta(full);
+      if (meta === null || !diskCwdMatches(targetCwd, meta.cwd)) continue;
+
+      const messages = await loadCodexHistory(meta.sessionId);
+      if (messages === null || messages.length === 0) continue;
+
+      const title = deriveTitle(messages);
+      if (title.length === 0) continue;
+
+      const summary: CodexSessionSummary = {
+        sessionId: meta.sessionId,
+        title,
+        updatedAt: latestCreatedAt(messages),
+        messageCount: messages.length,
+      };
+      const prev = byId.get(meta.sessionId);
+      if (prev === undefined || summary.updatedAt > prev.updatedAt) {
+        byId.set(meta.sessionId, summary);
+      }
+    }
+  }
+
+  const out = [...byId.values()];
+  out.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0));
+  return out;
+}
+
+export function codexCwdMatches(instanceCwd: string, candidateCwd?: string): boolean {
+  return diskCwdMatches(instanceCwd, candidateCwd ?? instanceCwd);
 }
 
 async function findCodexRollout(sessionId: string): Promise<string | null> {

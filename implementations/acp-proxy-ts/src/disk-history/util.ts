@@ -3,7 +3,7 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { SessionHistoryMessage } from 'shepaw-acp-sdk';
 
@@ -25,6 +25,11 @@ export function codebuddyProjectSlug(cwd: string): string {
 
 export function homePath(...parts: string[]): string {
   return join(homedir(), ...parts);
+}
+
+/** True when two absolute workspace paths refer to the same directory. */
+export function diskCwdMatches(instanceCwd: string, sessionCwd: string): boolean {
+  return resolve(instanceCwd) === resolve(sessionCwd);
 }
 
 /** Pull plain text from Anthropic/Codex/CodeBuddy-style content blocks. */

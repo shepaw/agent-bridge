@@ -1,13 +1,10 @@
 /**
- * CodeBuddy / OpenClaw-style JSONL:
- *   ~/.codebuddy/projects/{slug}/{sessionId}.jsonl
- *   ~/.openclaw/agents/{agentId}/sessions/{sessionId}.jsonl
+ * CodeBuddy JSONL — `~/.codebuddy/projects/{slug}/{sessionId}.jsonl`
  *
  * Message lines: type=message, role, timestamp (ms), content blocks.
  */
 
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import {
   codebuddyProjectSlug,
@@ -118,20 +115,3 @@ export async function listCodebuddyDiskSessions(cwd: string): Promise<DiskSessio
   return out;
 }
 
-export async function loadOpenclawHistory(
-  sessionId: string,
-): Promise<DiskHistoryMessage[] | null> {
-  const agentsRoot = homePath('.openclaw', 'agents');
-  let agents: string[];
-  try {
-    agents = await readdir(agentsRoot);
-  } catch {
-    return null;
-  }
-  for (const agentId of agents) {
-    const direct = join(agentsRoot, agentId, 'sessions', `${sessionId}.jsonl`);
-    const hit = await parseMessageJsonl(direct);
-    if (hit !== null) return hit;
-  }
-  return null;
-}

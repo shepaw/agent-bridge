@@ -24,6 +24,12 @@
  * POST   /api/instances/:id/cursor-ide/sync — manually sync IDE sessions into manifest
  * GET    /api/instances/:id/claude-code/preview — scan CLI transcripts for this cwd
  * POST   /api/instances/:id/claude-code/sync — manually sync CLI sessions into manifest
+ * GET    /api/instances/:id/codex/preview — scan Codex CLI transcripts for this cwd
+ * POST   /api/instances/:id/codex/sync — manually sync Codex CLI sessions into manifest
+ * GET    /api/instances/:id/opencode/preview — scan OpenCode CLI transcripts for this cwd
+ * POST   /api/instances/:id/opencode/sync — manually sync OpenCode CLI sessions into manifest
+ * GET    /api/instances/:id/openclaw/preview — scan OpenClaw CLI transcripts for this cwd
+ * POST   /api/instances/:id/openclaw/sync — manually sync OpenClaw CLI sessions into manifest
  * GET    /api/instances/:id/envvars   — list env var keys (values masked)
  * PUT    /api/instances/:id/envvars/:key — set a single env var (also updates credential hints cache)
  * DELETE /api/instances/:id/envvars/:key — delete a single env var
@@ -62,6 +68,15 @@ import {
   previewInstanceClaudeCodeSync,
   syncInstanceClaudeCodeSessions,
   ClaudeCodeSyncNotSupportedError,
+  previewInstanceCodexSync,
+  syncInstanceCodexSessions,
+  CodexSyncNotSupportedError,
+  previewInstanceOpencodeSync,
+  syncInstanceOpencodeSessions,
+  OpencodeSyncNotSupportedError,
+  previewInstanceOpenclawSync,
+  syncInstanceOpenclawSessions,
+  OpenclawSyncNotSupportedError,
   listInstanceConversations,
   getInstanceConversationHistory,
   getInstanceAgentCard,
@@ -1067,6 +1082,126 @@ instancesRouter.post('/:id/claude-code/sync', async (req: Request, res: Response
     if (err instanceof InstanceNotFoundError) {
       res.status(404).json({ error: err.message });
     } else if (err instanceof ClaudeCodeSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+// ── Codex CLI manual sync ─────────────────────────────────────────
+
+instancesRouter.get('/:id/codex/preview', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const preview = await previewInstanceCodexSync(req.params.id!);
+    res.json(preview);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof CodexSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+instancesRouter.post('/:id/codex/sync', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sessionIds = Array.isArray(body.sessionIds)
+      ? body.sessionIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const result = await syncInstanceCodexSessions(req.params.id!, { sessionIds });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof CodexSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+// ── OpenCode CLI manual sync ──────────────────────────────────────
+
+instancesRouter.get('/:id/opencode/preview', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const preview = await previewInstanceOpencodeSync(req.params.id!);
+    res.json(preview);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof OpencodeSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+instancesRouter.post('/:id/opencode/sync', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sessionIds = Array.isArray(body.sessionIds)
+      ? body.sessionIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const result = await syncInstanceOpencodeSessions(req.params.id!, { sessionIds });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof OpencodeSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+// ── OpenClaw CLI manual sync ──────────────────────────────────────
+
+instancesRouter.get('/:id/openclaw/preview', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const preview = await previewInstanceOpenclawSync(req.params.id!);
+    res.json(preview);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof OpenclawSyncNotSupportedError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
+
+instancesRouter.post('/:id/openclaw/sync', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sessionIds = Array.isArray(body.sessionIds)
+      ? body.sessionIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const result = await syncInstanceOpenclawSessions(req.params.id!, { sessionIds });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof OpenclawSyncNotSupportedError) {
       res.status(400).json({ error: err.message });
     } else {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

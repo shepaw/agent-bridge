@@ -28,6 +28,8 @@ import type {
   CursorIdeSyncResult,
   ClaudeCodeSyncPreview,
   ClaudeCodeSyncResult,
+  CliSessionSyncPreview,
+  CliSessionSyncResult,
   UpdateCustomEngineInput,
   UpdateInstanceInput,
   FsBrowseResult,
@@ -274,6 +276,48 @@ export const api = {
       opts?: { sessionIds?: string[] },
     ): Promise<ClaudeCodeSyncResult> =>
       request(`/instances/${instanceId}/claude-code/sync`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {}),
+      }),
+  },
+
+  codex: {
+    preview: (instanceId: string): Promise<CliSessionSyncPreview> =>
+      request(`/instances/${instanceId}/codex/preview`),
+
+    sync: (
+      instanceId: string,
+      opts?: { sessionIds?: string[] },
+    ): Promise<CliSessionSyncResult> =>
+      request(`/instances/${instanceId}/codex/sync`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {}),
+      }),
+  },
+
+  opencode: {
+    preview: (instanceId: string): Promise<CliSessionSyncPreview> =>
+      request(`/instances/${instanceId}/opencode/preview`),
+
+    sync: (
+      instanceId: string,
+      opts?: { sessionIds?: string[] },
+    ): Promise<CliSessionSyncResult> =>
+      request(`/instances/${instanceId}/opencode/sync`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {}),
+      }),
+  },
+
+  openclaw: {
+    preview: (instanceId: string): Promise<CliSessionSyncPreview> =>
+      request(`/instances/${instanceId}/openclaw/preview`),
+
+    sync: (
+      instanceId: string,
+      opts?: { sessionIds?: string[] },
+    ): Promise<CliSessionSyncResult> =>
+      request(`/instances/${instanceId}/openclaw/sync`, {
         method: 'POST',
         body: JSON.stringify(opts ?? {}),
       }),

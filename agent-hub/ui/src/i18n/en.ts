@@ -580,6 +580,54 @@ export const en = {
   'claudeCode.postCreateSyncBtn': 'Sync {count} session(s)',
   'claudeCode.postCreateSkip': 'Not now',
 
+  'codex.openBtn': 'Sync Codex CLI',
+  'codex.title': 'Sync Codex CLI sessions',
+  'codex.hint':
+    'Import Codex CLI conversations from ~/.codex/sessions for this workspace only. Sync is manual — nothing is imported until you confirm.',
+  'codex.loading': 'Scanning Codex CLI sessions…',
+  'codex.noPending': 'No new Codex CLI sessions to sync (all synced or none on disk).',
+  'codex.syncBtn': 'Sync {count} session(s)',
+  'codex.syncing': 'Syncing…',
+  'codex.syncDone': 'Done: {added} added, {updated} updated, {total} total synced.',
+  'codex.postCreateTitle': 'Instance created',
+  'codex.postCreateSuccess': 'Agent instance created successfully.',
+  'codex.postCreateHint':
+    'Found {count} Codex CLI session(s) for this workspace. Sync them now so they appear in the App?',
+  'codex.postCreateSyncBtn': 'Sync {count} session(s)',
+  'codex.postCreateSkip': 'Not now',
+
+  'opencode.openBtn': 'Sync OpenCode CLI',
+  'opencode.title': 'Sync OpenCode CLI sessions',
+  'opencode.hint':
+    'Import OpenCode CLI conversations from local storage for this workspace only. Sync is manual — nothing is imported until you confirm.',
+  'opencode.loading': 'Scanning OpenCode CLI sessions…',
+  'opencode.noPending': 'No new OpenCode CLI sessions to sync (all synced or none on disk).',
+  'opencode.syncBtn': 'Sync {count} session(s)',
+  'opencode.syncing': 'Syncing…',
+  'opencode.syncDone': 'Done: {added} added, {updated} updated, {total} total synced.',
+  'opencode.postCreateTitle': 'Instance created',
+  'opencode.postCreateSuccess': 'Agent instance created successfully.',
+  'opencode.postCreateHint':
+    'Found {count} OpenCode CLI session(s) for this workspace. Sync them now so they appear in the App?',
+  'opencode.postCreateSyncBtn': 'Sync {count} session(s)',
+  'opencode.postCreateSkip': 'Not now',
+
+  'openclaw.openBtn': 'Sync OpenClaw CLI',
+  'openclaw.title': 'Sync OpenClaw CLI sessions',
+  'openclaw.hint':
+    'Import OpenClaw CLI conversations from ~/.openclaw for this workspace only. Sync is manual — nothing is imported until you confirm.',
+  'openclaw.loading': 'Scanning OpenClaw CLI sessions…',
+  'openclaw.noPending': 'No new OpenClaw CLI sessions to sync (all synced or none on disk).',
+  'openclaw.syncBtn': 'Sync {count} session(s)',
+  'openclaw.syncing': 'Syncing…',
+  'openclaw.syncDone': 'Done: {added} added, {updated} updated, {total} total synced.',
+  'openclaw.postCreateTitle': 'Instance created',
+  'openclaw.postCreateSuccess': 'Agent instance created successfully.',
+  'openclaw.postCreateHint':
+    'Found {count} OpenClaw CLI session(s) for this workspace. Sync them now so they appear in the App?',
+  'openclaw.postCreateSyncBtn': 'Sync {count} session(s)',
+  'openclaw.postCreateSkip': 'Not now',
+
   'enroll.title': 'Pair device — {id}',
   'enroll.deviceLabel': 'Device label (optional)',
   'enroll.devicePlaceholder': 'My iPhone',

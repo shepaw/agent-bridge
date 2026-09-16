@@ -193,6 +193,9 @@ export async function startInstance(instance: InstanceConfig): Promise<{
       '--session-store-path', paths.sessionsPath,
       '--cursor-ide-sync-path', paths.cursorIdeSyncPath,
       '--claude-code-sync-path', paths.claudeCodeSyncPath,
+      '--codex-sync-path', paths.codexSyncPath,
+      '--opencode-sync-path', paths.opencodeSyncPath,
+      '--openclaw-sync-path', paths.openclawSyncPath,
       ...((instance.additionalDirectories ?? []).flatMap((dir) => [
         '--additional-directory',
         dir,

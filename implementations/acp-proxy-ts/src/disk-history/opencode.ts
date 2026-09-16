@@ -5,11 +5,11 @@
  */
 
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { homedir } from 'node:os';
 
-import { pushTurn, toIsoFromUnknown, type DiskHistoryMessage } from './util.js';
+import { diskCwdMatches, pushTurn, toIsoFromUnknown, type DiskHistoryMessage } from './util.js';
 import { formatToolLines } from '../permission/format.js';
 
 function storageRoot(): string {
@@ -75,6 +75,97 @@ async function loadParts(messageId: string): Promise<OpenCodeParts> {
     progress: progressParts.join('\n'),
     progressTitle,
   };
+}
+
+export interface OpencodeSessionSummary {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+function deriveTitle(messages: DiskHistoryMessage[], fallback?: string): string {
+  const firstUser = messages.find((m) => m.role === 'user' && m.content.trim().length > 0);
+  if (firstUser !== undefined) {
+    return firstUser.content.trim().replace(/\s+/g, ' ').slice(0, 80);
+  }
+  if (fallback !== undefined && fallback.trim().length > 0) {
+    return fallback.trim().replace(/\s+/g, ' ').slice(0, 80);
+  }
+  return '';
+}
+
+function latestCreatedAt(messages: DiskHistoryMessage[], fallback?: string): string {
+  let updatedAt = fallback ?? '';
+  for (const m of messages) {
+    if (m.created_at !== undefined && m.created_at.length > 0 && m.created_at > updatedAt) {
+      updatedAt = m.created_at;
+    }
+  }
+  return updatedAt;
+}
+
+/**
+ * List OpenCode CLI sessions whose `directory` matches `cwd`.
+ * Reads OpenCode session metadata JSON under storage/session/.
+ */
+export async function listOpencodeDiskSessions(cwd: string): Promise<OpencodeSessionSummary[]> {
+  const targetCwd = resolve(cwd);
+  const sessionRoot = join(storageRoot(), 'session');
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(sessionRoot);
+  } catch {
+    return [];
+  }
+
+  const out: OpencodeSessionSummary[] = [];
+  for (const projectId of projectDirs) {
+    const dir = join(sessionRoot, projectId);
+    let files: string[];
+    try {
+      files = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        const raw = await readFile(join(dir, file), 'utf-8');
+        const obj = JSON.parse(raw) as Record<string, unknown>;
+        const sessionId = typeof obj.id === 'string' ? obj.id : undefined;
+        const directory = typeof obj.directory === 'string' ? obj.directory : undefined;
+        if (sessionId === undefined || directory === undefined) continue;
+        if (!diskCwdMatches(targetCwd, directory)) continue;
+
+        const messages = await loadOpencodeHistory(sessionId);
+        if (messages === null || messages.length === 0) continue;
+
+        const metaTitle = typeof obj.title === 'string' ? obj.title : undefined;
+        const title = deriveTitle(messages, metaTitle);
+        if (title.length === 0) continue;
+
+        const time = (obj.time ?? {}) as Record<string, unknown>;
+        const updatedFallback = toIsoFromUnknown(time.updated) ?? toIsoFromUnknown(time.created);
+
+        out.push({
+          sessionId,
+          title,
+          updatedAt: latestCreatedAt(messages, updatedFallback),
+          messageCount: messages.length,
+        });
+      } catch {
+        // skip corrupt session meta
+      }
+    }
+  }
+
+  out.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0));
+  return out;
+}
+
+export function opencodeCwdMatches(instanceCwd: string, candidateCwd?: string): boolean {
+  return diskCwdMatches(instanceCwd, candidateCwd ?? instanceCwd);
 }
 
 export async function loadOpencodeHistory(sessionId: string): Promise<DiskHistoryMessage[] | null> {

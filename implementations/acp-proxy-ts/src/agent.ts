@@ -46,7 +46,10 @@ import { createHubFanoutHandler } from './hub-fanout.js';
 import { tryLoadDiskHistory } from './disk-history/index.js';
 import { listCodebuddyDiskSessions } from './disk-history/codebuddy.js';
 import { loadClaudeCodeHistory } from './disk-history/claude-code.js';
+import { loadCodexHistory } from './disk-history/codex.js';
 import { loadCursorIdeHistory } from './disk-history/cursor-ide.js';
+import { loadOpencodeHistory } from './disk-history/opencode.js';
+import { loadOpenclawHistory } from './disk-history/openclaw.js';
 import {
   claudeCodeSyncPathFromSessionStore,
   isClaudeCodeDiskEngine,
@@ -55,11 +58,30 @@ import {
   listSyncedClaudeCodeSessions,
 } from './claude-code-sync.js';
 import {
+  codexSyncPathFromSessionStore,
+  isCodexDiskEngine,
+  isCodexSessionSynced,
+  loadCodexSyncManifest,
+  listSyncedCodexSessions,
+} from './codex-sync.js';
+import {
   cursorIdeSyncPathFromSessionStore,
   isCursorIdeSessionSynced,
   loadCursorIdeSyncManifest,
   listSyncedCursorIdeSessions,
 } from './cursor-ide-sync.js';
+import {
+  opencodeSyncPathFromSessionStore,
+  isOpencodeSessionSynced,
+  loadOpencodeSyncManifest,
+  listSyncedOpencodeSessions,
+} from './opencode-sync.js';
+import {
+  openclawSyncPathFromSessionStore,
+  isOpenclawSessionSynced,
+  loadOpenclawSyncManifest,
+  listSyncedOpenclawSessions,
+} from './openclaw-sync.js';
 import { ensureHistoryCreatedAt } from './history-created-at.js';
 import { SessionHistoryCache } from './session-history-cache.js';
 import {
@@ -163,6 +185,12 @@ export interface AcpProxyAgentOptions {
   cursorIdeSyncPath?: string;
   /** Path to claude-code-sync.json (Hub manual Claude Code CLI sync manifest). */
   claudeCodeSyncPath?: string;
+  /** Path to codex-sync.json (Hub manual Codex CLI sync manifest). */
+  codexSyncPath?: string;
+  /** Path to opencode-sync.json (Hub manual OpenCode CLI sync manifest). */
+  opencodeSyncPath?: string;
+  /** Path to openclaw-sync.json (Hub manual OpenClaw CLI sync manifest). */
+  openclawSyncPath?: string;
   tunnelConfig?: ChannelTunnelConfig;
   /** Shared-device channel mailbox (no per-instance reverse tunnel). */
   mailboxConfig?: ChannelMailboxConfig;
@@ -207,6 +235,15 @@ export class AcpProxyAgent extends ACPAgentServer {
   /** Manual Claude Code CLI sync manifest (Hub writes; gateway reads on list/history). */
   private readonly claudeCodeSyncPath: string | undefined;
 
+  /** Manual Codex CLI sync manifest (Hub writes; gateway reads on list/history). */
+  private readonly codexSyncPath: string | undefined;
+
+  /** Manual OpenCode CLI sync manifest (Hub writes; gateway reads on list/history). */
+  private readonly opencodeSyncPath: string | undefined;
+
+  /** Manual OpenClaw CLI sync manifest (Hub writes; gateway reads on list/history). */
+  private readonly openclawSyncPath: string | undefined;
+
   constructor(opts: AcpProxyAgentOptions) {
     const spec = opts.engineSpec ?? resolveEngineSpec(opts.engine);
 
@@ -250,6 +287,21 @@ export class AcpProxyAgent extends ACPAgentServer {
       (opts.sessionStoreOptions?.path !== undefined
         ? claudeCodeSyncPathFromSessionStore(opts.sessionStoreOptions.path)
         : process.env.SHEPAW_CLAUDE_CODE_SYNC_PATH?.trim() || undefined);
+    this.codexSyncPath =
+      opts.codexSyncPath ??
+      (opts.sessionStoreOptions?.path !== undefined
+        ? codexSyncPathFromSessionStore(opts.sessionStoreOptions.path)
+        : process.env.SHEPAW_CODEX_SYNC_PATH?.trim() || undefined);
+    this.opencodeSyncPath =
+      opts.opencodeSyncPath ??
+      (opts.sessionStoreOptions?.path !== undefined
+        ? opencodeSyncPathFromSessionStore(opts.sessionStoreOptions.path)
+        : process.env.SHEPAW_OPENCODE_SYNC_PATH?.trim() || undefined);
+    this.openclawSyncPath =
+      opts.openclawSyncPath ??
+      (opts.sessionStoreOptions?.path !== undefined
+        ? openclawSyncPathFromSessionStore(opts.sessionStoreOptions.path)
+        : process.env.SHEPAW_OPENCLAW_SYNC_PATH?.trim() || undefined);
   }
 
   async init(): Promise<void> {
@@ -533,6 +585,69 @@ export class AcpProxyAgent extends ACPAgentServer {
         return [];
       }
     }
+    // Codex CLI: only sessions the user explicitly synced via Hub (never auto-scan).
+    if (isCodexDiskEngine(this.engineId) && this.codexSyncPath !== undefined) {
+      try {
+        const list = await listSyncedCodexSessions({
+          cwd: scanCwd,
+          syncPath: this.codexSyncPath,
+        });
+        return list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+          cwd: s.cwd,
+        }));
+      } catch (err) {
+        log(
+          'codex synced session list failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
+    }
+    // OpenCode CLI: only sessions the user explicitly synced via Hub (never auto-scan).
+    if (this.engineId === 'opencode' && this.opencodeSyncPath !== undefined) {
+      try {
+        const list = await listSyncedOpencodeSessions({
+          cwd: scanCwd,
+          syncPath: this.opencodeSyncPath,
+        });
+        return list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+          cwd: s.cwd,
+        }));
+      } catch (err) {
+        log(
+          'opencode synced session list failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
+    }
+    // OpenClaw CLI: only sessions the user explicitly synced via Hub (never auto-scan).
+    if (this.engineId === 'openclaw' && this.openclawSyncPath !== undefined) {
+      try {
+        const list = await listSyncedOpenclawSessions({
+          cwd: scanCwd,
+          syncPath: this.openclawSyncPath,
+        });
+        return list.map((s) => ({
+          sessionId: s.sessionId,
+          title: s.title,
+          ...(s.updatedAt.length > 0 ? { updatedAt: s.updatedAt } : {}),
+          cwd: s.cwd,
+        }));
+      } catch (err) {
+        log(
+          'openclaw synced session list failed: %s',
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
+    }
     return [];
   }
 
@@ -618,6 +733,60 @@ export class AcpProxyAgent extends ACPAgentServer {
           const messages = ensureHistoryCreatedAt(fromCli);
           log(
             'session history from claude code CLI disk session=%s messages=%d',
+            upstreamId,
+            messages.length,
+          );
+          this.sessionHistoryCache.set(sessionId, messages);
+          return { messages };
+        }
+      }
+    }
+
+    // Codex CLI transcripts (manual sync manifest only).
+    if (isCodexDiskEngine(this.engineId) && this.codexSyncPath !== undefined) {
+      const manifest = await loadCodexSyncManifest(this.codexSyncPath);
+      if (isCodexSessionSynced(manifest, upstreamId, this.cwd)) {
+        const fromCli = await loadCodexHistory(upstreamId);
+        if (fromCli !== null && fromCli.length > 0) {
+          const messages = ensureHistoryCreatedAt(fromCli);
+          log(
+            'session history from codex CLI disk session=%s messages=%d',
+            upstreamId,
+            messages.length,
+          );
+          this.sessionHistoryCache.set(sessionId, messages);
+          return { messages };
+        }
+      }
+    }
+
+    // OpenCode CLI transcripts (manual sync manifest only).
+    if (this.engineId === 'opencode' && this.opencodeSyncPath !== undefined) {
+      const manifest = await loadOpencodeSyncManifest(this.opencodeSyncPath);
+      if (isOpencodeSessionSynced(manifest, upstreamId, this.cwd)) {
+        const fromCli = await loadOpencodeHistory(upstreamId);
+        if (fromCli !== null && fromCli.length > 0) {
+          const messages = ensureHistoryCreatedAt(fromCli);
+          log(
+            'session history from opencode CLI disk session=%s messages=%d',
+            upstreamId,
+            messages.length,
+          );
+          this.sessionHistoryCache.set(sessionId, messages);
+          return { messages };
+        }
+      }
+    }
+
+    // OpenClaw CLI transcripts (manual sync manifest only).
+    if (this.engineId === 'openclaw' && this.openclawSyncPath !== undefined) {
+      const manifest = await loadOpenclawSyncManifest(this.openclawSyncPath);
+      if (isOpenclawSessionSynced(manifest, upstreamId, this.cwd)) {
+        const fromCli = await loadOpenclawHistory(upstreamId);
+        if (fromCli !== null && fromCli.length > 0) {
+          const messages = ensureHistoryCreatedAt(fromCli);
+          log(
+            'session history from openclaw CLI disk session=%s messages=%d',
             upstreamId,
             messages.length,
           );

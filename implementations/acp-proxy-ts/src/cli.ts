@@ -69,6 +69,9 @@ cli
   .option('--session-store-path <path>', 'Override sessions.json path')
   .option('--cursor-ide-sync-path <path>', 'Override cursor-ide-sync.json path (Hub manual IDE sync)')
   .option('--claude-code-sync-path <path>', 'Override claude-code-sync.json path (Hub manual CLI sync)')
+  .option('--codex-sync-path <path>', 'Override codex-sync.json path (Hub manual Codex CLI sync)')
+  .option('--opencode-sync-path <path>', 'Override opencode-sync.json path (Hub manual OpenCode CLI sync)')
+  .option('--openclaw-sync-path <path>', 'Override openclaw-sync.json path (Hub manual OpenClaw CLI sync)')
   .option('--tunnel', 'Open reverse tunnel (PAW_ACP_TUNNEL_* env vars)')
   .option('--tunnel-server <url>', 'Channel Service base URL')
   .option('--tunnel-channel-id <id>', 'Channel ID')
@@ -89,6 +92,9 @@ cli
     sessionStorePath?: string;
     cursorIdeSyncPath?: string;
     claudeCodeSyncPath?: string;
+    codexSyncPath?: string;
+    opencodeSyncPath?: string;
+    openclawSyncPath?: string;
     tunnel?: boolean;
     tunnelServer?: string;
     tunnelChannelId?: string;
@@ -169,6 +175,9 @@ cli
       sessionStoreOptions: opts.sessionStorePath ? { path: opts.sessionStorePath } : undefined,
       cursorIdeSyncPath: opts.cursorIdeSyncPath,
       claudeCodeSyncPath: opts.claudeCodeSyncPath,
+      codexSyncPath: opts.codexSyncPath,
+      opencodeSyncPath: opts.opencodeSyncPath,
+      openclawSyncPath: opts.openclawSyncPath,
       tunnelConfig,
       mailboxConfig,
     });
