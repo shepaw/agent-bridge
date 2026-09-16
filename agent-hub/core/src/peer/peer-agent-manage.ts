@@ -24,6 +24,7 @@ import {
   hubStoreDeviceId,
   workspaceStoreUri,
 } from './agent-store-mapping.js';
+import { probeHubStoreHealth } from './hub-store-health.js';
 import { isInstanceRunning, listAgents } from './peer-agent-host.js';
 
 export interface AgentManageEntry {
@@ -194,19 +195,23 @@ export async function handleAgentManage(
           error: `unknown op: ${op}`,
         };
     }
+    const hubStore = await probeHubStoreHealth();
     return {
       type: 'agent_manage_resp',
       request_id: requestId,
       ok: true,
       agents: listManagedAgents(),
+      hub_store: hubStore,
     };
   } catch (err) {
+    const hubStore = await probeHubStoreHealth();
     return {
       type: 'agent_manage_resp',
       request_id: requestId,
       ok: false,
       error: err instanceof Error ? err.message : String(err),
       agents: listManagedAgents(),
+      hub_store: hubStore,
     };
   }
 }
