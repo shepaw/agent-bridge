@@ -4,7 +4,11 @@
  * Aligned with shepaw `SessionUtils.stripHubInternalPromptForDisplay`.
  */
 
-import type { SessionHistoryMessage } from 'shepaw-acp-sdk';
+import type {
+  SessionHistoryMessage,
+  SessionHistoryMessageKind,
+  SessionHistoryMetadata,
+} from 'shepaw-acp-sdk';
 
 import { SCOPE_CARD_STABLE_HEADER } from './store-pouch-card.js';
 
@@ -131,6 +135,31 @@ export function promptToTranscriptUserText(
   return parts.join('\n\n').trim();
 }
 
+/** Classify a synthetic user turn for protocol `metadata.kind`. */
+export function classifyInternalPromptKind(text: string): SessionHistoryMessageKind | undefined {
+  const t = text.trim();
+  if (t.startsWith(SCOPE_CARD_VOLATILE_HEADER)) return 'scope_card_volatile';
+  if (t.startsWith(SCOPE_CARD_STABLE_HEADER)) return 'scope_card_stable';
+  if (t.startsWith(GROUP_TASK_CONTEXT_HEADER)) return 'group_task_context';
+  return undefined;
+}
+
+/** Hub history metadata for UI-only internal prompt rows. */
+export function internalPromptHistoryMetadata(text: string): SessionHistoryMetadata {
+  return {
+    ui_hidden: true,
+    history_exclude: true,
+    kind: classifyInternalPromptKind(text) ?? 'scope_card_stable',
+  };
+}
+
+function mergeHistoryMetadata(
+  existing: SessionHistoryMetadata | undefined,
+  extra: SessionHistoryMetadata,
+): SessionHistoryMetadata {
+  return { ...existing, ...extra };
+}
+
 /** Sanitize history messages before session/history sync to the App. */
 export function sanitizeSessionHistoryMessages(
   messages: ReadonlyArray<SessionHistoryMessage>,
@@ -142,7 +171,14 @@ export function sanitizeSessionHistoryMessages(
       continue;
     }
     const visible = stripInternalPromptForTranscript(m.content);
-    if (visible.length === 0) continue;
+    if (visible.length === 0) {
+      if (!isInternalPromptOnly(m.content)) continue;
+      out.push({
+        ...m,
+        metadata: mergeHistoryMetadata(m.metadata, internalPromptHistoryMetadata(m.content)),
+      });
+      continue;
+    }
     if (visible === m.content) {
       out.push(m);
       continue;

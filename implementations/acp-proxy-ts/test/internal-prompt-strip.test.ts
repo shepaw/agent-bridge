@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifyInternalPromptKind,
+  internalPromptHistoryMetadata,
   isInternalPromptOnly,
   promptToTranscriptUserText,
+  sanitizeSessionHistoryMessages,
   stripInternalPromptForTranscript,
 } from '../src/internal-prompt-strip.js';
 import { buildGroupTaskContextBlock } from '../src/group-context.js';
@@ -52,5 +55,39 @@ describe('promptToTranscriptUserText', () => {
     const raw = promptToPlainText(blocks);
     expect(raw).toContain('当前储物袋作用域');
     expect(promptToTranscriptUserText(blocks)).toBe('放到储物袋');
+  });
+});
+
+describe('classifyInternalPromptKind', () => {
+  it('tags stable Scope Card and group context', () => {
+    const card = buildStorePouchCard({ deviceId: 'abc' });
+    expect(classifyInternalPromptKind(card)).toBe('scope_card_stable');
+    const group = buildGroupTaskContextBlock({
+      group_id: 'g1',
+      group_name: '群',
+      members: [{ id: 'm1', name: 'A', status: 'online' }],
+    });
+    expect(classifyInternalPromptKind(group!)).toBe('group_task_context');
+  });
+});
+
+describe('sanitizeSessionHistoryMessages', () => {
+  it('annotates pure Scope Card rows instead of dropping them', () => {
+    const card = buildStorePouchCard({ deviceId: 'abc' });
+    const out = sanitizeSessionHistoryMessages([
+      { role: 'user', content: card },
+      { role: 'agent', content: 'ok' },
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out[0]?.metadata).toEqual(internalPromptHistoryMetadata(card));
+    expect(out[1]?.content).toBe('ok');
+  });
+
+  it('strips bundled Scope Card prefix from user turns', () => {
+    const card = buildStorePouchCard({ deviceId: 'abc' });
+    const out = sanitizeSessionHistoryMessages([
+      { role: 'user', content: `${card}\n\n排查 bug` },
+    ]);
+    expect(out).toEqual([{ role: 'user', content: '排查 bug' }]);
   });
 });

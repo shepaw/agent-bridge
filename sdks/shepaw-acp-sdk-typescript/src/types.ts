@@ -289,6 +289,27 @@ export interface SessionsListResult {
   sessions: SessionInfo[];
 }
 
+/** Synthetic / internal prompt rows in session history (Hub Scope Card, etc.). */
+export type SessionHistoryMessageKind =
+  | 'scope_card_stable'
+  | 'scope_card_volatile'
+  | 'group_task_context'
+  | 'claude_command_artifact';
+
+/**
+ * Optional per-message metadata for session/history sync.
+ *
+ * Mirrors shepaw `ChatHistoryContent` keys (`ui_hidden`, `history_exclude`).
+ * Clients may still fall back to content heuristics when metadata is absent.
+ */
+export interface SessionHistoryMetadata {
+  /** Hide from chat bubbles and session title derivation. */
+  ui_hidden?: boolean;
+  /** Exclude from LLM history replay on the app side. */
+  history_exclude?: boolean;
+  kind?: SessionHistoryMessageKind;
+}
+
 /** One replayed conversation turn from a session's transcript. */
 export interface SessionHistoryMessage {
   /** `user` or `agent` — matches the app's sender types. */
@@ -296,6 +317,8 @@ export interface SessionHistoryMessage {
   content: string;
   /** Upstream message id, when available (used for de-dup on the app side). */
   message_id?: string;
+  /** Hub / bridge annotations for UI-only or synthetic turns. */
+  metadata?: SessionHistoryMetadata;
   /**
    * ISO-8601 original send time. Always populated by acp-proxy before the
    * history response leaves the bridge (engine adapters fill what they can;
