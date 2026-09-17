@@ -1,6 +1,9 @@
 /**
- * Device / scope pouch card injected into each ACP prompt turn of a Shepaw
- * session (stable section; transcript export strips it).
+ * Device / scope pouch card for Hub ACP sessions (stable section).
+ *
+ * Injected via `session/new` `_meta.systemPrompt` when the engine supports it
+ * (Phase 2), otherwise prepended to each user prompt (Phase 1 fallback).
+ * Transcript export always strips it before sync to the App.
  *
  * Aligned with shepaw `ScopeCard` schema_version=1
  * (`.ai_workspace/AGENT_SCOPE_CARD_DESIGN.md`):

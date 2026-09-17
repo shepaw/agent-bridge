@@ -102,6 +102,10 @@ import {
 } from './group-context.js';
 import { sanitizeSessionHistoryMessages } from './internal-prompt-strip.js';
 import {
+  resolveScopeCardChannel,
+  type ScopeInjectionTurn,
+} from './session-scope-injector.js';
+import {
   buildStorePouchCard,
   pouchCardEnabled,
   prependStorePouchCard,
@@ -430,6 +434,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     }
 
     let blocks = prepared.blocks;
+    let scopeInjection: ScopeInjectionTurn | undefined;
     if (pouchCardEnabled(process.env)) {
       const pouchDeviceId = resolveStoreDeviceIdFromEnv(process.env);
       const pouchCard = buildStorePouchCard({
@@ -438,8 +443,7 @@ export class AcpProxyAgent extends ACPAgentServer {
         resumeUri: pouchDeviceId ? resumeStoreUri(pouchDeviceId, this.agentId) : undefined,
         hostCardMarkdown: (process.env.SHEPAW_SCOPE_CARD ?? '').trim() || undefined,
       });
-      // Group roster block is once per session; stable Scope Card every turn.
-      let injectText = pouchCard;
+      const channel = resolveScopeCardChannel(this.engineId);
       let groupInjected = false;
       if (
         isGroupTurn(groupContext) &&
@@ -447,14 +451,25 @@ export class AcpProxyAgent extends ACPAgentServer {
       ) {
         const groupBlock = buildGroupTaskContextBlock(groupContext);
         if (groupBlock) {
-          injectText = `${pouchCard}\n\n${groupBlock}`;
+          if (channel === 'user') {
+            blocks = prependStorePouchCard(blocks, `${pouchCard}\n\n${groupBlock}`);
+          } else {
+            blocks = prependStorePouchCard(blocks, groupBlock);
+          }
           this.groupContextSessions.add(shepawSessionId);
           groupInjected = true;
         }
       }
-      blocks = prependStorePouchCard(blocks, injectText);
+      if (channel === 'user') {
+        if (!groupInjected) {
+          blocks = prependStorePouchCard(blocks, pouchCard);
+        }
+      } else {
+        scopeInjection = { stableCard: pouchCard, channel };
+      }
       log(
-        'injected device pouch card for session %s%s',
+        'Scope Card channel=%s session=%s%s',
+        channel,
         shepawSessionId,
         groupInjected ? ' (group-task context)' : '',
       );
@@ -474,6 +489,7 @@ export class AcpProxyAgent extends ACPAgentServer {
         // Group-task turns inject the group-tools MCP (dispatch/finish/mention)
         // into the upstream session.
         groupContext: isGroupTurn(groupContext) ? groupContext : undefined,
+        scopeInjection,
         onRestoreFailed: (id) => {
           this.sessionStore.delete(id);
         },

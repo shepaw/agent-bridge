@@ -68,6 +68,10 @@ import {
 } from './session-transcript-sink.js';
 import { prependHistoryToPrompt, type PriorHistoryTurn } from './session-rehydrate.js';
 import {
+  buildSessionNewScopeMeta,
+  type ScopeInjectionTurn,
+} from './session-scope-injector.js';
+import {
   CURSOR_STALE_AUTH_MESSAGE,
   CURSOR_STALE_AUTH_RETRIES,
   isPossibleStaleAuthPrefix,
@@ -184,6 +188,11 @@ export interface RunPromptTurnOptions {
    * group_mention) is injected into the upstream session.
    */
   readonly groupContext?: GroupChatContext;
+  /**
+   * Stable Scope Card for this turn. When `channel` is `system`, injected via
+   * `session/new` `_meta.systemPrompt` (not prepended to user blocks).
+   */
+  readonly scopeInjection?: ScopeInjectionTurn;
 }
 
 /** Hooks shared by prompt turns and explicit session cleanup (`agent.sessions.*`). */
@@ -1183,12 +1192,21 @@ export class AcpSubprocess {
 
     // Use the CURRENT connection — tryRestoreSession may have restarted the
     // upstream agent above, and a stale handle would fail or hang session/new.
-    const session = await this.startSessionWithMcp(sessionCtx);
+    const scopeMeta =
+      opts.scopeInjection?.channel === 'system'
+        ? buildSessionNewScopeMeta(opts.scopeInjection.stableCard)
+        : undefined;
+    const session = await this.startSessionWithMcp(sessionCtx, scopeMeta);
     this.sessions.set(shepawSessionId, session);
     opts.onAcpSessionId?.(shepawSessionId, session.sessionId);
     this.rememberConfigOptions(shepawSessionId, session.newSessionResponse.configOptions);
     this.rememberSessionModes(shepawSessionId, session.modes ?? session.newSessionResponse.modes);
-    log('created ACP session %s for shepaw session %s', session.sessionId, shepawSessionId);
+    log(
+      'created ACP session %s for shepaw session %s%s',
+      session.sessionId,
+      shepawSessionId,
+      scopeMeta !== undefined ? ' (Scope Card via session/new _meta.systemPrompt)' : '',
+    );
     console.error(
       `[acp-proxy] created new session shepaw=${shepawSessionId} → upstream=${session.sessionId}`,
     );
@@ -1297,6 +1315,7 @@ export class AcpSubprocess {
 
   private async startSessionWithMcp(
     sessionCtx?: GroupMcpSessionContext,
+    newSessionMeta?: Record<string, unknown>,
   ): Promise<acp.ActiveSession> {
     const servers = this.mcpServers(sessionCtx);
     if (servers.length > 0) {
@@ -1304,7 +1323,14 @@ export class AcpSubprocess {
     }
     const extras = this.sessionAdditionalDirectories();
     const startOnce = (): Promise<acp.ActiveSession> => {
-      let builder = this.connection!.agent.buildSession(this.cwd);
+      const baseRequest: acp.NewSessionRequest = {
+        cwd: this.cwd,
+        mcpServers: [],
+        ...(newSessionMeta !== undefined && Object.keys(newSessionMeta).length > 0
+          ? { _meta: newSessionMeta }
+          : {}),
+      };
+      let builder = this.connection!.agent.buildSession(baseRequest);
       if (extras !== undefined) {
         builder = builder.withAdditionalDirectories(extras);
       }
