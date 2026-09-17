@@ -32,7 +32,6 @@
 
 import {
   existsSync,
-  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
