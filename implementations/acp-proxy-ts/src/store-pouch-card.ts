@@ -1,6 +1,6 @@
 /**
- * Device / scope pouch card injected into the first ACP prompt of a Shepaw
- * session.
+ * Device / scope pouch card injected into each ACP prompt turn of a Shepaw
+ * session (stable section; transcript export strips it).
  *
  * Aligned with shepaw `ScopeCard` schema_version=1
  * (`.ai_workspace/AGENT_SCOPE_CARD_DESIGN.md`):
@@ -13,6 +13,8 @@
 import { storeBackendConfigured } from './shepaw-cli-shim.js';
 
 export const SCOPE_CARD_SCHEMA_VERSION = 1;
+
+export const SCOPE_CARD_STABLE_HEADER = '## 当前储物袋作用域';
 
 /** Disable with SHEPAW_STORE_POUCH_CARD=0|false|off. */
 export function pouchCardEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -68,7 +70,7 @@ export function buildStorePouchCard(opts: {
     : '';
 
   return [
-    '## 当前储物袋作用域',
+    SCOPE_CARD_STABLE_HEADER,
     '',
     `- schema: v${SCOPE_CARD_SCHEMA_VERSION} · mode: \`acp\` · owner: device`,
     deviceLine,

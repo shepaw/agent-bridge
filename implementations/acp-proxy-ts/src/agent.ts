@@ -28,6 +28,7 @@ import {
   type ModesListResult,
   type ModesSetCurrentParams,
   type ModesSetCurrentResult,
+  type SessionHistoryMessage,
   type SessionHistoryParams,
   type SessionHistoryResult,
   type SessionInfo,
@@ -99,6 +100,7 @@ import {
   groupStoreWriteScope,
   isGroupTurn,
 } from './group-context.js';
+import { sanitizeSessionHistoryMessages } from './internal-prompt-strip.js';
 import {
   buildStorePouchCard,
   pouchCardEnabled,
@@ -227,8 +229,8 @@ export class AcpProxyAgent extends ACPAgentServer {
    * per-turn adoption skip unchanged documents (external edit = different sha). */
   private lastResumeSha: string | undefined;
 
-  /** Sessions that already received the device pouch card (once per Shepaw session). */
-  private readonly pouchCardSessions = new Set<string>();
+  /** Sessions that already received the group-task context block (once per session). */
+  private readonly groupContextSessions = new Set<string>();
 
   /** Manual Cursor IDE sync manifest (Hub writes; gateway reads on list/history). */
   private readonly cursorIdeSyncPath: string | undefined;
@@ -428,10 +430,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     }
 
     let blocks = prepared.blocks;
-    if (
-      pouchCardEnabled(process.env) &&
-      !this.pouchCardSessions.has(shepawSessionId)
-    ) {
+    if (pouchCardEnabled(process.env)) {
       const pouchDeviceId = resolveStoreDeviceIdFromEnv(process.env);
       const pouchCard = buildStorePouchCard({
         deviceId: pouchDeviceId,
@@ -439,19 +438,25 @@ export class AcpProxyAgent extends ACPAgentServer {
         resumeUri: pouchDeviceId ? resumeStoreUri(pouchDeviceId, this.agentId) : undefined,
         hostCardMarkdown: (process.env.SHEPAW_SCOPE_CARD ?? '').trim() || undefined,
       });
-      // Group-task turn: append the group context block (roster, own role,
-      // shared workspace URI) once per session so the upstream agent knows
-      // it is working inside a group chat.
-      const groupBlock = isGroupTurn(groupContext)
-        ? buildGroupTaskContextBlock(groupContext)
-        : null;
-      const combined = groupBlock ? `${pouchCard}\n\n${groupBlock}` : pouchCard;
-      blocks = prependStorePouchCard(blocks, combined);
-      this.pouchCardSessions.add(shepawSessionId);
+      // Group roster block is once per session; stable Scope Card every turn.
+      let injectText = pouchCard;
+      let groupInjected = false;
+      if (
+        isGroupTurn(groupContext) &&
+        !this.groupContextSessions.has(shepawSessionId)
+      ) {
+        const groupBlock = buildGroupTaskContextBlock(groupContext);
+        if (groupBlock) {
+          injectText = `${pouchCard}\n\n${groupBlock}`;
+          this.groupContextSessions.add(shepawSessionId);
+          groupInjected = true;
+        }
+      }
+      blocks = prependStorePouchCard(blocks, injectText);
       log(
         'injected device pouch card for session %s%s',
         shepawSessionId,
-        groupBlock ? ' (group-task context)' : '',
+        groupInjected ? ' (group-task context)' : '',
       );
     }
 
@@ -695,6 +700,16 @@ export class AcpProxyAgent extends ACPAgentServer {
     return { sessions };
   }
 
+  /** Strip Hub-injected prompt sections, cache, and return for session/history. */
+  private publishSessionHistory(
+    sessionId: string,
+    messages: SessionHistoryMessage[],
+  ): SessionHistoryResult {
+    const clean = sanitizeSessionHistoryMessages(messages);
+    this.sessionHistoryCache.set(sessionId, clean);
+    return { messages: clean };
+  }
+
   override async onSessionHistory(params: SessionHistoryParams): Promise<SessionHistoryResult> {
     const sessionId = params.session_id;
     if (sessionId.length === 0) return { messages: [] };
@@ -719,8 +734,7 @@ export class AcpProxyAgent extends ACPAgentServer {
             upstreamId,
             messages.length,
           );
-          this.sessionHistoryCache.set(sessionId, messages);
-          return { messages };
+          return this.publishSessionHistory(sessionId, messages);
         }
       }
     }
@@ -737,8 +751,7 @@ export class AcpProxyAgent extends ACPAgentServer {
             upstreamId,
             messages.length,
           );
-          this.sessionHistoryCache.set(sessionId, messages);
-          return { messages };
+          return this.publishSessionHistory(sessionId, messages);
         }
       }
     }
@@ -755,8 +768,7 @@ export class AcpProxyAgent extends ACPAgentServer {
             upstreamId,
             messages.length,
           );
-          this.sessionHistoryCache.set(sessionId, messages);
-          return { messages };
+          return this.publishSessionHistory(sessionId, messages);
         }
       }
     }
@@ -773,8 +785,7 @@ export class AcpProxyAgent extends ACPAgentServer {
             upstreamId,
             messages.length,
           );
-          this.sessionHistoryCache.set(sessionId, messages);
-          return { messages };
+          return this.publishSessionHistory(sessionId, messages);
         }
       }
     }
@@ -791,8 +802,7 @@ export class AcpProxyAgent extends ACPAgentServer {
             upstreamId,
             messages.length,
           );
-          this.sessionHistoryCache.set(sessionId, messages);
-          return { messages };
+          return this.publishSessionHistory(sessionId, messages);
         }
       }
     }
@@ -807,8 +817,7 @@ export class AcpProxyAgent extends ACPAgentServer {
         upstreamId,
         messages.length,
       );
-      this.sessionHistoryCache.set(sessionId, messages);
-      return { messages };
+      return this.publishSessionHistory(sessionId, messages);
     }
 
     // Resolve session-level updated_at so history normalization can anchor
@@ -832,8 +841,7 @@ export class AcpProxyAgent extends ACPAgentServer {
     const messages = await this.subprocess.loadSessionTranscript(upstreamId, {
       sessionUpdatedAt,
     });
-    this.sessionHistoryCache.set(sessionId, messages);
-    return { messages };
+    return this.publishSessionHistory(sessionId, messages);
   }
 
   override async onModelsList(params: ModelsListParams): Promise<ModelsListResult> {

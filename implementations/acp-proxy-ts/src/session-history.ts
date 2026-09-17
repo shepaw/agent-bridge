@@ -18,6 +18,10 @@ import type { AcpEngineSpec } from './engines.js';
 import { spawnCommand } from './engines.js';
 import { extractEmbeddedTimestamp } from './transcript-timestamp.js';
 import { ensureHistoryCreatedAt } from './history-created-at.js';
+import {
+  isInternalPromptOnly,
+  sanitizeSessionHistoryMessages,
+} from './internal-prompt-strip.js';
 import { formatPlanText, formatToolCallUpdateText } from './permission/format.js';
 
 /** Skip synthetic user turns that are really tool-output notifications. */
@@ -232,8 +236,11 @@ export async function loadUpstreamSessionTranscript(
   const filtered = collector.turns
     // Keep progress-only turns: an interrupted reply may be all tool calls.
     .filter((t) => t.content.trim().length > 0 || (t.progress_content?.trim().length ?? 0) > 0)
-    .filter((t) => !(t.role === 'user' && isSyntheticUserTurn(t.content)));
+    .filter((t) => !(t.role === 'user' && isSyntheticUserTurn(t.content)))
+    .filter((t) => !(t.role === 'user' && isInternalPromptOnly(t.content)));
 
   // Always emit protocol `created_at` so clients never need engine adapters.
-  return ensureHistoryCreatedAt(filtered, { sessionUpdatedAt: opts.sessionUpdatedAt });
+  return ensureHistoryCreatedAt(sanitizeSessionHistoryMessages(filtered), {
+    sessionUpdatedAt: opts.sessionUpdatedAt,
+  });
 }

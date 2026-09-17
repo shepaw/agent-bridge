@@ -62,8 +62,8 @@ import {
   storeBackendConfigured,
 } from './shepaw-cli-shim.js';
 import { defaultStoreContextPath } from './store-write-context.js';
+import { promptToTranscriptUserText } from './internal-prompt-strip.js';
 import {
-  promptToPlainText,
   SessionTranscriptSink,
 } from './session-transcript-sink.js';
 import { prependHistoryToPrompt, type PriorHistoryTurn } from './session-rehydrate.js';
@@ -926,7 +926,9 @@ export class AcpSubprocess {
           `[acp-proxy] rehydrated ${opts.priorHistory.length} history turn(s) into new session shepaw=${shepawSessionId}`,
         );
       }
-      const userText = promptToPlainText(promptArg as string | acp.ContentBlock | acp.ContentBlock[]);
+      const userText = promptToTranscriptUserText(
+        promptArg as string | acp.ContentBlock | acp.ContentBlock[],
+      );
       if (userText) {
         this.transcriptSink?.append(shepawSessionId, 'user', userText);
       }
