@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { t } from '../i18n/index.js';
-import type { InstanceStatus, LiveSession, SessionHistoryMessage } from '../api/types.js';
+import type {
+  ConversationOption,
+  InstanceStatus,
+  LiveSession,
+  SessionHistoryMessage,
+} from '../api/types.js';
 
 interface UseConversationsOptions {
   instanceId: string;
@@ -29,6 +34,14 @@ export function useConversations({
   const [sendError, setSendError] = useState<string | null>(null);
   const [pendingReply, setPendingReply] = useState(false);
   const [streamingMessageKey, setStreamingMessageKey] = useState<string | null>(null);
+
+  const [models, setModels] = useState<ConversationOption[]>([]);
+  const [currentModel, setCurrentModel] = useState<string | undefined>(undefined);
+  const [modes, setModes] = useState<ConversationOption[]>([]);
+  const [currentMode, setCurrentMode] = useState<string | undefined>(undefined);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsBusy, setOptionsBusy] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
 
   const selectedSessionIdRef = useRef(selectedSessionId);
   selectedSessionIdRef.current = selectedSessionId;
@@ -130,18 +143,26 @@ export function useConversations({
     return sessionId;
   }, []);
 
-  const sendChat = useCallback(async (raw: string) => {
+  const sendChat = useCallback(async (
+    raw: string,
+    attachments: Array<{ uri: string; name?: string }> = [],
+  ) => {
     const message = raw.trim();
-    if (message.length === 0 || sending) return;
+    if ((message.length === 0 && attachments.length === 0) || sending) return;
 
     let sessionId = selectedSessionIdRef.current;
     if (sessionId === null) {
       sessionId = startNewSession();
     }
 
+    const attachmentBlock = attachments.length === 0
+      ? ''
+      : `\n\nPouch attachments:\n${attachments
+        .map((a) => `- [${a.name ?? a.uri}](${a.uri})`)
+        .join('\n')}`;
     const userMsg: SessionHistoryMessage = {
       role: 'user',
-      content: message,
+      content: message.length > 0 ? `${message}${attachmentBlock}` : attachmentBlock.trim(),
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -154,6 +175,7 @@ export function useConversations({
       const result = await api.conversations.chat(instanceId, {
         message,
         session_id: sessionId,
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
       if (result.session_id !== sessionId) {
         onSelectSessionRef.current(result.session_id);
@@ -216,6 +238,89 @@ export function useConversations({
     void loadHistory(selectedSessionId);
   }, [selectedSessionId, gatewayReady, loadHistory]);
 
+  useEffect(() => {
+    if (!gatewayReady) {
+      setModels([]);
+      setModes([]);
+      setCurrentModel(undefined);
+      setCurrentMode(undefined);
+      setOptionsLoading(false);
+      setOptionsError(null);
+      return;
+    }
+    let cancelled = false;
+    setOptionsLoading(true);
+    setOptionsError(null);
+    const sessionId = selectedSessionId ?? undefined;
+    void Promise.all([
+      api.conversations.models(instanceId, sessionId),
+      api.conversations.modes(instanceId, sessionId),
+    ])
+      .then(([modelResult, modeResult]) => {
+        if (cancelled) return;
+        setModels(modelResult.models);
+        setCurrentModel(modelResult.current);
+        setModes(modeResult.modes);
+        setCurrentMode(modeResult.current);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setModels([]);
+        setModes([]);
+        setOptionsError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setOptionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayReady, instanceId, selectedSessionId]);
+
+  const setConversationModel = useCallback(async (model: string) => {
+    if (optionsBusy || model === currentModel) return;
+    const previous = currentModel;
+    setCurrentModel(model);
+    setOptionsBusy(true);
+    setOptionsError(null);
+    try {
+      const result = await api.conversations.setModel(instanceId, {
+        model,
+        ...(selectedSessionIdRef.current ? { session_id: selectedSessionIdRef.current } : {}),
+      });
+      setCurrentModel(result.model);
+    } catch (e) {
+      setCurrentModel(previous);
+      setOptionsError(t('sessions.modelFailed', {
+        error: e instanceof Error ? e.message : String(e),
+      }));
+    } finally {
+      setOptionsBusy(false);
+    }
+  }, [currentModel, instanceId, optionsBusy]);
+
+  const setConversationMode = useCallback(async (mode: string) => {
+    if (optionsBusy || mode === currentMode) return;
+    const previous = currentMode;
+    setCurrentMode(mode);
+    setOptionsBusy(true);
+    setOptionsError(null);
+    try {
+      const result = await api.conversations.setMode(instanceId, {
+        mode,
+        ...(selectedSessionIdRef.current ? { session_id: selectedSessionIdRef.current } : {}),
+      });
+      setCurrentMode(result.mode);
+    } catch (e) {
+      setCurrentMode(previous);
+      setOptionsError(t('sessions.modeFailed', {
+        error: e instanceof Error ? e.message : String(e),
+      }));
+    } finally {
+      setOptionsBusy(false);
+    }
+  }, [currentMode, instanceId, optionsBusy]);
+
   return {
     sessions: displayedSessions,
     listLoading,
@@ -230,6 +335,15 @@ export function useConversations({
     streamingMessageKey,
     clearStreamingMessage: () => setStreamingMessageKey(null),
     gatewayReady,
+    models,
+    currentModel,
+    modes,
+    currentMode,
+    optionsLoading,
+    optionsBusy,
+    optionsError,
+    setConversationModel,
+    setConversationMode,
     loadSessions,
     loadHistory,
     startNewSession,

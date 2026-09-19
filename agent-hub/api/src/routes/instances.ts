@@ -18,6 +18,10 @@
  * DELETE /api/instances/:id/enroll/:code — revoke a pairing code
  * GET    /api/instances/:id/conversations — live session list (agent.sessions.list)
  * POST   /api/instances/:id/conversations/chat — send a turn (new or existing session)
+ * GET    /api/instances/:id/conversations/models — live models (agent.models.list)
+ * POST   /api/instances/:id/conversations/models — switch model (agent.models.setCurrent)
+ * GET    /api/instances/:id/conversations/modes — live session modes (agent.modes.list)
+ * POST   /api/instances/:id/conversations/modes — switch mode (agent.modes.setCurrent)
  * GET    /api/instances/:id/conversations/:sessionId/history — session transcript
  * GET    /api/instances/:id/sessions   — list persisted Shepaw→ACP session mappings
  * DELETE /api/instances/:id/sessions/:shepawSessionId — remove a stale mapping
@@ -79,6 +83,10 @@ import {
   syncInstanceOpenclawSessions,
   OpenclawSyncNotSupportedError,
   listInstanceConversations,
+  listInstanceConversationModes,
+  listInstanceConversationModels,
+  setInstanceConversationMode,
+  setInstanceConversationModel,
   getInstanceConversationHistory,
   chatInstanceConversation,
   getInstanceAgentCard,
@@ -983,7 +991,10 @@ instancesRouter.post('/:id/conversations/chat', async (req: Request, res: Respon
     getInstance(cfg, req.params.id!);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const sessionId = typeof body.session_id === 'string' ? body.session_id : undefined;
-    const result = await chatInstanceConversation(req.params.id!, body.message, { sessionId });
+    const result = await chatInstanceConversation(req.params.id!, body.message, {
+      sessionId,
+      attachments: body.attachments,
+    });
     res.json({
       session_id: result.sessionId,
       reply: result.reply,
@@ -1001,7 +1012,7 @@ instancesRouter.post('/:id/conversations/chat', async (req: Request, res: Respon
       res.status(404).json({ error: err.message });
     } else if (err instanceof InstanceGatewayOfflineError) {
       res.status(503).json({ error: err.message });
-    } else if (err instanceof Error && /message must/.test(err.message)) {
+    } else if (err instanceof Error && /message must|attachment/.test(err.message)) {
       res.status(400).json({ error: err.message });
     } else {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -1023,6 +1034,92 @@ instancesRouter.get('/:id/conversations', async (req: Request, res: Response) =>
     } else {
       res.status(500).json({ error: String(err) });
     }
+  }
+});
+
+function optionalSessionId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function conversationOptionError(res: Response, err: unknown): void {
+  if (err instanceof InstanceNotFoundError) {
+    res.status(404).json({ error: err.message });
+  } else if (err instanceof InstanceGatewayOfflineError) {
+    res.status(503).json({ error: err.message });
+  } else if (err instanceof Error && /must not be empty/.test(err.message)) {
+    res.status(400).json({ error: err.message });
+  } else {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+instancesRouter.get('/:id/conversations/models', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const result = await listInstanceConversationModels(
+      req.params.id!,
+      optionalSessionId(req.query.session_id),
+    );
+    res.json(result);
+  } catch (err) {
+    conversationOptionError(res, err);
+  }
+});
+
+instancesRouter.post('/:id/conversations/models', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.model !== 'string') {
+      res.status(400).json({ error: 'model must be a string' });
+      return;
+    }
+    const result = await setInstanceConversationModel(
+      req.params.id!,
+      body.model,
+      optionalSessionId(body.session_id),
+    );
+    res.json(result);
+  } catch (err) {
+    conversationOptionError(res, err);
+  }
+});
+
+instancesRouter.get('/:id/conversations/modes', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const result = await listInstanceConversationModes(
+      req.params.id!,
+      optionalSessionId(req.query.session_id),
+    );
+    res.json(result);
+  } catch (err) {
+    conversationOptionError(res, err);
+  }
+});
+
+instancesRouter.post('/:id/conversations/modes', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.mode !== 'string') {
+      res.status(400).json({ error: 'mode must be a string' });
+      return;
+    }
+    const result = await setInstanceConversationMode(
+      req.params.id!,
+      body.mode,
+      optionalSessionId(body.session_id),
+    );
+    res.json(result);
+  } catch (err) {
+    conversationOptionError(res, err);
   }
 });
 

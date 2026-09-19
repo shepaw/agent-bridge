@@ -17,6 +17,8 @@ interface SessionsPanelProps {
   onSelectSession: (sessionId: string | null) => void;
   onManageMappings?: () => void;
   workspaceUri?: string;
+  agentUri?: string;
+  storeDeviceId?: string;
   onOpenStore?: (uri: string) => void;
 }
 
@@ -28,6 +30,8 @@ export function SessionsPanel({
   onSelectSession,
   onManageMappings,
   workspaceUri,
+  agentUri,
+  storeDeviceId,
   onOpenStore,
 }: SessionsPanelProps) {
   const { t } = useI18n();
@@ -54,6 +58,15 @@ export function SessionsPanel({
     pendingReply,
     streamingMessageKey,
     clearStreamingMessage,
+    models,
+    currentModel,
+    modes,
+    currentMode,
+    optionsLoading,
+    optionsBusy,
+    optionsError,
+    setConversationModel,
+    setConversationMode,
     loadSessions,
     startNewSession,
     sendChat,
@@ -197,8 +210,32 @@ export function SessionsPanel({
             <ChatComposer
               disabled={!gatewayReady || historyLoading}
               sending={sending}
-              error={sendError}
-              onSend={(message) => void sendChat(message)}
+              error={sendError ?? optionsError}
+              uploadRootUri={agentUri ?? workspaceUri}
+              pickerRoots={[
+                ...(agentUri ? [{ id: 'agent', label: t('sessions.pickerRootAgent'), uri: agentUri }] : []),
+                ...(workspaceUri ? [{ id: 'workspace', label: t('sessions.pickerRootWorkspace'), uri: workspaceUri }] : []),
+                ...(storeDeviceId
+                  ? [{ id: 'files', label: t('sessions.pickerRootFiles'), uri: `store://files/${storeDeviceId}/` }]
+                  : []),
+              ]}
+              modes={modes.map((m) => ({
+                value: m.value,
+                label: m.display_name,
+                description: m.description,
+              }))}
+              currentMode={currentMode}
+              models={models.map((m) => ({
+                value: m.value,
+                label: m.display_name,
+                description: m.description,
+              }))}
+              currentModel={currentModel}
+              optionsLoading={optionsLoading}
+              optionsBusy={optionsBusy}
+              onSelectMode={(mode) => void setConversationMode(mode)}
+              onSelectModel={(model) => void setConversationModel(model)}
+              onSend={(message, attachments) => void sendChat(message, attachments)}
             />
           </main>
         </div>

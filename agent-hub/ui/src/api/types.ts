@@ -299,6 +299,11 @@ export interface SessionHistoryMessage {
 }
 
 /** POST /instances/:id/conversations/chat */
+export interface ConversationChatAttachment {
+  uri: string;
+  name?: string;
+}
+
 export interface ConversationChatResult {
   session_id: string;
   reply: string;
@@ -306,6 +311,37 @@ export interface ConversationChatResult {
   progress_content?: string;
   progress_title?: string;
   progress_auto_collapse?: boolean;
+}
+
+/** One model or session-mode option from the live agent / engine catalog. */
+export interface ConversationOption {
+  value: string;
+  display_name: string;
+  description: string;
+}
+
+/** GET /instances/:id/conversations/models */
+export interface ConversationModelsResult {
+  models: ConversationOption[];
+  current?: string;
+}
+
+/** GET /instances/:id/conversations/modes */
+export interface ConversationModesResult {
+  modes: ConversationOption[];
+  current?: string;
+}
+
+/** POST /instances/:id/conversations/models */
+export interface ConversationSetModelResult {
+  model: string;
+  display_name?: string;
+}
+
+/** POST /instances/:id/conversations/modes */
+export interface ConversationSetModeResult {
+  mode: string;
+  display_name?: string;
 }
 
 /** Peer-pushed attachment stored under instances/<id>/peer-attachments/. */

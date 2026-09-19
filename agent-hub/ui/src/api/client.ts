@@ -25,6 +25,10 @@ import type {
   LiveSession,
   SessionHistoryMessage,
   ConversationChatResult,
+  ConversationModesResult,
+  ConversationModelsResult,
+  ConversationSetModeResult,
+  ConversationSetModelResult,
   CursorIdeSyncPreview,
   CursorIdeSyncResult,
   ClaudeCodeSyncPreview,
@@ -338,9 +342,47 @@ export const api = {
 
     chat: (
       instanceId: string,
-      input: { message: string; session_id?: string },
+      input: {
+        message: string;
+        session_id?: string;
+        attachments?: Array<{ uri: string; name?: string }>;
+      },
     ): Promise<ConversationChatResult> =>
       request(`/instances/${instanceId}/conversations/chat`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+
+    models: (
+      instanceId: string,
+      sessionId?: string,
+    ): Promise<ConversationModelsResult> => {
+      const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+      return request(`/instances/${instanceId}/conversations/models${q}`);
+    },
+
+    setModel: (
+      instanceId: string,
+      input: { model: string; session_id?: string },
+    ): Promise<ConversationSetModelResult> =>
+      request(`/instances/${instanceId}/conversations/models`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+
+    modes: (
+      instanceId: string,
+      sessionId?: string,
+    ): Promise<ConversationModesResult> => {
+      const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+      return request(`/instances/${instanceId}/conversations/modes${q}`);
+    },
+
+    setMode: (
+      instanceId: string,
+      input: { mode: string; session_id?: string },
+    ): Promise<ConversationSetModeResult> =>
+      request(`/instances/${instanceId}/conversations/modes`, {
         method: 'POST',
         body: JSON.stringify(input),
       }),

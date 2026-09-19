@@ -620,6 +620,8 @@ export function InstanceDetail({
                 onSelectSession={handleSessionSelect}
                 onManageMappings={openManageMappings}
                 workspaceUri={instance.store?.workspaceUri}
+                agentUri={instance.store?.agentUri}
+                storeDeviceId={instance.store?.deviceId}
                 onOpenStore={onOpenStore}
               />
             </section>
