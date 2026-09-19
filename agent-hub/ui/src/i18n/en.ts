@@ -58,6 +58,9 @@ export const en = {
   'logs.empty': '(no output yet)',
 
   'nav.aria': 'Main navigation',
+  'nav.ariaDetail': 'Agent sections',
+  'nav.brand': 'Shepaw',
+  'nav.brandSub': 'Agent Hub',
   'nav.instances': 'My Agents',
   'nav.peer': 'Connect client',
   'nav.store': 'Nexus Pouch',

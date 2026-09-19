@@ -8,7 +8,7 @@ import { SetupGuide } from './components/SetupGuide.js';
 import { AgentsHubPage } from './components/AgentsHubPage.js';
 import { EngineConfigPage } from './components/EngineConfigPage.js';
 import { StoreBrowserPanel } from './components/StoreBrowserPanel.js';
-import { LanguageSwitcher } from './components/LanguageSwitcher.js';
+import { AppSidebar } from './components/AppSidebar.js';
 import { HUB_UPDATE_POLL_MS } from './components/VersionPanel.js';
 import type { SystemVersion } from './api/types.js';
 import { useI18n } from './i18n/index.js';
@@ -30,17 +30,6 @@ import { isUnauthorizedError } from './utils/errors.js';
 
 /** Top-level shell nav: instances (My Agents) default, then settings sections. */
 type AppNav = 'instances' | 'store' | SettingsTab;
-
-const NAV_IDS: AppNav[] = ['instances', 'peer', 'store', 'global'];
-
-function navLabelKey(
-  id: AppNav,
-): 'nav.instances' | 'nav.store' | 'nav.peer' | 'nav.global' {
-  if (id === 'instances') return 'nav.instances';
-  if (id === 'store') return 'nav.store';
-  if (id === 'peer') return 'nav.peer';
-  return 'nav.global';
-}
 
 function getInitialInstanceRoute() {
   return parseInstanceHash(location.hash);
@@ -420,105 +409,98 @@ export function App() {
   const heading = navTitle(nav, Boolean(selected), Boolean(configEngineId), t);
   const summaryKey = instances.length === 1 ? 'instances.summary' : 'instances.summaryPlural';
 
+  const showPageHeading = !selected;
+
   return (
-    <Layout>
-      <div style={topbar}>
-        <div>
-          <h1 style={title}>{heading.title}</h1>
-          <p style={subtitle}>
-            {nav === 'instances' && !selected && !configEngineId
-              ? (loading
-                ? t('common.loading')
-                : error
-                  ? t('common.error', { message: error })
-                  : t(summaryKey, { count: instances.length, running }))
-              : heading.subtitle}
-          </p>
-        </div>
-        <LanguageSwitcher />
-      </div>
-
-      {hubVersion?.outdated === true && hubVersion.latest && (
-        <div style={updateBanner} role="status">
-          <span>{t('settings.updateBanner', { latest: hubVersion.latest })}</span>
-          <button type="button" style={updateBannerBtn} onClick={() => goSettings('global')}>
-            {t('settings.updateBannerAction')}
-          </button>
-        </div>
-      )}
-
-      <div style={pageLayout}>
-        <nav style={sidebar} aria-label={t('nav.aria')}>
-          {NAV_IDS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              style={navBtn(nav === id)}
-              onClick={() => onNavClick(id)}
-            >
-              {t(navLabelKey(id))}
-            </button>
-          ))}
-        </nav>
-
-        <main style={contentPanel}>
-          {nav === 'instances' && selected ? (
-            <InstanceDetail
-              instanceId={selected}
-              activeTab={selectedTab}
-              onTabChange={setSelectedTab}
-              initialSessionId={selectedSessionId}
-              onSessionChange={setSelectedSessionId}
-              onBack={goInstances}
-              onReload={reload}
-              onOpenStore={(uri) => goStore(uri)}
-            />
-          ) : nav === 'instances' && configEngineId ? (
-            <EngineConfigPage engineId={configEngineId} onBack={goInstances} />
-          ) : nav === 'instances' ? (
-            <>
-              {guide === 'engines' && (
-                <SetupGuide
-                  step="engines"
-                  onOpenCreate={openCreateFromGuide}
-                  onSkip={skipGuide}
-                />
-              )}
-              <AgentsHubPage
-                loading={loading}
-                error={error}
-                instances={instances}
-                running={running}
-                restartAllBusy={restartAllBusy}
-                restartAllErr={restartAllErr}
-                onReloadInstances={reload}
-                onSelectInstance={(id) => {
-                  setSelected(id);
-                  setSelectedSessionId(null);
-                  setSelectedTab('overview');
-                }}
-                onAddInstance={openAdd}
-                onRestartAll={() => setShowRestartAllConfirm(true)}
-                onGoConfigure={openEngineConfig}
-              />
-            </>
-          ) : nav === 'store' ? (
-            <StoreBrowserPanel
-              initialUri={storeUri}
-              onUriChange={setStoreUri}
-            />
-          ) : (
-            <>
-              {guide === 'pair' && (
-                <SetupGuide step="pair" onSkip={skipGuide} />
-              )}
-              <SettingsPage
-                tab={settingsTab}
-                onAuthTokenSaved={() => void reload()}
-              />
-            </>
+    <div style={layoutStyle}>
+      <AppSidebar active={nav} onSelect={onNavClick} />
+      <div style={mainColumn}>
+        <div style={mainInner}>
+          {showPageHeading && (
+            <div style={topbar}>
+              <div>
+                <h1 style={title}>{heading.title}</h1>
+                <p style={subtitle}>
+                  {nav === 'instances' && !configEngineId
+                    ? (loading
+                      ? t('common.loading')
+                      : error
+                        ? t('common.error', { message: error })
+                        : t(summaryKey, { count: instances.length, running }))
+                    : heading.subtitle}
+                </p>
+              </div>
+            </div>
           )}
-        </main>
+
+          {hubVersion?.outdated === true && hubVersion.latest && (
+            <div style={updateBanner} role="status">
+              <span>{t('settings.updateBanner', { latest: hubVersion.latest })}</span>
+              <button type="button" style={updateBannerBtn} onClick={() => goSettings('global')}>
+                {t('settings.updateBannerAction')}
+              </button>
+            </div>
+          )}
+
+          <main style={contentPanel}>
+            {nav === 'instances' && selected ? (
+              <InstanceDetail
+                instanceId={selected}
+                activeTab={selectedTab}
+                onTabChange={setSelectedTab}
+                initialSessionId={selectedSessionId}
+                onSessionChange={setSelectedSessionId}
+                onBack={goInstances}
+                onReload={reload}
+                onOpenStore={(uri) => goStore(uri)}
+              />
+            ) : nav === 'instances' && configEngineId ? (
+              <EngineConfigPage engineId={configEngineId} onBack={goInstances} />
+            ) : nav === 'instances' ? (
+              <>
+                {guide === 'engines' && (
+                  <SetupGuide
+                    step="engines"
+                    onOpenCreate={openCreateFromGuide}
+                    onSkip={skipGuide}
+                  />
+                )}
+                <AgentsHubPage
+                  loading={loading}
+                  error={error}
+                  instances={instances}
+                  running={running}
+                  restartAllBusy={restartAllBusy}
+                  restartAllErr={restartAllErr}
+                  onReloadInstances={reload}
+                  onSelectInstance={(id) => {
+                    setSelected(id);
+                    setSelectedSessionId(null);
+                    setSelectedTab('overview');
+                  }}
+                  onAddInstance={openAdd}
+                  onRestartAll={() => setShowRestartAllConfirm(true)}
+                  onGoConfigure={openEngineConfig}
+                />
+              </>
+            ) : nav === 'store' ? (
+              <StoreBrowserPanel
+                initialUri={storeUri}
+                onUriChange={setStoreUri}
+              />
+            ) : (
+              <>
+                {guide === 'pair' && (
+                  <SetupGuide step="pair" onSkip={skipGuide} />
+                )}
+                <SettingsPage
+                  tab={settingsTab}
+                  onAuthTokenSaved={() => void reload()}
+                />
+              </>
+            )}
+          </main>
+        </div>
       </div>
 
       {showAdd && (
@@ -558,14 +540,6 @@ export function App() {
           }}
         />
       )}
-    </Layout>
-  );
-}
-
-function Layout({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={layoutStyle}>
-      <div style={container}>{children}</div>
     </div>
   );
 }
@@ -573,16 +547,31 @@ function Layout({ children }: { children: React.ReactNode }) {
 // ── styles ────────────────────────────────────────────────────────
 
 const layoutStyle: React.CSSProperties = {
+  height: '100vh',
   minHeight: '100vh',
+  display: 'flex',
+  overflow: 'hidden',
   background: '#11111b',
   color: '#cdd6f4',
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
 };
 
-const container: React.CSSProperties = {
-  maxWidth: 1280,
+const mainColumn: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'auto',
+};
+
+const mainInner: React.CSSProperties = {
+  flex: 1,
+  width: '100%',
+  maxWidth: 1320,
   margin: '0 auto',
-  padding: '24px 20px',
+  padding: '28px 28px 36px',
+  boxSizing: 'border-box',
 };
 
 const topbar: React.CSSProperties = {
@@ -622,48 +611,19 @@ const updateBannerBtn: React.CSSProperties = {
 
 const title: React.CSSProperties = {
   margin: 0,
-  fontSize: 24,
+  fontSize: 26,
   fontWeight: 700,
+  letterSpacing: '-0.03em',
   color: '#cdd6f4',
 };
 
 const subtitle: React.CSSProperties = {
-  margin: '4px 0 0',
+  margin: '6px 0 0',
   color: '#a6adc8',
   fontSize: 14,
 };
 
-const pageLayout: React.CSSProperties = {
-  display: 'flex',
-  gap: 0,
-  alignItems: 'stretch',
-  minHeight: 480,
-};
-
-const sidebar: React.CSSProperties = {
-  width: 168,
-  flexShrink: 0,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  padding: '4px 12px 4px 0',
-  borderRight: '1px solid #313244',
-};
-
-const navBtn = (active: boolean): React.CSSProperties => ({
-  background: active ? '#313244' : 'transparent',
-  color: active ? '#89b4fa' : '#cdd6f4',
-  border: 'none',
-  borderRadius: 6,
-  padding: '10px 14px',
-  cursor: 'pointer',
-  fontWeight: active ? 600 : 400,
-  fontSize: 14,
-  textAlign: 'left',
-});
-
 const contentPanel: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  padding: '4px 0 4px 24px',
 };

@@ -60,6 +60,9 @@ export const zh: Record<MessageKey, string> = {
   'logs.empty': '（暂无输出）',
 
   'nav.aria': '主导航',
+  'nav.ariaDetail': 'Agent 分区',
+  'nav.brand': '惜宝',
+  'nav.brandSub': 'Agent Hub',
   'nav.instances': '我的 Agent',
   'nav.peer': '接入客户端',
   'nav.store': '储物袋',

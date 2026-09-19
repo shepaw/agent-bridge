@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api/client.js';
 import type { EngineInfo, Instance, Peer, EnrollToken } from '../api/types.js';
@@ -21,6 +21,8 @@ import {
 import type { InstanceDetailTab } from '../utils/instanceRoute.js';
 import { useI18n } from '../i18n/index.js';
 import { GATEWAY_PAIRING_UI } from '../utils/featureFlags.js';
+import { DetailTabs } from './DetailTabs.js';
+import { IconChevronLeft } from './NavIcons.js';
 
 interface InstanceDetailProps {
   instanceId: string;
@@ -34,18 +36,6 @@ interface InstanceDetailProps {
   onOpenStore?: (uri: string) => void;
 }
 
-const NAV_TAB_IDS: InstanceDetailTab[] = ['overview', 'sessions', 'logs', 'devices', 'attachments', 'resume', 'config'];
-
-const NAV_LABEL_KEYS = {
-  overview: 'detail.overview',
-  sessions: 'detail.sessions',
-  logs: 'detail.logs',
-  devices: 'detail.devices',
-  attachments: 'detail.attachments',
-  resume: 'detail.resumeTab',
-  config: 'detail.config',
-} as const satisfies Record<InstanceDetailTab, 'detail.overview' | 'detail.sessions' | 'detail.logs' | 'detail.devices' | 'detail.attachments' | 'detail.resumeTab' | 'detail.config'>;
-
 export function InstanceDetail({
   instanceId,
   activeTab,
@@ -57,10 +47,6 @@ export function InstanceDetail({
   onOpenStore,
 }: InstanceDetailProps) {
   const { t } = useI18n();
-  const navItems = useMemo(
-    () => NAV_TAB_IDS.map((id) => ({ id, label: t(NAV_LABEL_KEYS[id]) })),
-    [t],
-  );
   const [instance, setInstance] = useState<Instance | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   // key -> masked display value, populated from GET /envvars
@@ -412,9 +398,12 @@ export function InstanceDetail({
       {/* Header */}
       <div style={header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <button style={backBtn} onClick={onBack}>← {t('common.back')}</button>
+          <button type="button" style={backBtn} onClick={onBack}>
+            <IconChevronLeft size={16} />
+            {t('common.back')}
+          </button>
           <span style={dot(instance.status)} />
-          <h2 style={{ margin: 0, color: '#cdd6f4' }}>{instance.label}</h2>
+          <h2 style={instanceTitle}>{instance.label}</h2>
           {instance.status.busyLevel !== null && instance.status.availability === 'online' && (
             <code style={{ ...badge, background: busyColor(instance.status), color: '#1e1e2e' }}>
               {busyLabel(instance.status)}
@@ -445,21 +434,9 @@ export function InstanceDetail({
 
       {err && <p style={{ color: '#f38ba8', margin: '8px 0' }}>{err}</p>}
 
-      <div style={pageLayout}>
-        <nav style={sidebar}>
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              style={navBtn(activeTab === item.id)}
-              onClick={() => onTabChange(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
+      <DetailTabs active={activeTab} onChange={onTabChange} />
 
-        <main style={contentPanel}>
+      <main style={contentPanel}>
           {activeTab === 'overview' && (
             <section>
               <h3 style={panelTitle}>{t('detail.overviewTitle')}</h3>
@@ -1190,7 +1167,6 @@ export function InstanceDetail({
             </section>
           )}
         </main>
-      </div>
 
       {GATEWAY_PAIRING_UI && showEnroll && (
         <EnrollModal instanceId={instanceId} onClose={() => setShowEnroll(false)} baseUrl={instance?.baseUrl} />
@@ -1308,35 +1284,29 @@ function InstanceSessionModeSection({
 // ── styles ────────────────────────────────────────────────────────
 
 const backBtn: React.CSSProperties = {
-  background: 'transparent', border: 'none', color: '#89b4fa',
-  cursor: 'pointer', fontSize: 14, padding: 0,
-};
-
-const pageLayout: React.CSSProperties = {
-  display: 'flex', gap: 0, alignItems: 'stretch', minHeight: 480,
-};
-
-const sidebar: React.CSSProperties = {
-  width: 168, flexShrink: 0,
-  display: 'flex', flexDirection: 'column', gap: 4,
-  padding: '4px 12px 4px 0',
-  borderRight: '1px solid #313244',
-};
-
-const navBtn = (active: boolean): React.CSSProperties => ({
-  background: active ? '#313244' : 'transparent',
-  color: active ? '#89b4fa' : '#cdd6f4',
-  border: 'none',
-  borderRadius: 6,
-  padding: '10px 14px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  background: '#181825',
+  border: '1px solid #313244',
+  color: '#cdd6f4',
+  borderRadius: 999,
   cursor: 'pointer',
-  fontWeight: active ? 600 : 400,
-  fontSize: 14,
-  textAlign: 'left',
-});
+  fontSize: 13,
+  fontWeight: 500,
+  padding: '6px 12px 6px 8px',
+};
+
+const instanceTitle: React.CSSProperties = {
+  margin: 0,
+  color: '#cdd6f4',
+  fontSize: 22,
+  fontWeight: 700,
+  letterSpacing: '-0.03em',
+};
 
 const contentPanel: React.CSSProperties = {
-  flex: 1, minWidth: 0, padding: '4px 0 4px 24px',
+  minWidth: 0,
 };
 
 const panelTitle: React.CSSProperties = {
@@ -1415,17 +1385,22 @@ const panelHeaderRow: React.CSSProperties = {
 
 const header: React.CSSProperties = {
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  marginBottom: 16, flexWrap: 'wrap', gap: 12,
-  paddingBottom: 16, borderBottom: '1px solid #313244',
+  marginBottom: 14, flexWrap: 'wrap', gap: 12,
 };
 
 const badge: React.CSSProperties = {
-  fontSize: 11, padding: '2px 7px', background: '#45475a',
-  borderRadius: 4, color: '#cdd6f4',
+  fontSize: 11, padding: '3px 8px', background: '#313244',
+  borderRadius: 999, color: '#a6adc8',
 };
 
 function dot(status: Instance['status']): React.CSSProperties {
-  return { width: 10, height: 10, borderRadius: '50%', background: availabilityColor(status) };
+  return {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: availabilityColor(status),
+    boxShadow: `0 0 0 3px ${availabilityColor(status)}33`,
+  };
 }
 
 function formatUptime(ms: number): string {
