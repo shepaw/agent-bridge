@@ -507,6 +507,9 @@ export const zh: Record<MessageKey, string> = {
 
   'sessions.starting': '网关正在启动… Agent 上线后会话会出现在这里。',
   'sessions.startFirst': '先启动实例再查看会话。',
+  'sessions.chatsTitle': '会话列表',
+  'sessions.welcomeTitle': '有什么可以帮你的？',
+  'sessions.composerHint': 'Enter 发送 · Shift+Enter 换行 · 工具调用自动批准',
   'sessions.count': '{count} 个会话',
   'sessions.countPlural': '{count} 个会话',
   'sessions.manage': '管理映射',

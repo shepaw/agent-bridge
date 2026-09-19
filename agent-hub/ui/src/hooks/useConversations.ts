@@ -28,6 +28,7 @@ export function useConversations({
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [pendingReply, setPendingReply] = useState(false);
+  const [streamingMessageKey, setStreamingMessageKey] = useState<string | null>(null);
 
   const selectedSessionIdRef = useRef(selectedSessionId);
   selectedSessionIdRef.current = selectedSessionId;
@@ -124,6 +125,7 @@ export function useConversations({
     setHistoryError(null);
     setSendError(null);
     setPendingReply(false);
+    setStreamingMessageKey(null);
     onSelectSessionRef.current(sessionId);
     return sessionId;
   }, []);
@@ -158,11 +160,14 @@ export function useConversations({
       }
       draftIdsRef.current.delete(sessionId);
       draftIdsRef.current.delete(result.session_id);
+      setPendingReply(false);
+      const streamKey = `stream-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
         {
           role: 'agent',
           content: result.reply,
+          message_id: streamKey,
           created_at: new Date().toISOString(),
           ...(result.progress_content !== undefined
             ? {
@@ -173,6 +178,7 @@ export function useConversations({
             : {}),
         },
       ]);
+      setStreamingMessageKey(streamKey);
       void loadSessions('background');
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
@@ -200,6 +206,7 @@ export function useConversations({
       setHistoryLoading(false);
       setSendError(null);
       setPendingReply(false);
+      setStreamingMessageKey(null);
       return;
     }
     if (skipHistoryLoadRef.current) {
@@ -220,6 +227,8 @@ export function useConversations({
     sending,
     sendError,
     pendingReply,
+    streamingMessageKey,
+    clearStreamingMessage: () => setStreamingMessageKey(null),
     gatewayReady,
     loadSessions,
     loadHistory,

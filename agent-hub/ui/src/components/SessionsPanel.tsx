@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useConversations } from '../hooks/useConversations.js';
 import type { InstanceStatus } from '../api/types.js';
-import { SessionList } from './SessionList.js';
+import { SessionList, sessionDisplayTitle } from './SessionList.js';
 import { SessionTranscript } from './SessionTranscript.js';
 import { ChatComposer } from './ChatComposer.js';
 import { CliSessionSyncModal } from './CliSessionSyncModal.js';
 import type { CliSessionSyncSource } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
+import { chat } from '../utils/chatTheme.js';
 
 interface SessionsPanelProps {
   instanceId: string;
@@ -51,6 +52,8 @@ export function SessionsPanel({
     sending,
     sendError,
     pendingReply,
+    streamingMessageKey,
+    clearStreamingMessage,
     loadSessions,
     startNewSession,
     sendChat,
@@ -70,91 +73,134 @@ export function SessionsPanel({
     ? t('sessions.count', { count: sessions.length })
     : t('sessions.countPlural', { count: sessions.length });
 
+  const selectedSession = useMemo(
+    () => sessions.find((s) => s.session_id === selectedSessionId) ?? null,
+    [sessions, selectedSessionId],
+  );
+
+  const chatTitle = selectedSession
+    ? sessionDisplayTitle(selectedSession)
+    : t('sessions.newChat');
+
   return (
     <div style={wrapper}>
-      <div style={toolbar}>
-        <span style={{ color: '#a6adc8', fontSize: 12 }}>
-          {gatewayReady ? sessionCountLabel : status.availability}
-        </span>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {cliSyncSource !== null && (
-            <button
-              type="button"
-              style={linkBtn}
-              onClick={() => setShowCliSync(true)}
-            >
-              {t(
-                cliSyncSource === 'cursor'
-                  ? 'cursorIde.openBtn'
-                  : cliSyncSource === 'claude-code'
-                    ? 'claudeCode.openBtn'
-                    : cliSyncSource === 'codex'
-                      ? 'codex.openBtn'
-                      : cliSyncSource === 'opencode'
-                        ? 'opencode.openBtn'
-                        : 'openclaw.openBtn',
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            style={linkBtn}
-            disabled={!gatewayReady || sending}
-            onClick={() => startNewSession()}
-          >
-            {t('sessions.newChat')}
-          </button>
-          {onManageMappings !== undefined && (
-            <button type="button" style={linkBtn} onClick={onManageMappings}>
-              {t('sessions.manage')}
-            </button>
-          )}
-          <button
-            type="button"
-            style={{
-              ...refreshBtn,
-              opacity: listRefreshing ? 0.65 : 1,
-            }}
-            disabled={!gatewayReady || listLoading}
-            onClick={() => void loadSessions('manual')}
-          >
-            {t('common.refresh')}
-          </button>
-        </div>
-      </div>
-
       {!gatewayReady ? (
         <div style={offlineBox}>
+          <div style={offlineIcon}>💬</div>
           <p style={offlineText}>{offlineMessage}</p>
         </div>
       ) : (
-        <div style={split}>
-          <div style={listPane}>
-            <SessionList
-              sessions={sessions}
-              selectedSessionId={selectedSessionId}
-              loading={listLoading}
-              error={listError}
-              onSelect={onSelectSession}
-            />
-          </div>
-          <div style={transcriptPane}>
+        <div style={layout}>
+          <aside style={sidebar}>
+            <div style={sidebarHeader}>
+              <div>
+                <h4 style={sidebarTitle}>{t('sessions.chatsTitle')}</h4>
+                <span style={sidebarMeta}>{sessionCountLabel}</span>
+              </div>
+              <button
+                type="button"
+                style={newChatBtn}
+                disabled={sending}
+                title={t('sessions.newChat')}
+                onClick={() => startNewSession()}
+              >
+                +
+              </button>
+            </div>
+
+            <div style={sidebarList}>
+              <SessionList
+                sessions={sessions}
+                selectedSessionId={selectedSessionId}
+                loading={listLoading}
+                error={listError}
+                onSelect={onSelectSession}
+              />
+            </div>
+
+            <div style={sidebarFooter}>
+              {cliSyncSource !== null && (
+                <button
+                  type="button"
+                  style={footerBtn}
+                  onClick={() => setShowCliSync(true)}
+                >
+                  {t(
+                    cliSyncSource === 'cursor'
+                      ? 'cursorIde.openBtn'
+                      : cliSyncSource === 'claude-code'
+                        ? 'claudeCode.openBtn'
+                        : cliSyncSource === 'codex'
+                          ? 'codex.openBtn'
+                          : cliSyncSource === 'opencode'
+                            ? 'opencode.openBtn'
+                            : 'openclaw.openBtn',
+                  )}
+                </button>
+              )}
+              {onManageMappings !== undefined && (
+                <button type="button" style={footerBtn} onClick={onManageMappings}>
+                  {t('sessions.manage')}
+                </button>
+              )}
+              <button
+                type="button"
+                style={{
+                  ...footerBtn,
+                  opacity: listRefreshing ? 0.65 : 1,
+                }}
+                disabled={listLoading}
+                onClick={() => void loadSessions('manual')}
+              >
+                {t('common.refresh')}
+              </button>
+            </div>
+          </aside>
+
+          <main style={main}>
+            <header style={chatHeader}>
+              <div style={chatHeaderInfo}>
+                <div style={chatHeaderAvatar}>
+                  {selectedSession ? '💬' : '✨'}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <h4 style={chatHeaderTitle}>{chatTitle}</h4>
+                  {selectedSession && (
+                    <code style={chatHeaderId}>{selectedSession.session_id}</code>
+                  )}
+                </div>
+              </div>
+              {selectedSessionId !== null && (
+                <button
+                  type="button"
+                  style={headerActionBtn}
+                  disabled={sending}
+                  onClick={() => startNewSession()}
+                >
+                  {t('sessions.newChat')}
+                </button>
+              )}
+            </header>
+
             <SessionTranscript
               sessionId={selectedSessionId}
               messages={messages}
               loading={historyLoading}
               error={historyError}
               pendingReply={pendingReply}
+              streamingMessageKey={streamingMessageKey}
+              onStreamingComplete={clearStreamingMessage}
               workspaceUri={workspaceUri}
               onOpenStore={onOpenStore}
             />
+
             <ChatComposer
               disabled={!gatewayReady || historyLoading}
               sending={sending}
               error={sendError}
               onSend={(message) => void sendChat(message)}
             />
-          </div>
+          </main>
         </div>
       )}
 
@@ -171,78 +217,197 @@ export function SessionsPanel({
 }
 
 const wrapper: React.CSSProperties = {
-  background: '#11111b',
-  border: '1px solid #313244',
-  borderRadius: 8,
+  background: chat.colors.bgBase,
+  border: `1px solid ${chat.colors.border}`,
+  borderRadius: chat.radius.lg,
   overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
-  height: 560,
+  minHeight: 620,
+  height: 'clamp(620px, calc(100vh - 240px), 860px)',
+  boxShadow: chat.shadow.md,
+  fontFamily: chat.font,
 };
 
-const toolbar: React.CSSProperties = {
+const layout: React.CSSProperties = {
   display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '6px 12px',
-  background: '#1e1e2e',
-  borderBottom: '1px solid #313244',
-};
-
-const split: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(200px, 34%) 1fr',
   flex: 1,
   minHeight: 0,
 };
 
-const listPane: React.CSSProperties = {
-  borderRight: '1px solid #313244',
+const sidebar: React.CSSProperties = {
+  width: chat.sidebarWidth,
+  flexShrink: 0,
   display: 'flex',
   flexDirection: 'column',
   minHeight: 0,
-  overflow: 'hidden',
+  background: chat.colors.bgElevated,
+  borderRight: `1px solid ${chat.colors.borderSubtle}`,
 };
 
-const transcriptPane: React.CSSProperties = {
+const sidebarHeader: React.CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 8,
+  padding: '14px 14px 10px',
+  borderBottom: `1px solid ${chat.colors.borderSubtle}`,
+};
+
+const sidebarTitle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  fontWeight: 700,
+  color: chat.colors.textPrimary,
+  letterSpacing: '-0.01em',
+};
+
+const sidebarMeta: React.CSSProperties = {
+  display: 'block',
+  marginTop: 2,
+  fontSize: 11,
+  color: chat.colors.textMuted,
+};
+
+const newChatBtn: React.CSSProperties = {
+  width: 32,
+  height: 32,
+  flexShrink: 0,
+  border: 'none',
+  borderRadius: chat.radius.full,
+  background: chat.colors.accent,
+  color: chat.colors.accentFg,
+  fontSize: 20,
+  fontWeight: 500,
+  lineHeight: 1,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  boxShadow: chat.shadow.sm,
+};
+
+const sidebarList: React.CSSProperties = {
+  flex: 1,
   minHeight: 0,
   overflow: 'hidden',
-  background: '#181825',
+  display: 'flex',
+  flexDirection: 'column',
+  padding: '6px 0',
+};
+
+const sidebarFooter: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  padding: '10px 12px',
+  borderTop: `1px solid ${chat.colors.borderSubtle}`,
+  background: chat.colors.bgSurface,
+};
+
+const footerBtn: React.CSSProperties = {
+  background: 'transparent',
+  border: `1px solid ${chat.colors.border}`,
+  color: chat.colors.textSecondary,
+  borderRadius: chat.radius.sm,
+  padding: '4px 10px',
+  cursor: 'pointer',
+  fontSize: 11,
+  fontFamily: 'inherit',
+};
+
+const main: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 0,
+  minHeight: 0,
+  background: chat.colors.bgSurface,
+};
+
+const chatHeader: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  padding: '12px 16px',
+  borderBottom: `1px solid ${chat.colors.borderSubtle}`,
+  background: chat.colors.bgElevated,
+  flexShrink: 0,
+};
+
+const chatHeaderInfo: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+};
+
+const chatHeaderAvatar: React.CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: chat.radius.md,
+  background: chat.colors.bgHover,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 16,
+  flexShrink: 0,
+};
+
+const chatHeaderTitle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  fontWeight: 600,
+  color: chat.colors.textPrimary,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const chatHeaderId: React.CSSProperties = {
+  display: 'block',
+  marginTop: 2,
+  fontSize: 10,
+  color: chat.colors.textMuted,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: '100%',
+};
+
+const headerActionBtn: React.CSSProperties = {
+  flexShrink: 0,
+  background: chat.colors.bgHover,
+  border: `1px solid ${chat.colors.border}`,
+  color: chat.colors.textSecondary,
+  borderRadius: chat.radius.sm,
+  padding: '6px 12px',
+  cursor: 'pointer',
+  fontSize: 12,
+  fontFamily: 'inherit',
 };
 
 const offlineBox: React.CSSProperties = {
   flex: 1,
   display: 'flex',
+  flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: 24,
+  padding: 48,
+  gap: 12,
+};
+
+const offlineIcon: React.CSSProperties = {
+  fontSize: 32,
+  opacity: 0.5,
 };
 
 const offlineText: React.CSSProperties = {
-  color: '#a6adc8',
-  fontSize: 13,
+  color: chat.colors.textSecondary,
+  fontSize: 14,
   margin: 0,
   textAlign: 'center',
-};
-
-const refreshBtn: React.CSSProperties = {
-  background: 'transparent',
-  border: '1px solid #45475a',
-  color: '#a6adc8',
-  borderRadius: 4,
-  padding: '2px 10px',
-  minWidth: 64,
-  cursor: 'pointer',
-  fontSize: 12,
-};
-
-const linkBtn: React.CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  color: '#89b4fa',
-  cursor: 'pointer',
-  fontSize: 12,
-  padding: '2px 4px',
+  maxWidth: 360,
+  lineHeight: 1.5,
 };

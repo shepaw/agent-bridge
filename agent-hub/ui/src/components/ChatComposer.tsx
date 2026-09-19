@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from 'react';
 import { useI18n } from '../i18n/index.js';
+import { chat } from '../utils/chatTheme.js';
 
 interface ChatComposerProps {
   disabled: boolean;
@@ -31,10 +32,10 @@ export function ChatComposer({ disabled, sending, error, onSend }: ChatComposerP
   return (
     <div style={wrap}>
       {error !== null && <p style={errorText}>{error}</p>}
-      <div style={row}>
+      <div style={composerCard}>
         <textarea
           style={input}
-          rows={2}
+          rows={1}
           value={draft}
           disabled={disabled || sending}
           placeholder={t('sessions.composerPlaceholder')}
@@ -45,66 +46,81 @@ export function ChatComposer({ disabled, sending, error, onSend }: ChatComposerP
           type="button"
           style={{
             ...sendBtn,
-            opacity: canSend ? 1 : 0.55,
+            background: canSend ? chat.colors.accent : chat.colors.bgHover,
+            color: canSend ? chat.colors.accentFg : chat.colors.textMuted,
+            cursor: canSend ? 'pointer' : 'default',
           }}
           disabled={!canSend}
+          title={sending ? t('sessions.sending') : t('sessions.send')}
           onClick={submit}
         >
-          {sending ? t('sessions.sending') : t('sessions.send')}
+          {sending ? '…' : '↑'}
         </button>
       </div>
-      <p style={hint}>{t('sessions.autoApproveHint')}</p>
+      <p style={hint}>
+        {t('sessions.composerHint')}
+      </p>
     </div>
   );
 }
 
 const wrap: React.CSSProperties = {
-  borderTop: '1px solid #313244',
-  padding: '8px 10px 10px',
-  background: '#1e1e2e',
+  padding: '12px 16px 14px',
+  background: chat.colors.bgSurface,
+  boxShadow: chat.shadow.composer,
   flexShrink: 0,
 };
 
-const row: React.CSSProperties = {
+const composerCard: React.CSSProperties = {
   display: 'flex',
-  gap: 8,
   alignItems: 'flex-end',
+  gap: 10,
+  padding: '8px 8px 8px 14px',
+  background: chat.colors.bgElevated,
+  border: `1px solid ${chat.colors.border}`,
+  borderRadius: chat.radius.xl,
+  boxShadow: chat.shadow.sm,
 };
 
 const input: React.CSSProperties = {
   flex: 1,
   resize: 'none',
-  background: '#11111b',
-  border: '1px solid #45475a',
-  borderRadius: 6,
-  color: '#cdd6f4',
+  background: 'transparent',
+  border: 'none',
+  color: chat.colors.textPrimary,
   font: 'inherit',
-  fontSize: 13,
-  lineHeight: 1.45,
-  padding: '8px 10px',
+  fontSize: 14,
+  lineHeight: 1.5,
+  padding: '6px 0',
   outline: 'none',
+  minHeight: 28,
+  maxHeight: 160,
 };
 
 const sendBtn: React.CSSProperties = {
-  background: '#89b4fa',
+  width: 36,
+  height: 36,
+  flexShrink: 0,
   border: 'none',
-  color: '#1e1e2e',
-  borderRadius: 6,
-  padding: '8px 12px',
-  cursor: 'pointer',
-  fontSize: 13,
-  fontWeight: 600,
-  height: 38,
+  borderRadius: chat.radius.full,
+  fontSize: 18,
+  fontWeight: 700,
+  lineHeight: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'background 0.15s ease, color 0.15s ease',
 };
 
 const hint: React.CSSProperties = {
-  margin: '6px 0 0',
+  margin: '8px 4px 0',
   fontSize: 11,
-  color: '#6c7086',
+  color: chat.colors.textMuted,
+  lineHeight: 1.4,
 };
 
 const errorText: React.CSSProperties = {
-  margin: '0 0 6px',
+  margin: '0 0 8px 4px',
   fontSize: 12,
-  color: '#f38ba8',
+  color: chat.colors.error,
 };

@@ -1,6 +1,7 @@
 import type { LiveSession } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 import type { MessageKey } from '../i18n/en.js';
+import { chat } from '../utils/chatTheme.js';
 
 interface SessionListProps {
   sessions: LiveSession[];
@@ -10,7 +11,10 @@ interface SessionListProps {
   onSelect: (sessionId: string) => void;
 }
 
-function formatRelativeTime(iso: string | undefined, t: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
+function formatRelativeTime(
+  iso: string | undefined,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
   if (iso === undefined || iso.length === 0) return '—';
   const ts = Date.parse(iso);
   if (Number.isNaN(ts)) return iso;
@@ -23,7 +27,7 @@ function formatRelativeTime(iso: string | undefined, t: (key: MessageKey, vars?:
   return new Date(ts).toLocaleDateString();
 }
 
-function sessionLabel(session: LiveSession): string {
+export function sessionDisplayTitle(session: LiveSession): string {
   if (session.title !== undefined && session.title.length > 0) return session.title;
   if (session.session_id.length <= 20) return session.session_id;
   return `${session.session_id.slice(0, 8)}…${session.session_id.slice(-6)}`;
@@ -39,12 +43,16 @@ export function SessionList({
   const { t } = useI18n();
 
   if (loading && sessions.length === 0) {
-    return <p style={hint}>{t('sessions.loading')}</p>;
+    return (
+      <div style={stateWrap}>
+        <p style={hint}>{t('sessions.loading')}</p>
+      </div>
+    );
   }
 
   if (error) {
     return (
-      <div>
+      <div style={stateWrap}>
         <p style={errorText}>{error}</p>
       </div>
     );
@@ -52,9 +60,10 @@ export function SessionList({
 
   if (sessions.length === 0) {
     return (
-      <p style={hint}>
-        {t('sessions.none')}
-      </p>
+      <div style={stateWrap}>
+        <div style={emptyIcon}>💬</div>
+        <p style={hint}>{t('sessions.none')}</p>
+      </div>
     );
   }
 
@@ -62,20 +71,32 @@ export function SessionList({
     <div style={list}>
       {sessions.map((session) => {
         const selected = session.session_id === selectedSessionId;
+        const title = sessionDisplayTitle(session);
         return (
           <button
             key={session.session_id}
             type="button"
             style={{
               ...item,
-              background: selected ? '#313244' : 'transparent',
-              borderLeft: selected ? '3px solid #89b4fa' : '3px solid transparent',
+              background: selected ? chat.colors.bgSelected : 'transparent',
+              borderColor: selected ? chat.colors.accent : 'transparent',
             }}
             onClick={() => onSelect(session.session_id)}
           >
-            <span style={title}>{sessionLabel(session)}</span>
-            <span style={meta}>{formatRelativeTime(session.updated_at, t)}</span>
-            <code style={idCode}>{session.session_id}</code>
+            <div style={itemRow}>
+              <span style={itemAvatar}>💬</span>
+              <div style={itemBody}>
+                <span
+                  style={{
+                    ...titleStyle,
+                    color: selected ? chat.colors.textPrimary : chat.colors.textSecondary,
+                  }}
+                >
+                  {title}
+                </span>
+                <span style={meta}>{formatRelativeTime(session.updated_at, t)}</span>
+              </div>
+            </div>
           </button>
         );
       })}
@@ -90,49 +111,87 @@ const list: React.CSSProperties = {
   overflowY: 'auto',
   flex: 1,
   minHeight: 0,
+  padding: '0 8px',
 };
 
 const item: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'flex-start',
-  gap: 2,
+  display: 'block',
   width: '100%',
   textAlign: 'left',
-  padding: '10px 12px',
-  border: 'none',
-  borderRadius: 4,
+  padding: '10px 10px',
+  border: '1px solid transparent',
+  borderRadius: chat.radius.md,
   cursor: 'pointer',
-  color: '#cdd6f4',
+  color: chat.colors.textPrimary,
+  fontFamily: 'inherit',
+  transition: 'background 0.15s ease',
 };
 
-const title: React.CSSProperties = {
+const itemRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+};
+
+const itemAvatar: React.CSSProperties = {
+  width: 32,
+  height: 32,
+  borderRadius: chat.radius.sm,
+  background: chat.colors.bgHover,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 14,
+  flexShrink: 0,
+};
+
+const itemBody: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};
+
+const titleStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
-  color: '#cdd6f4',
   wordBreak: 'break-word',
+  overflow: 'hidden',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
 };
 
 const meta: React.CSSProperties = {
   fontSize: 11,
-  color: '#a6adc8',
+  color: chat.colors.textMuted,
 };
 
-const idCode: React.CSSProperties = {
-  fontSize: 10,
-  color: '#6c7086',
-  wordBreak: 'break-all',
+const stateWrap: React.CSSProperties = {
+  padding: '20px 16px',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 8,
+  textAlign: 'center',
+};
+
+const emptyIcon: React.CSSProperties = {
+  fontSize: 24,
+  opacity: 0.45,
 };
 
 const hint: React.CSSProperties = {
-  color: '#a6adc8',
-  fontSize: 13,
+  color: chat.colors.textMuted,
+  fontSize: 12,
   margin: 0,
-  padding: '12px 8px',
+  lineHeight: 1.5,
 };
 
 const errorText: React.CSSProperties = {
-  color: '#f38ba8',
-  fontSize: 13,
-  margin: '8px 0',
+  color: chat.colors.error,
+  fontSize: 12,
+  margin: 0,
+  lineHeight: 1.5,
 };

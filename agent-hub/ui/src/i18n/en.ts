@@ -518,6 +518,9 @@ export const en = {
 
   'sessions.starting': 'Gateway is starting… Sessions appear once the agent is online.',
   'sessions.startFirst': 'Start the instance to view sessions.',
+  'sessions.chatsTitle': 'Chats',
+  'sessions.welcomeTitle': 'How can I help?',
+  'sessions.composerHint': 'Enter to send · Shift+Enter for newline · Tool calls are auto-approved',
   'sessions.count': '{count} session',
   'sessions.countPlural': '{count} sessions',
   'sessions.manage': 'Manage mappings',
