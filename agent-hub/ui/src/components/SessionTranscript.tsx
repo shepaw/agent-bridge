@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { SessionHistoryMessage } from '../api/types.js';
-import { useI18n, type MessageKey } from '../i18n/index.js';
+import { useI18n, type Locale, type MessageKey } from '../i18n/index.js';
 import { ChatMarkdown, TypewriterChatMarkdown } from './ChatMarkdown.js';
 import { chat } from '../utils/chatTheme.js';
 
@@ -27,7 +27,7 @@ export function SessionTranscript({
   workspaceUri,
   onOpenStore,
 }: SessionTranscriptProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -96,6 +96,7 @@ export function SessionTranscript({
           const isUser = message.role === 'user';
           const messageKey = message.message_id ?? `${message.role}-${index}`;
           const isStreaming = !isUser && streamingMessageKey === messageKey;
+          const timeLabel = formatBubbleTime(message.created_at, locale);
 
           return (
             <div
@@ -121,7 +122,23 @@ export function SessionTranscript({
                   alignItems: isUser ? 'flex-end' : 'flex-start',
                 }}
               >
-                <span style={roleLabel}>{isUser ? t('sessions.you') : t('sessions.agent')}</span>
+                <div
+                  style={{
+                    ...metaRow,
+                    flexDirection: isUser ? 'row-reverse' : 'row',
+                  }}
+                >
+                  <span style={roleLabel}>{isUser ? t('sessions.you') : t('sessions.agent')}</span>
+                  {timeLabel !== null && (
+                    <time
+                      dateTime={message.created_at}
+                      title={formatBubbleTimeTitle(message.created_at, locale)}
+                      style={timeStamp}
+                    >
+                      {timeLabel}
+                    </time>
+                  )}
+                </div>
                 <div
                   style={{
                     ...bubble,
@@ -218,6 +235,50 @@ export function SessionTranscript({
   );
 }
 
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+const EN_MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/** Clock time for today; date + time for older turns. */
+export function formatBubbleTime(iso: string | undefined, locale: Locale): string | null {
+  if (iso === undefined || iso.length === 0) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (sameDay) return time;
+
+  const sameYear = date.getFullYear() === now.getFullYear();
+  if (locale === 'zh') {
+    const datePart = sameYear
+      ? `${date.getMonth() + 1}月${date.getDate()}日`
+      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+    return `${datePart} ${time}`;
+  }
+  const month = EN_MONTHS[date.getMonth()] ?? '';
+  const datePart = sameYear
+    ? `${month} ${date.getDate()}`
+    : `${month} ${date.getDate()}, ${date.getFullYear()}`;
+  return `${datePart}, ${time}`;
+}
+
+function formatBubbleTimeTitle(iso: string | undefined, locale: Locale): string {
+  if (iso === undefined || iso.length === 0) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US');
+}
+
 function progressLabel(
   title: string | undefined,
   t: (key: MessageKey) => string,
@@ -310,12 +371,27 @@ const bubbleWrap: React.CSSProperties = {
   minWidth: 0,
 };
 
+const metaRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 8,
+  padding: '0 4px',
+};
+
 const roleLabel: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
   color: chat.colors.textMuted,
-  padding: '0 4px',
   letterSpacing: '0.02em',
+};
+
+const timeStamp: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 500,
+  color: chat.colors.textMuted,
+  opacity: 0.8,
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
 };
 
 const bubble: React.CSSProperties = {
