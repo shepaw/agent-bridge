@@ -16,6 +16,7 @@ import { getInstance, loadOrCreateHubConfig } from './config.js';
 import { instancePaths } from './paths.js';
 import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
+import { createChatStreamAccumulator, type ChatStreamSection } from './chat-stream-split.js';
 import { PeerAcpClient, type ApprovalRequest } from './peer/peer-acp-client.js';
 import { probeInstanceRuntime } from './runtime-status.js';
 
@@ -82,17 +83,29 @@ function parseSessionInfo(raw: unknown): SessionInfo | null {
   };
 }
 
-function parseHistoryMessage(raw: unknown): SessionHistoryMessage | null {
+export function parseHistoryMessage(raw: unknown): SessionHistoryMessage | null {
   if (raw === null || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
   const role = obj.role === 'user' || obj.role === 'agent' ? obj.role : undefined;
-  const content = typeof obj.content === 'string' ? obj.content : undefined;
-  if (role === undefined || content === undefined) return null;
+  if (role === undefined) return null;
+  const content = typeof obj.content === 'string' ? obj.content : '';
+  const progress =
+    typeof obj.progress_content === 'string' && obj.progress_content.length > 0
+      ? obj.progress_content
+      : undefined;
+  if (content.length === 0 && progress === undefined) return null;
   return {
     role,
     content,
     message_id: typeof obj.message_id === 'string' ? obj.message_id : undefined,
     created_at: typeof obj.created_at === 'string' ? obj.created_at : undefined,
+    ...(progress !== undefined ? { progress_content: progress } : {}),
+    ...(typeof obj.progress_title === 'string' && obj.progress_title.length > 0
+      ? { progress_title: obj.progress_title }
+      : {}),
+    ...(typeof obj.progress_auto_collapse === 'boolean'
+      ? { progress_auto_collapse: obj.progress_auto_collapse }
+      : {}),
   };
 }
 
@@ -280,6 +293,9 @@ export interface InstanceConversationTurnResult {
   readonly sessionId: string;
   readonly reply: string;
   readonly elapsedMs: number;
+  readonly progressContent?: string;
+  readonly progressTitle?: string;
+  readonly progressAutoCollapse?: boolean;
 }
 
 const DASHBOARD_CHAT_MAX_CHARS = 32_000;
@@ -300,11 +316,11 @@ function autoApproveTool(req: ApprovalRequest): { id: string; label?: string } {
 function awaitChatReply(
   client: PeerAcpClient,
   opts: { message: string; sessionId: string; timeoutMs: number },
-): Promise<string> {
+): Promise<ChatStreamSection> {
   const taskId = randomUUID();
-  return new Promise<string>((resolve, reject) => {
+  const stream = createChatStreamAccumulator();
+  return new Promise((resolve, reject) => {
     let settled = false;
-    let full = '';
     const finish = (fn: () => void): void => {
       if (settled) return;
       settled = true;
@@ -323,10 +339,13 @@ function awaitChatReply(
         { message: opts.message, taskId, sessionId: opts.sessionId },
         {
           onChunk: (content) => {
-            full += content;
+            stream.onChunk(content);
           },
-          onDone: (content) => {
-            finish(() => resolve(content.length > 0 ? content : full));
+          onMetadata: (meta) => {
+            stream.onMetadata(meta);
+          },
+          onDone: () => {
+            finish(() => resolve(stream.result()));
           },
           onError: (messageText) => {
             finish(() => reject(new Error(messageText)));
@@ -373,12 +392,12 @@ export async function chatInstanceAcpRpc(
   const sessionId = `${opts.sessionPrefix ?? 'hub-test'}_${randomUUID()}`;
 
   try {
-    const reply = await withAcpClient(instanceId, (client) =>
+    const section = await withAcpClient(instanceId, (client) =>
       awaitChatReply(client, { message, sessionId, timeoutMs }),
     );
     return {
       ok: true,
-      reply,
+      reply: section.reply.length > 0 ? section.reply : (section.progressContent ?? ''),
       error: null,
       elapsedMs: Date.now() - started,
     };
@@ -407,13 +426,20 @@ export async function chatInstanceConversation(
   const sessionId = resolveDashboardChatSessionId(opts.sessionId);
   const timeoutMs = opts.timeoutMs ?? 180_000;
   const started = Date.now();
-  const reply = await withAcpClient(instanceId, (client) =>
+  const section = await withAcpClient(instanceId, (client) =>
     awaitChatReply(client, { message: text, sessionId, timeoutMs }),
   );
   return {
     sessionId,
-    reply,
+    reply: section.reply,
     elapsedMs: Date.now() - started,
+    ...(section.progressContent !== undefined
+      ? {
+          progressContent: section.progressContent,
+          progressTitle: section.progressTitle,
+          progressAutoCollapse: section.progressAutoCollapse,
+        }
+      : {}),
   };
 }
 

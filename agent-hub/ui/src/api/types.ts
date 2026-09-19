@@ -292,6 +292,10 @@ export interface SessionHistoryMessage {
   message_id?: string;
   /** ISO-8601 original send time when known. */
   created_at?: string;
+  /** Thinking / tool / plan text (collapsible, same as the live app bubble). */
+  progress_content?: string;
+  progress_title?: string;
+  progress_auto_collapse?: boolean;
 }
 
 /** POST /instances/:id/conversations/chat */
@@ -299,6 +303,9 @@ export interface ConversationChatResult {
   session_id: string;
   reply: string;
   elapsed_ms: number;
+  progress_content?: string;
+  progress_title?: string;
+  progress_auto_collapse?: boolean;
 }
 
 /** Peer-pushed attachment stored under instances/<id>/peer-attachments/. */

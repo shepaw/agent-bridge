@@ -988,6 +988,13 @@ instancesRouter.post('/:id/conversations/chat', async (req: Request, res: Respon
       session_id: result.sessionId,
       reply: result.reply,
       elapsed_ms: result.elapsedMs,
+      ...(result.progressContent !== undefined
+        ? {
+            progress_content: result.progressContent,
+            progress_title: result.progressTitle,
+            progress_auto_collapse: result.progressAutoCollapse,
+          }
+        : {}),
     });
   } catch (err) {
     if (err instanceof InstanceNotFoundError) {

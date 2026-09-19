@@ -309,6 +309,7 @@ export {
   InstanceGatewayOfflineError,
   listInstanceConversations,
   normalizeDashboardChatMessage,
+  parseHistoryMessage,
   pingInstanceAcpRpc,
   polishInstanceResume,
   rebuildInstanceResume,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { SessionHistoryMessage } from '../api/types.js';
-import { useI18n } from '../i18n/index.js';
+import { useI18n, type MessageKey } from '../i18n/index.js';
 import { resolveWorkspaceFileUri } from '../utils/workspaceHref.js';
 
 interface SessionTranscriptProps {
@@ -84,9 +84,24 @@ export function SessionTranscript({
               }}
             >
               <span style={roleLabel}>{isUser ? t('sessions.you') : t('sessions.agent')}</span>
-              <p style={content}>
-                {renderMessageContent(message.content, workspaceUri, onOpenStore)}
-              </p>
+              {!isUser && message.progress_content !== undefined && message.progress_content.length > 0 && (
+                <details
+                  style={progressBlock}
+                  open={message.progress_auto_collapse === false}
+                >
+                  <summary style={progressSummary}>
+                    {progressLabel(message.progress_title, t)}
+                  </summary>
+                  <p style={progressBody}>
+                    {renderMessageContent(message.progress_content, workspaceUri, onOpenStore)}
+                  </p>
+                </details>
+              )}
+              {message.content.length > 0 && (
+                <p style={content}>
+                  {renderMessageContent(message.content, workspaceUri, onOpenStore)}
+                </p>
+              )}
             </div>
           </div>
         );
@@ -102,6 +117,17 @@ export function SessionTranscript({
       <div ref={bottomRef} />
     </div>
   );
+}
+
+function progressLabel(
+  title: string | undefined,
+  t: (key: MessageKey) => string,
+): string {
+  if (title === undefined || title.length === 0 || title === 'Thinking') {
+    return t('sessions.progressThinking');
+  }
+  if (title === 'Plan') return t('sessions.progressPlan');
+  return title;
 }
 
 function renderMessageContent(
@@ -208,6 +234,31 @@ const content: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.55,
   color: '#cdd6f4',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+};
+
+const progressBlock: React.CSSProperties = {
+  margin: '0 0 8px',
+  padding: '6px 8px',
+  background: '#1e1e2e',
+  borderRadius: 8,
+  border: '1px solid #313244',
+};
+
+const progressSummary: React.CSSProperties = {
+  cursor: 'pointer',
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#a6adc8',
+  letterSpacing: '0.03em',
+};
+
+const progressBody: React.CSSProperties = {
+  margin: '8px 0 0',
+  fontSize: 12,
+  lineHeight: 1.5,
+  color: '#bac2de',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
 };

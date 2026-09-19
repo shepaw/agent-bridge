@@ -164,6 +164,13 @@ export function useConversations({
           role: 'agent',
           content: result.reply,
           created_at: new Date().toISOString(),
+          ...(result.progress_content !== undefined
+            ? {
+                progress_content: result.progress_content,
+                progress_title: result.progress_title,
+                progress_auto_collapse: result.progress_auto_collapse,
+              }
+            : {}),
         },
       ]);
       void loadSessions('background');

@@ -543,6 +543,8 @@ export const en = {
   'sessions.send': 'Send',
   'sessions.sending': 'Sending…',
   'sessions.thinking': 'Thinking…',
+  'sessions.progressThinking': 'Thinking',
+  'sessions.progressPlan': 'Plan',
   'sessions.autoApproveHint': 'Tool calls from this dashboard are auto-approved.',
   'sessions.chatFailed': 'The agent did not reply: {error}',
   'sessions.resumeHint':

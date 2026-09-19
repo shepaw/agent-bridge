@@ -532,6 +532,8 @@ export const zh: Record<MessageKey, string> = {
   'sessions.send': '发送',
   'sessions.sending': '发送中…',
   'sessions.thinking': '思考中…',
+  'sessions.progressThinking': '推理',
+  'sessions.progressPlan': '计划',
   'sessions.autoApproveHint': '仪表盘里发起的工具调用会自动批准。',
   'sessions.chatFailed': 'Agent 未回复：{error}',
   'sessions.resumeHint':
