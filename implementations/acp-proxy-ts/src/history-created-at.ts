@@ -11,13 +11,16 @@ import type { SessionHistoryMessage } from 'shepaw-acp-sdk';
 const MINUTE_MS = 60_000;
 
 /**
- * Ensure every message has `created_at` (ISO-8601).
+ * Ensure every message has a strictly increasing `created_at` (ISO-8601).
  *
  * 1. Keep existing stamps.
  * 2. Propagate forward: unstamped turns get previous stamp + 1s.
  * 3. Remaining leading gaps: anchor the last message to [sessionUpdatedAt]
  *    (or now) and space earlier messages one minute apart, then merge without
  *    rewriting already-known stamps.
+ * 4. Break ties in transcript order. Engine stamps are often coarse — Cursor
+ *    embeds minute precision, so two turns in the same minute carry the same
+ *    stamp — and clients sort on this field alone.
  */
 export function ensureHistoryCreatedAt(
   messages: SessionHistoryMessage[],
@@ -38,35 +41,36 @@ export function ensureHistoryCreatedAt(
     out[i]!.created_at = new Date(ms + 1000).toISOString();
   }
 
-  const stillMissing = out.some((m) => m.created_at === undefined);
-  if (!stillMissing) return out;
+  if (out.some((m) => m.created_at === undefined)) {
+    const endMs = (() => {
+      if (opts.sessionUpdatedAt !== undefined) {
+        const parsed = Date.parse(opts.sessionUpdatedAt);
+        if (!Number.isNaN(parsed)) return parsed;
+      }
+      // Prefer the latest known stamp in the transcript.
+      for (let i = out.length - 1; i >= 0; i--) {
+        const at = out[i]!.created_at;
+        if (at === undefined) continue;
+        const ms = Date.parse(at);
+        if (!Number.isNaN(ms)) return ms;
+      }
+      return Date.now();
+    })();
 
-  const endMs = (() => {
-    if (opts.sessionUpdatedAt !== undefined) {
-      const parsed = Date.parse(opts.sessionUpdatedAt);
-      if (!Number.isNaN(parsed)) return parsed;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i]!.created_at !== undefined) continue;
+      const offsetFromEnd = out.length - 1 - i;
+      out[i]!.created_at = new Date(endMs - offsetFromEnd * MINUTE_MS).toISOString();
     }
-    // Prefer the latest known stamp in the transcript.
-    for (let i = out.length - 1; i >= 0; i--) {
-      const at = out[i]!.created_at;
-      if (at === undefined) continue;
-      const ms = Date.parse(at);
-      if (!Number.isNaN(ms)) return ms;
-    }
-    return Date.now();
-  })();
-
-  for (let i = 0; i < out.length; i++) {
-    if (out[i]!.created_at !== undefined) continue;
-    const offsetFromEnd = out.length - 1 - i;
-    out[i]!.created_at = new Date(endMs - offsetFromEnd * MINUTE_MS).toISOString();
   }
 
-  // Keep chronological order stable if anchors mixed oddly.
+  // Transcript order is the truth; stamps only approximate it. Runs
+  // unconditionally — an all-stamped transcript is exactly where minute-precision
+  // ties show up, and a tie lets the client sort a reply away from its question.
   for (let i = 1; i < out.length; i++) {
     const prev = Date.parse(out[i - 1]!.created_at!);
     const cur = Date.parse(out[i]!.created_at!);
-    if (!Number.isNaN(prev) && !Number.isNaN(cur) && cur < prev) {
+    if (!Number.isNaN(prev) && !Number.isNaN(cur) && cur <= prev) {
       out[i]!.created_at = new Date(prev + 1000).toISOString();
     }
   }
