@@ -280,12 +280,15 @@ export const zh: Record<MessageKey, string> = {
   'peer.advancedHint':
     'Peer 服务状态与手动配对链接。一般不需要展开。',
   'peer.devicesTitle': '已配对设备（{count}）',
+  'peer.devicesAria': '已配对客户端',
+  'peer.devicesEmptyHint': '用手机扫描二维码即可配对，设备会出现在这里。',
+  'peer.pairedAt': '配对于 {time}',
   'peer.noDevices': '尚未配对设备。',
   'peer.openStore': '打开储物袋',
   'peer.revoke': '撤销',
   'peer.authFail': 'API 鉴权失败。请先配置 Dashboard Token（与启动时的 SHEPAW_HUB_TOKEN 相同）：',
 
-  'connect.appHint': '用惜宝 App 扫描下方二维码即可连接。',
+  'connect.appHint': '用惜宝 App 扫描二维码即可连接。',
   'connect.needExternal': '需要被外部访问？',
   'connect.needExternalHint':
     '电脑在内网、手机要用移动网络访问时，点这里配置 Channel。',

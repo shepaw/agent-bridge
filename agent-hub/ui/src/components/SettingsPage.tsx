@@ -40,13 +40,7 @@ export function SettingsPage({
         </div>
       )}
 
-      {tab === 'peer' && (
-        <section style={card}>
-          <h3 style={cardTitle}>{t('settings.peerTitle')}</h3>
-          <p style={cardHint}>{t('settings.peerHint')}</p>
-          <PeerPairingPanel />
-        </section>
-      )}
+      {tab === 'peer' && <PeerPairingPanel />}
     </>
   );
 }

@@ -288,13 +288,16 @@ export const en = {
   'peer.advancedHint':
     'Peer service status and the manual pairing link. Expand only when you need them.',
   'peer.devicesTitle': 'Paired devices ({count})',
+  'peer.devicesAria': 'Paired clients',
+  'peer.devicesEmptyHint': 'Scan the QR to pair a phone. It will show up here.',
+  'peer.pairedAt': 'Paired {time}',
   'peer.noDevices': 'No paired devices yet.',
   'peer.openStore': 'Open Nexus Pouch',
   'peer.revoke': 'Revoke',
   'peer.authFail':
     'API authentication failed. Set the dashboard token (same as SHEPAW_HUB_TOKEN at start) first:',
 
-  'connect.appHint': 'Scan the QR below with the Shepaw app.',
+  'connect.appHint': 'Scan the QR with the Shepaw app.',
   'connect.needExternal': 'Need access from outside?',
   'connect.needExternalHint':
     'The computer is on a private network and the phone will use mobile data — set up a Channel here.',
