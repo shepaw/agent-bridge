@@ -294,6 +294,13 @@ export interface SessionHistoryMessage {
   created_at?: string;
 }
 
+/** POST /instances/:id/conversations/chat */
+export interface ConversationChatResult {
+  session_id: string;
+  reply: string;
+  elapsed_ms: number;
+}
+
 /** Peer-pushed attachment stored under instances/<id>/peer-attachments/. */
 export interface PeerAttachment {
   name: string;

@@ -16,7 +16,7 @@ import { getInstance, loadOrCreateHubConfig } from './config.js';
 import { instancePaths } from './paths.js';
 import { authorizePeerServiceOnInstance } from './peer/peer-auth.js';
 import { loadOrCreatePeerIdentity } from './peer/peer-identity.js';
-import { PeerAcpClient } from './peer/peer-acp-client.js';
+import { PeerAcpClient, type ApprovalRequest } from './peer/peer-acp-client.js';
 import { probeInstanceRuntime } from './runtime-status.js';
 
 /** Close pooled WS when unused for this long (Dashboard polls every 30s). */
@@ -276,6 +276,89 @@ export interface InstanceChatTestResult {
   readonly elapsedMs: number;
 }
 
+export interface InstanceConversationTurnResult {
+  readonly sessionId: string;
+  readonly reply: string;
+  readonly elapsedMs: number;
+}
+
+const DASHBOARD_CHAT_MAX_CHARS = 32_000;
+
+/** Hub-dashboard / test chats auto-allow tools so the operator is not blocked. */
+function autoApproveTool(req: ApprovalRequest): { id: string; label?: string } {
+  const allow =
+    req.actions.find((a) => a.id === 'allow') ??
+    req.actions.find((a) => a.id === 'allow-all') ??
+    req.actions.find((a) => a.id !== 'deny') ??
+    req.actions[0];
+  if (allow === undefined) {
+    throw new Error('approval requested but agent offered no actions');
+  }
+  return { id: allow.id, label: allow.label ?? 'Allow (hub dashboard)' };
+}
+
+function awaitChatReply(
+  client: PeerAcpClient,
+  opts: { message: string; sessionId: string; timeoutMs: number },
+): Promise<string> {
+  const taskId = randomUUID();
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let full = '';
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      finish(() => {
+        client.cancelTurn(taskId);
+        reject(new Error(`chat timed out after ${opts.timeoutMs}ms`));
+      });
+    }, opts.timeoutMs);
+
+    void client
+      .chat(
+        { message: opts.message, taskId, sessionId: opts.sessionId },
+        {
+          onChunk: (content) => {
+            full += content;
+          },
+          onDone: (content) => {
+            finish(() => resolve(content.length > 0 ? content : full));
+          },
+          onError: (messageText) => {
+            finish(() => reject(new Error(messageText)));
+          },
+          onApproval: async (req) => autoApproveTool(req),
+        },
+      )
+      .catch((err: unknown) => {
+        finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+      });
+  });
+}
+
+export function normalizeDashboardChatMessage(message: unknown): string {
+  if (typeof message !== 'string') {
+    throw new Error('message must be a string');
+  }
+  const trimmed = message.trim();
+  if (trimmed.length === 0) {
+    throw new Error('message must not be empty');
+  }
+  if (trimmed.length > DASHBOARD_CHAT_MAX_CHARS) {
+    throw new Error(`message exceeds ${DASHBOARD_CHAT_MAX_CHARS} characters`);
+  }
+  return trimmed;
+}
+
+export function resolveDashboardChatSessionId(sessionId?: string): string {
+  const trimmed = sessionId?.trim() ?? '';
+  return trimmed.length > 0 ? trimmed : `hub-dash_${randomUUID()}`;
+}
+
 /**
  * End-to-end chat probe: Noise handshake → `agent.chat` → first completion.
  * Auto-approves tool-call confirmations so unattended CI / doctor flows work.
@@ -287,59 +370,12 @@ export async function chatInstanceAcpRpc(
 ): Promise<InstanceChatTestResult> {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const started = Date.now();
-  const taskId = randomUUID();
-  const sessionId = `${opts.sessionPrefix ?? 'hub-test'}_${taskId}`;
+  const sessionId = `${opts.sessionPrefix ?? 'hub-test'}_${randomUUID()}`;
 
   try {
-    const reply = await withAcpClient(instanceId, async (client) => {
-      return await new Promise<string>((resolve, reject) => {
-        let settled = false;
-        let full = '';
-        const finish = (fn: () => void): void => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          fn();
-        };
-        const timer = setTimeout(() => {
-          finish(() => {
-            client.cancelTurn(taskId);
-            reject(new Error(`chat timed out after ${timeoutMs}ms`));
-          });
-        }, timeoutMs);
-
-        void client
-          .chat(
-            { message, taskId, sessionId },
-            {
-              onChunk: (content) => {
-                full += content;
-              },
-              onDone: (content) => {
-                finish(() => resolve(content.length > 0 ? content : full));
-              },
-              onError: (messageText) => {
-                finish(() => reject(new Error(messageText)));
-              },
-              onApproval: async (req) => {
-                const allow =
-                  req.actions.find((a) => a.id === 'allow') ??
-                  req.actions.find((a) => a.id === 'allow-all') ??
-                  req.actions.find((a) => a.id !== 'deny') ??
-                  req.actions[0];
-                if (allow === undefined) {
-                  throw new Error('approval requested but agent offered no actions');
-                }
-                return { id: allow.id, label: allow.label ?? 'Allow (hub test)' };
-              },
-            },
-          )
-          .catch((err: unknown) => {
-            finish(() => reject(err instanceof Error ? err : new Error(String(err))));
-          });
-      });
-    });
-
+    const reply = await withAcpClient(instanceId, (client) =>
+      awaitChatReply(client, { message, sessionId, timeoutMs }),
+    );
     return {
       ok: true,
       reply,
@@ -356,6 +392,29 @@ export async function chatInstanceAcpRpc(
   } finally {
     closeInstanceAcpRpcClient(instanceId);
   }
+}
+
+/**
+ * Dashboard conversation turn. Reuses the pooled ACP client so a follow-up
+ * message in the same session keeps the live binding. Auto-approves tools.
+ */
+export async function chatInstanceConversation(
+  instanceId: string,
+  message: unknown,
+  opts: { sessionId?: string; timeoutMs?: number } = {},
+): Promise<InstanceConversationTurnResult> {
+  const text = normalizeDashboardChatMessage(message);
+  const sessionId = resolveDashboardChatSessionId(opts.sessionId);
+  const timeoutMs = opts.timeoutMs ?? 180_000;
+  const started = Date.now();
+  const reply = await withAcpClient(instanceId, (client) =>
+    awaitChatReply(client, { message: text, sessionId, timeoutMs }),
+  );
+  return {
+    sessionId,
+    reply,
+    elapsedMs: Date.now() - started,
+  };
 }
 
 /** Replayed transcript from `agent.sessions.history`. */

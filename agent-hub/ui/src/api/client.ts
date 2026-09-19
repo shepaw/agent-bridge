@@ -24,6 +24,7 @@ import type {
   StoredSession,
   LiveSession,
   SessionHistoryMessage,
+  ConversationChatResult,
   CursorIdeSyncPreview,
   CursorIdeSyncResult,
   ClaudeCodeSyncPreview,
@@ -334,6 +335,15 @@ export const api = {
       request(
         `/instances/${instanceId}/conversations/${encodeURIComponent(sessionId)}/history`,
       ),
+
+    chat: (
+      instanceId: string,
+      input: { message: string; session_id?: string },
+    ): Promise<ConversationChatResult> =>
+      request(`/instances/${instanceId}/conversations/chat`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
   },
 
   attachments: {

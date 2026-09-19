@@ -17,6 +17,7 @@
  * GET    /api/instances/:id/enroll    — list outstanding pairing codes
  * DELETE /api/instances/:id/enroll/:code — revoke a pairing code
  * GET    /api/instances/:id/conversations — live session list (agent.sessions.list)
+ * POST   /api/instances/:id/conversations/chat — send a turn (new or existing session)
  * GET    /api/instances/:id/conversations/:sessionId/history — session transcript
  * GET    /api/instances/:id/sessions   — list persisted Shepaw→ACP session mappings
  * DELETE /api/instances/:id/sessions/:shepawSessionId — remove a stale mapping
@@ -79,6 +80,7 @@ import {
   OpenclawSyncNotSupportedError,
   listInstanceConversations,
   getInstanceConversationHistory,
+  chatInstanceConversation,
   getInstanceAgentCard,
   polishInstanceResume,
   rebuildInstanceResume,
@@ -974,6 +976,31 @@ instancesRouter.delete('/:id/enroll/:code', (req: Request, res: Response) => {
 });
 
 // ── conversations (live gateway sessions) ────────────────────────
+
+instancesRouter.post('/:id/conversations/chat', async (req: Request, res: Response) => {
+  try {
+    const cfg = loadOrCreateHubConfig();
+    getInstance(cfg, req.params.id!);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sessionId = typeof body.session_id === 'string' ? body.session_id : undefined;
+    const result = await chatInstanceConversation(req.params.id!, body.message, { sessionId });
+    res.json({
+      session_id: result.sessionId,
+      reply: result.reply,
+      elapsed_ms: result.elapsedMs,
+    });
+  } catch (err) {
+    if (err instanceof InstanceNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InstanceGatewayOfflineError) {
+      res.status(503).json({ error: err.message });
+    } else if (err instanceof Error && /message must/.test(err.message)) {
+      res.status(400).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+});
 
 instancesRouter.get('/:id/conversations', async (req: Request, res: Response) => {
   try {

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.js';
+import { t } from '../i18n/index.js';
 import type { InstanceStatus, LiveSession, SessionHistoryMessage } from '../api/types.js';
 
 interface UseConversationsOptions {
@@ -16,6 +17,7 @@ export function useConversations({
   onSelectSession,
 }: UseConversationsOptions) {
   const [sessions, setSessions] = useState<LiveSession[]>([]);
+  const [drafts, setDrafts] = useState<LiveSession[]>([]);
   const [listLoading, setListLoading] = useState(false);
   const [listRefreshing, setListRefreshing] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -23,14 +25,25 @@ export function useConversations({
   const [messages, setMessages] = useState<SessionHistoryMessage[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [pendingReply, setPendingReply] = useState(false);
 
   const selectedSessionIdRef = useRef(selectedSessionId);
   selectedSessionIdRef.current = selectedSessionId;
   const onSelectSessionRef = useRef(onSelectSession);
   onSelectSessionRef.current = onSelectSession;
+  const draftIdsRef = useRef(new Set<string>());
+  const skipHistoryLoadRef = useRef(false);
 
   const gatewayReady =
     status?.availability === 'online' || status?.availability === 'degraded';
+
+  const displayedSessions = useMemo(() => {
+    const ids = new Set(sessions.map((s) => s.session_id));
+    const extra = drafts.filter((d) => !ids.has(d.session_id));
+    return [...extra, ...sessions];
+  }, [sessions, drafts]);
 
   const loadSessions = useCallback(async (mode: 'initial' | 'background' | 'manual' = 'initial') => {
     if (!gatewayReady) {
@@ -55,10 +68,15 @@ export function useConversations({
         return tb - ta;
       });
       setSessions(sorted);
+      const listedIds = new Set(sorted.map((s) => s.session_id));
+      setDrafts((prev) => prev.filter((d) => !listedIds.has(d.session_id)));
+      for (const id of listedIds) draftIdsRef.current.delete(id);
+
       const activeSessionId = selectedSessionIdRef.current;
       if (
         activeSessionId !== null &&
-        !sorted.some((session) => session.session_id === activeSessionId)
+        !listedIds.has(activeSessionId) &&
+        !draftIdsRef.current.has(activeSessionId)
       ) {
         onSelectSessionRef.current(null);
       }
@@ -72,6 +90,12 @@ export function useConversations({
   }, [gatewayReady, instanceId]);
 
   const loadHistory = useCallback(async (sessionId: string) => {
+    if (draftIdsRef.current.has(sessionId)) {
+      setMessages([]);
+      setHistoryError(null);
+      setHistoryLoading(false);
+      return;
+    }
     setHistoryLoading(true);
     setHistoryError(null);
     setMessages([]);
@@ -85,6 +109,72 @@ export function useConversations({
       setHistoryLoading(false);
     }
   }, [instanceId]);
+
+  const startNewSession = useCallback((): string => {
+    const sessionId = `hub-dash_${crypto.randomUUID()}`;
+    const draft: LiveSession = {
+      session_id: sessionId,
+      title: t('sessions.draftTitle'),
+      updated_at: new Date().toISOString(),
+    };
+    draftIdsRef.current.add(sessionId);
+    skipHistoryLoadRef.current = true;
+    setDrafts((prev) => [draft, ...prev.filter((d) => d.session_id !== sessionId)]);
+    setMessages([]);
+    setHistoryError(null);
+    setSendError(null);
+    setPendingReply(false);
+    onSelectSessionRef.current(sessionId);
+    return sessionId;
+  }, []);
+
+  const sendChat = useCallback(async (raw: string) => {
+    const message = raw.trim();
+    if (message.length === 0 || sending) return;
+
+    let sessionId = selectedSessionIdRef.current;
+    if (sessionId === null) {
+      sessionId = startNewSession();
+    }
+
+    const userMsg: SessionHistoryMessage = {
+      role: 'user',
+      content: message,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setSending(true);
+    setPendingReply(true);
+    setSendError(null);
+    setHistoryError(null);
+
+    try {
+      const result = await api.conversations.chat(instanceId, {
+        message,
+        session_id: sessionId,
+      });
+      if (result.session_id !== sessionId) {
+        onSelectSessionRef.current(result.session_id);
+      }
+      draftIdsRef.current.delete(sessionId);
+      draftIdsRef.current.delete(result.session_id);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'agent',
+          content: result.reply,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      void loadSessions('background');
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      setSendError(t('sessions.chatFailed', { error: err }));
+    } finally {
+      setSending(false);
+      setPendingReply(false);
+    }
+  }, [instanceId, sending, startNewSession, loadSessions]);
 
   useEffect(() => {
     void loadSessions('initial');
@@ -101,21 +191,32 @@ export function useConversations({
       setMessages([]);
       setHistoryError(null);
       setHistoryLoading(false);
+      setSendError(null);
+      setPendingReply(false);
+      return;
+    }
+    if (skipHistoryLoadRef.current) {
+      skipHistoryLoadRef.current = false;
       return;
     }
     void loadHistory(selectedSessionId);
   }, [selectedSessionId, gatewayReady, loadHistory]);
 
   return {
-    sessions,
+    sessions: displayedSessions,
     listLoading,
     listRefreshing,
     listError,
     messages,
     historyLoading,
     historyError,
+    sending,
+    sendError,
+    pendingReply,
     gatewayReady,
     loadSessions,
     loadHistory,
+    startNewSession,
+    sendChat,
   };
 }

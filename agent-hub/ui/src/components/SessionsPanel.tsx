@@ -3,6 +3,7 @@ import { useConversations } from '../hooks/useConversations.js';
 import type { InstanceStatus } from '../api/types.js';
 import { SessionList } from './SessionList.js';
 import { SessionTranscript } from './SessionTranscript.js';
+import { ChatComposer } from './ChatComposer.js';
 import { CliSessionSyncModal } from './CliSessionSyncModal.js';
 import type { CliSessionSyncSource } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
@@ -47,7 +48,12 @@ export function SessionsPanel({
     historyLoading,
     historyError,
     gatewayReady,
+    sending,
+    sendError,
+    pendingReply,
     loadSessions,
+    startNewSession,
+    sendChat,
   } = useConversations({
     instanceId,
     status,
@@ -90,6 +96,14 @@ export function SessionsPanel({
               )}
             </button>
           )}
+          <button
+            type="button"
+            style={linkBtn}
+            disabled={!gatewayReady || sending}
+            onClick={() => startNewSession()}
+          >
+            {t('sessions.newChat')}
+          </button>
           {onManageMappings !== undefined && (
             <button type="button" style={linkBtn} onClick={onManageMappings}>
               {t('sessions.manage')}
@@ -130,8 +144,15 @@ export function SessionsPanel({
               messages={messages}
               loading={historyLoading}
               error={historyError}
+              pendingReply={pendingReply}
               workspaceUri={workspaceUri}
               onOpenStore={onOpenStore}
+            />
+            <ChatComposer
+              disabled={!gatewayReady || historyLoading}
+              sending={sending}
+              error={sendError}
+              onSend={(message) => void sendChat(message)}
             />
           </div>
         </div>
@@ -156,7 +177,7 @@ const wrapper: React.CSSProperties = {
   overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
-  height: 420,
+  height: 560,
 };
 
 const toolbar: React.CSSProperties = {

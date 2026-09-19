@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { SessionHistoryMessage } from '../api/types.js';
 import { useI18n } from '../i18n/index.js';
 import { resolveWorkspaceFileUri } from '../utils/workspaceHref.js';
@@ -8,6 +8,7 @@ interface SessionTranscriptProps {
   messages: SessionHistoryMessage[];
   loading: boolean;
   error: string | null;
+  pendingReply?: boolean;
   workspaceUri?: string;
   onOpenStore?: (uri: string) => void;
 }
@@ -17,10 +18,16 @@ export function SessionTranscript({
   messages,
   loading,
   error,
+  pendingReply = false,
   workspaceUri,
   onOpenStore,
 }: SessionTranscriptProps) {
   const { t } = useI18n();
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages.length, pendingReply]);
 
   if (sessionId === null) {
     return (
@@ -38,7 +45,7 @@ export function SessionTranscript({
     );
   }
 
-  if (error) {
+  if (error && messages.length === 0 && !pendingReply) {
     return (
       <div style={placeholder}>
         <p style={errorText}>{error}</p>
@@ -46,7 +53,7 @@ export function SessionTranscript({
     );
   }
 
-  if (messages.length === 0) {
+  if (messages.length === 0 && !pendingReply) {
     return (
       <div style={placeholder}>
         <p style={hint}>
@@ -84,6 +91,15 @@ export function SessionTranscript({
           </div>
         );
       })}
+      {pendingReply && (
+        <div style={{ ...bubbleRow, justifyContent: 'flex-start' }}>
+          <div style={{ ...bubble, background: '#313244', borderTopLeftRadius: 4 }}>
+            <span style={roleLabel}>{t('sessions.agent')}</span>
+            <p style={{ ...content, color: '#a6adc8' }}>{t('sessions.thinking')}</p>
+          </div>
+        </div>
+      )}
+      <div ref={bottomRef} />
     </div>
   );
 }
