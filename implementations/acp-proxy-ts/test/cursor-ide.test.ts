@@ -118,6 +118,57 @@ describe('cursor IDE sync manifest', () => {
     expect(manifest?.sessions[sessionId]?.title).toContain('sync me');
   });
 
+  it('excludes sessions already mapped in sessions.json from pending sync', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shepaw-cursor-acp-skip-'));
+    process.env.HOME = root;
+    const cwd = '/Users/test/workspace/agent-bridge';
+    const slug = claudeProjectSlug(cwd);
+    const managedId = 'aaaaaaaa-1111-2222-3333-444444444444';
+    const orphanedId = 'bbbbbbbb-1111-2222-3333-444444444444';
+    const nativeId = 'cccccccc-1111-2222-3333-444444444444';
+
+    for (const [sessionId, query] of [
+      [managedId, 'already in app via acp'],
+      [orphanedId, 'abandoned fork half'],
+      [nativeId, 'native ide chat'],
+    ] as const) {
+      const dir = join(root, '.cursor', 'projects', slug, 'agent-transcripts', sessionId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, `${sessionId}.jsonl`),
+        JSON.stringify({
+          role: 'user',
+          message: { content: [{ type: 'text', text: `<user_query>\n${query}</user_query>` }] },
+        }),
+        'utf-8',
+      );
+    }
+
+    const sessionStorePath = join(root, 'sessions.json');
+    await writeFile(
+      sessionStorePath,
+      JSON.stringify({
+        version: 1,
+        map: { 'shepaw-chat-1': managedId },
+        orphanedSdkIds: [orphanedId],
+      }),
+      'utf-8',
+    );
+
+    const syncPath = join(root, 'cursor-ide-sync.json');
+    const preview = await previewCursorIdeSync({ cwd, syncPath, sessionStorePath });
+    expect(preview.onDisk.map((s) => s.sessionId)).toEqual([nativeId]);
+    expect(preview.pending.map((s) => s.sessionId)).toEqual([nativeId]);
+
+    const result = await runCursorIdeSync({ cwd, syncPath, sessionStorePath });
+    expect(result.added).toBe(1);
+    expect(result.total).toBe(1);
+    const manifest = await loadCursorIdeSyncManifest(syncPath);
+    expect(manifest?.sessions[nativeId]).toBeDefined();
+    expect(manifest?.sessions[managedId]).toBeUndefined();
+    expect(manifest?.sessions[orphanedId]).toBeUndefined();
+  });
+
   it('does not bleed sessions when cwd changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'shepaw-cursor-sync2-'));
     const syncPath = join(root, 'cursor-ide-sync.json');

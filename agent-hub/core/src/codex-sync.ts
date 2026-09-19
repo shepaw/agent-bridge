@@ -33,7 +33,11 @@ function requireCodexInstance(instanceId: string) {
 export async function previewInstanceCodexSync(instanceId: string): Promise<CodexSyncPreview> {
   const instance = requireCodexInstance(instanceId);
   const paths = instancePaths(instanceId);
-  return previewCodexSync({ cwd: instance.cwd, syncPath: paths.codexSyncPath });
+  return previewCodexSync({
+    cwd: instance.cwd,
+    syncPath: paths.codexSyncPath,
+    sessionStorePath: paths.sessionsPath,
+  });
 }
 
 export async function syncInstanceCodexSessions(
@@ -46,6 +50,7 @@ export async function syncInstanceCodexSessions(
     cwd: instance.cwd,
     syncPath: paths.codexSyncPath,
     sessionIds: opts.sessionIds,
+    sessionStorePath: paths.sessionsPath,
   });
 }
 

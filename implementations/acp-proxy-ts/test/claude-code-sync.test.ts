@@ -101,6 +101,49 @@ describe('claude code sync manifest', () => {
     expect(manifest?.sessions[sessionId]?.title).toContain('sync me from cli');
   });
 
+  it('excludes sessions already mapped in sessions.json from pending sync', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shepaw-claude-acp-skip-'));
+    process.env.HOME = root;
+    const cwd = '/Users/test/workspace/agent-bridge';
+    const slug = claudeProjectSlug(cwd);
+    const dir = join(root, '.claude', 'projects', slug);
+    await mkdir(dir, { recursive: true });
+
+    const managedId = 'managed-acp-session';
+    const nativeId = 'native-cli-session';
+    for (const [sessionId, text] of [
+      [managedId, 'already chatting via acp'],
+      [nativeId, 'native cli only'],
+    ] as const) {
+      await writeFile(
+        join(dir, `${sessionId}.jsonl`),
+        JSON.stringify({
+          type: 'user',
+          uuid: 'u1',
+          timestamp: '2026-07-01T10:00:00.000Z',
+          message: { content: [{ type: 'text', text }] },
+        }),
+        'utf-8',
+      );
+    }
+
+    const sessionStorePath = join(root, 'sessions.json');
+    await writeFile(
+      sessionStorePath,
+      JSON.stringify({ version: 1, map: { 'app-1': managedId } }),
+      'utf-8',
+    );
+
+    const syncPath = join(root, 'claude-code-sync.json');
+    const preview = await previewClaudeCodeSync({ cwd, syncPath, sessionStorePath });
+    expect(preview.pending.map((s) => s.sessionId)).toEqual([nativeId]);
+
+    const result = await runClaudeCodeSync({ cwd, syncPath, sessionStorePath });
+    expect(result.added).toBe(1);
+    const manifest = await loadClaudeCodeSyncManifest(syncPath);
+    expect(Object.keys(manifest?.sessions ?? {})).toEqual([nativeId]);
+  });
+
   it('does not bleed sessions when cwd changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'shepaw-claude-sync2-'));
     const syncPath = join(root, 'claude-code-sync.json');

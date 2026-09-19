@@ -11,6 +11,7 @@ import {
   type CodexSessionSummary,
 } from './disk-history/codex.js';
 import { claudeProjectSlug } from './disk-history/util.js';
+import { dropManagedCliSessions, readManagedAcpSessionIdsForSync } from './sessions-list.js';
 
 export const CODEX_SYNC_FILENAME = 'codex-sync.json';
 
@@ -73,12 +74,15 @@ export async function saveCodexSyncManifest(path: string, manifest: CodexSyncMan
 export async function previewCodexSync(opts: {
   cwd: string;
   syncPath: string;
+  /** sessions.json — ACP-managed upstream ids are skipped (already in the app). */
+  sessionStorePath?: string;
 }): Promise<CodexSyncPreview> {
   const cwd = resolve(opts.cwd);
   if (!codexCwdMatches(cwd)) {
     throw new Error('Codex sync cwd mismatch');
   }
-  const onDisk = await listCodexDiskSessions(cwd);
+  const managedIds = await readManagedAcpSessionIdsForSync(opts);
+  const onDisk = dropManagedCliSessions(await listCodexDiskSessions(cwd), managedIds);
   const manifest = (await loadCodexSyncManifest(opts.syncPath)) ?? emptyCodexSyncManifest(cwd);
 
   if (resolve(manifest.cwd) !== cwd) {
@@ -106,9 +110,14 @@ export async function runCodexSync(opts: {
   cwd: string;
   syncPath: string;
   sessionIds?: readonly string[];
+  sessionStorePath?: string;
 }): Promise<CodexSyncResult> {
   const cwd = resolve(opts.cwd);
-  const preview = await previewCodexSync({ cwd, syncPath: opts.syncPath });
+  const preview = await previewCodexSync({
+    cwd,
+    syncPath: opts.syncPath,
+    sessionStorePath: opts.sessionStorePath,
+  });
   const manifest = (await loadCodexSyncManifest(opts.syncPath)) ?? emptyCodexSyncManifest(cwd);
   manifest.cwd = cwd;
 

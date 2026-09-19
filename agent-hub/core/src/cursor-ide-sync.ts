@@ -35,7 +35,11 @@ export async function previewInstanceCursorIdeSync(
 ): Promise<CursorIdeSyncPreview> {
   const instance = requireCursorInstance(instanceId);
   const paths = instancePaths(instanceId);
-  return previewCursorIdeSync({ cwd: instance.cwd, syncPath: paths.cursorIdeSyncPath });
+  return previewCursorIdeSync({
+    cwd: instance.cwd,
+    syncPath: paths.cursorIdeSyncPath,
+    sessionStorePath: paths.sessionsPath,
+  });
 }
 
 export async function syncInstanceCursorIdeSessions(
@@ -48,6 +52,7 @@ export async function syncInstanceCursorIdeSessions(
     cwd: instance.cwd,
     syncPath: paths.cursorIdeSyncPath,
     sessionIds: opts.sessionIds,
+    sessionStorePath: paths.sessionsPath,
   });
 }
 

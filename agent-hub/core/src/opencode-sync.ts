@@ -35,7 +35,11 @@ export async function previewInstanceOpencodeSync(
 ): Promise<OpencodeSyncPreview> {
   const instance = requireOpencodeInstance(instanceId);
   const paths = instancePaths(instanceId);
-  return previewOpencodeSync({ cwd: instance.cwd, syncPath: paths.opencodeSyncPath });
+  return previewOpencodeSync({
+    cwd: instance.cwd,
+    syncPath: paths.opencodeSyncPath,
+    sessionStorePath: paths.sessionsPath,
+  });
 }
 
 export async function syncInstanceOpencodeSessions(
@@ -48,6 +52,7 @@ export async function syncInstanceOpencodeSessions(
     cwd: instance.cwd,
     syncPath: paths.opencodeSyncPath,
     sessionIds: opts.sessionIds,
+    sessionStorePath: paths.sessionsPath,
   });
 }
 

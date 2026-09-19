@@ -4,6 +4,9 @@
  * Hub writes this file when the user clicks "Sync Cursor IDE sessions".
  * The gateway reads it to expose ONLY user-confirmed IDE conversations in
  * agent.sessions.list (never auto-scans disk on every list call).
+ *
+ * Sessions already mapped (or orphaned) in sessions.json are skipped — those
+ * are ACP-managed app conversations that happen to share the engine's disk.
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -15,6 +18,7 @@ import {
   type CursorIdeSessionSummary,
 } from './disk-history/cursor-ide.js';
 import { claudeProjectSlug } from './disk-history/util.js';
+import { dropManagedCliSessions, readManagedAcpSessionIdsForSync } from './sessions-list.js';
 
 export const CURSOR_IDE_SYNC_FILENAME = 'cursor-ide-sync.json';
 
@@ -82,12 +86,15 @@ export async function saveCursorIdeSyncManifest(
 export async function previewCursorIdeSync(opts: {
   cwd: string;
   syncPath: string;
+  /** sessions.json — ACP-managed upstream ids are skipped (already in the app). */
+  sessionStorePath?: string;
 }): Promise<CursorIdeSyncPreview> {
   const cwd = resolve(opts.cwd);
   if (!cursorIdeCwdMatches(cwd)) {
     throw new Error('Cursor IDE sync cwd mismatch');
   }
-  const onDisk = await listCursorIdeDiskSessions(cwd);
+  const managedIds = await readManagedAcpSessionIdsForSync(opts);
+  const onDisk = dropManagedCliSessions(await listCursorIdeDiskSessions(cwd), managedIds);
   const manifest = (await loadCursorIdeSyncManifest(opts.syncPath)) ?? emptyCursorIdeSyncManifest(cwd);
 
   if (resolve(manifest.cwd) !== cwd) {
@@ -117,9 +124,14 @@ export async function runCursorIdeSync(opts: {
   syncPath: string;
   /** When set, sync only these session ids; otherwise sync all pending on disk. */
   sessionIds?: readonly string[];
+  sessionStorePath?: string;
 }): Promise<CursorIdeSyncResult> {
   const cwd = resolve(opts.cwd);
-  const preview = await previewCursorIdeSync({ cwd, syncPath: opts.syncPath });
+  const preview = await previewCursorIdeSync({
+    cwd,
+    syncPath: opts.syncPath,
+    sessionStorePath: opts.sessionStorePath,
+  });
   const manifest =
     (await loadCursorIdeSyncManifest(opts.syncPath)) ?? emptyCursorIdeSyncManifest(cwd);
   manifest.cwd = cwd;

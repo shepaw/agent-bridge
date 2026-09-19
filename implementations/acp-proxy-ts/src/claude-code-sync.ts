@@ -4,6 +4,9 @@
  * Hub writes this file when the user clicks "Sync Claude Code CLI sessions".
  * The gateway reads it to expose ONLY user-confirmed CLI conversations in
  * agent.sessions.list (never auto-scans disk on every list call).
+ *
+ * Sessions already mapped (or orphaned) in sessions.json are skipped — those
+ * are ACP-managed app conversations that happen to share the engine's disk.
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -15,6 +18,7 @@ import {
   type ClaudeCodeSessionSummary,
 } from './disk-history/claude-code.js';
 import { claudeProjectSlug } from './disk-history/util.js';
+import { dropManagedCliSessions, readManagedAcpSessionIdsForSync } from './sessions-list.js';
 
 export const CLAUDE_CODE_SYNC_FILENAME = 'claude-code-sync.json';
 
@@ -82,12 +86,15 @@ export async function saveClaudeCodeSyncManifest(
 export async function previewClaudeCodeSync(opts: {
   cwd: string;
   syncPath: string;
+  /** sessions.json — ACP-managed upstream ids are skipped (already in the app). */
+  sessionStorePath?: string;
 }): Promise<ClaudeCodeSyncPreview> {
   const cwd = resolve(opts.cwd);
   if (!claudeCodeCwdMatches(cwd)) {
     throw new Error('Claude Code sync cwd mismatch');
   }
-  const onDisk = await listClaudeCodeDiskSessions(cwd);
+  const managedIds = await readManagedAcpSessionIdsForSync(opts);
+  const onDisk = dropManagedCliSessions(await listClaudeCodeDiskSessions(cwd), managedIds);
   const manifest =
     (await loadClaudeCodeSyncManifest(opts.syncPath)) ?? emptyClaudeCodeSyncManifest(cwd);
 
@@ -116,9 +123,14 @@ export async function runClaudeCodeSync(opts: {
   cwd: string;
   syncPath: string;
   sessionIds?: readonly string[];
+  sessionStorePath?: string;
 }): Promise<ClaudeCodeSyncResult> {
   const cwd = resolve(opts.cwd);
-  const preview = await previewClaudeCodeSync({ cwd, syncPath: opts.syncPath });
+  const preview = await previewClaudeCodeSync({
+    cwd,
+    syncPath: opts.syncPath,
+    sessionStorePath: opts.sessionStorePath,
+  });
   const manifest =
     (await loadClaudeCodeSyncManifest(opts.syncPath)) ?? emptyClaudeCodeSyncManifest(cwd);
   manifest.cwd = cwd;

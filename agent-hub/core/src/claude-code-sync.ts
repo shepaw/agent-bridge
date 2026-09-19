@@ -35,7 +35,11 @@ export async function previewInstanceClaudeCodeSync(
 ): Promise<ClaudeCodeSyncPreview> {
   const instance = requireClaudeCodeInstance(instanceId);
   const paths = instancePaths(instanceId);
-  return previewClaudeCodeSync({ cwd: instance.cwd, syncPath: paths.claudeCodeSyncPath });
+  return previewClaudeCodeSync({
+    cwd: instance.cwd,
+    syncPath: paths.claudeCodeSyncPath,
+    sessionStorePath: paths.sessionsPath,
+  });
 }
 
 export async function syncInstanceClaudeCodeSessions(
@@ -48,6 +52,7 @@ export async function syncInstanceClaudeCodeSessions(
     cwd: instance.cwd,
     syncPath: paths.claudeCodeSyncPath,
     sessionIds: opts.sessionIds,
+    sessionStorePath: paths.sessionsPath,
   });
 }
 

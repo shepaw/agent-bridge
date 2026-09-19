@@ -4,6 +4,7 @@
 
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
@@ -19,6 +20,7 @@ export interface StoredSessionEntry {
 interface PersistedShape {
   version: 1;
   map: Record<string, string>;
+  orphanedSdkIds?: string[];
 }
 
 export async function readStoredSessions(path: string): Promise<StoredSessionEntry[]> {
@@ -37,6 +39,54 @@ export async function readStoredSessions(path: string): Promise<StoredSessionEnt
     if (e.code === 'ENOENT') return [];
     throw err;
   }
+}
+
+/** `sessions.json` lives next to `cursor-ide-sync.json` (and the other CLI sync manifests). */
+export function sessionStorePathFromSyncPath(syncPath: string): string {
+  return join(dirname(syncPath), 'sessions.json');
+}
+
+/**
+ * Upstream ACP session ids the gateway already manages (`sessions.json` map
+ * values + orphaned ids). Client CLI/IDE sync must skip these — they already
+ * belong to an app conversation and re-importing them creates duplicates.
+ */
+export async function readManagedAcpSessionIds(path: string | undefined): Promise<Set<string>> {
+  const ids = new Set<string>();
+  if (path === undefined || path.length === 0) return ids;
+  try {
+    const raw = await readFile(path, 'utf-8');
+    const data = JSON.parse(raw) as Partial<PersistedShape>;
+    if (data.version !== 1) return ids;
+    if (data.map !== undefined && typeof data.map === 'object') {
+      for (const sdkId of Object.values(data.map)) {
+        if (typeof sdkId === 'string' && sdkId.length > 0) ids.add(sdkId);
+      }
+    }
+    if (Array.isArray(data.orphanedSdkIds)) {
+      for (const id of data.orphanedSdkIds) {
+        if (typeof id === 'string' && id.length > 0) ids.add(id);
+      }
+    }
+  } catch {
+    return ids;
+  }
+  return ids;
+}
+
+export async function readManagedAcpSessionIdsForSync(opts: {
+  syncPath: string;
+  sessionStorePath?: string;
+}): Promise<Set<string>> {
+  return readManagedAcpSessionIds(opts.sessionStorePath ?? sessionStorePathFromSyncPath(opts.syncPath));
+}
+
+export function dropManagedCliSessions<T extends { sessionId: string }>(
+  sessions: readonly T[],
+  managedIds: ReadonlySet<string>,
+): T[] {
+  if (managedIds.size === 0) return [...sessions];
+  return sessions.filter((s) => !managedIds.has(s.sessionId));
 }
 
 export async function listUpstreamAcpSessions(

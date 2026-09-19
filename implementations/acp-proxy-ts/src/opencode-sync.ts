@@ -11,6 +11,7 @@ import {
   type OpencodeSessionSummary,
 } from './disk-history/opencode.js';
 import { claudeProjectSlug } from './disk-history/util.js';
+import { dropManagedCliSessions, readManagedAcpSessionIdsForSync } from './sessions-list.js';
 
 export const OPENCODE_SYNC_FILENAME = 'opencode-sync.json';
 
@@ -76,12 +77,15 @@ export async function saveOpencodeSyncManifest(
 export async function previewOpencodeSync(opts: {
   cwd: string;
   syncPath: string;
+  /** sessions.json — ACP-managed upstream ids are skipped (already in the app). */
+  sessionStorePath?: string;
 }): Promise<OpencodeSyncPreview> {
   const cwd = resolve(opts.cwd);
   if (!opencodeCwdMatches(cwd)) {
     throw new Error('OpenCode sync cwd mismatch');
   }
-  const onDisk = await listOpencodeDiskSessions(cwd);
+  const managedIds = await readManagedAcpSessionIdsForSync(opts);
+  const onDisk = dropManagedCliSessions(await listOpencodeDiskSessions(cwd), managedIds);
   const manifest =
     (await loadOpencodeSyncManifest(opts.syncPath)) ?? emptyOpencodeSyncManifest(cwd);
 
@@ -110,9 +114,14 @@ export async function runOpencodeSync(opts: {
   cwd: string;
   syncPath: string;
   sessionIds?: readonly string[];
+  sessionStorePath?: string;
 }): Promise<OpencodeSyncResult> {
   const cwd = resolve(opts.cwd);
-  const preview = await previewOpencodeSync({ cwd, syncPath: opts.syncPath });
+  const preview = await previewOpencodeSync({
+    cwd,
+    syncPath: opts.syncPath,
+    sessionStorePath: opts.sessionStorePath,
+  });
   const manifest =
     (await loadOpencodeSyncManifest(opts.syncPath)) ?? emptyOpencodeSyncManifest(cwd);
   manifest.cwd = cwd;

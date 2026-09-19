@@ -11,6 +11,7 @@ import {
   type OpenclawSessionSummary,
 } from './disk-history/openclaw.js';
 import { claudeProjectSlug } from './disk-history/util.js';
+import { dropManagedCliSessions, readManagedAcpSessionIdsForSync } from './sessions-list.js';
 
 export const OPENCLAW_SYNC_FILENAME = 'openclaw-sync.json';
 
@@ -76,12 +77,15 @@ export async function saveOpenclawSyncManifest(
 export async function previewOpenclawSync(opts: {
   cwd: string;
   syncPath: string;
+  /** sessions.json — ACP-managed upstream ids are skipped (already in the app). */
+  sessionStorePath?: string;
 }): Promise<OpenclawSyncPreview> {
   const cwd = resolve(opts.cwd);
   if (!openclawCwdMatches(cwd)) {
     throw new Error('OpenClaw sync cwd mismatch');
   }
-  const onDisk = await listOpenclawDiskSessions(cwd);
+  const managedIds = await readManagedAcpSessionIdsForSync(opts);
+  const onDisk = dropManagedCliSessions(await listOpenclawDiskSessions(cwd), managedIds);
   const manifest =
     (await loadOpenclawSyncManifest(opts.syncPath)) ?? emptyOpenclawSyncManifest(cwd);
 
@@ -110,9 +114,14 @@ export async function runOpenclawSync(opts: {
   cwd: string;
   syncPath: string;
   sessionIds?: readonly string[];
+  sessionStorePath?: string;
 }): Promise<OpenclawSyncResult> {
   const cwd = resolve(opts.cwd);
-  const preview = await previewOpenclawSync({ cwd, syncPath: opts.syncPath });
+  const preview = await previewOpenclawSync({
+    cwd,
+    syncPath: opts.syncPath,
+    sessionStorePath: opts.sessionStorePath,
+  });
   const manifest =
     (await loadOpenclawSyncManifest(opts.syncPath)) ?? emptyOpenclawSyncManifest(cwd);
   manifest.cwd = cwd;

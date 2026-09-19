@@ -35,7 +35,11 @@ export async function previewInstanceOpenclawSync(
 ): Promise<OpenclawSyncPreview> {
   const instance = requireOpenclawInstance(instanceId);
   const paths = instancePaths(instanceId);
-  return previewOpenclawSync({ cwd: instance.cwd, syncPath: paths.openclawSyncPath });
+  return previewOpenclawSync({
+    cwd: instance.cwd,
+    syncPath: paths.openclawSyncPath,
+    sessionStorePath: paths.sessionsPath,
+  });
 }
 
 export async function syncInstanceOpenclawSessions(
@@ -48,6 +52,7 @@ export async function syncInstanceOpenclawSessions(
     cwd: instance.cwd,
     syncPath: paths.openclawSyncPath,
     sessionIds: opts.sessionIds,
+    sessionStorePath: paths.sessionsPath,
   });
 }
 
