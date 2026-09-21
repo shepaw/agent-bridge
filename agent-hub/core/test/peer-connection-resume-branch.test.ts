@@ -63,8 +63,12 @@ vi.mock('../src/peer/peer-acp-client.js', () => ({
   PeerAcpClient: FakePeerAcpClient,
 }));
 
-vi.mock('../src/instance-acp-rpc.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/instance-acp-rpc.js')>()),
+// Plain factory, NOT `async (importOriginal) => ({ ...(await importOriginal()), … })`:
+// with the spread form the mock never reached `peer-connection.ts` — it kept
+// the real `polishInstanceResume`, which dialled a live ACP client and failed
+// with "client.chat is not a function". This file's subject imports only these
+// two names from the module, so replacing it wholesale is safe.
+vi.mock('../src/instance-acp-rpc.js', () => ({
   polishInstanceResume: vi.fn(),
   rebuildInstanceResume: vi.fn(),
 }));

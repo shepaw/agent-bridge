@@ -99,6 +99,7 @@ import type { SlashProviders } from './slash/types.js';
 import { SlashCommandRegistry } from './slash/registry.js';
 
 import type { ShepawWebSocket } from './task-context.js';
+import { resumeDeltaBase } from './resume-delta.js';
 
 // ── v2 handshake constants ─────────────────────────────────────────
 
@@ -393,6 +394,14 @@ export class ACPAgentServer {
    * and never race against the underlying SDK session lock.
    */
   private readonly chatQueues = new Map<string, Promise<void>>();
+  /**
+   * component/req id → the task that created the waiter, plus the reverse
+   * index. `agent.cancelTask` used to reject EVERY pending waiter in the
+   * process, so cancelling one session denied an unrelated session's
+   * permission prompt (it came back as `cancelled` and the tool was refused).
+   */
+  private readonly waiterOwner = new Map<string, string>();
+  private readonly waitersByTask = new Map<string, Set<string>>();
 
   /**
    * Per-task replay buffer — the disconnect-resume backbone. Every chat task
@@ -445,6 +454,57 @@ export class ACPAgentServer {
     this.maxConcurrency = opts.maxConcurrency ?? 5;
     this.taskReplayReaper = setInterval(() => this.reapTaskReplay(), 60_000);
     this.taskReplayReaper.unref?.();
+  }
+
+  // ── waiter ownership (task-scoped cancel) ─────────────────────
+
+  /** Attribute a waiter / hub-request id to the task that created it. */
+  private claimWaiter(id: string, taskId: string): void {
+    const prev = this.waiterOwner.get(id);
+    if (prev !== undefined) this.waitersByTask.get(prev)?.delete(id);
+    this.waiterOwner.set(id, taskId);
+    let set = this.waitersByTask.get(taskId);
+    if (set === undefined) {
+      set = new Set();
+      this.waitersByTask.set(taskId, set);
+    }
+    set.add(id);
+  }
+
+  private releaseWaiter(id: string): void {
+    const taskId = this.waiterOwner.get(id);
+    if (taskId === undefined) return;
+    this.waiterOwner.delete(id);
+    const set = this.waitersByTask.get(taskId);
+    if (set === undefined) return;
+    set.delete(id);
+    if (set.size === 0) this.waitersByTask.delete(taskId);
+  }
+
+  /** Drop the task→waiter index once a task ends. Never rejects anything. */
+  private dropWaitersForTask(taskId: string): void {
+    const set = this.waitersByTask.get(taskId);
+    if (set === undefined) return;
+    for (const id of set) this.waiterOwner.delete(id);
+    this.waitersByTask.delete(taskId);
+  }
+
+  /** Reject only THIS task's waiters so a cancel can't bleed into others. */
+  private cancelWaitersForTask(taskId: string): void {
+    const set = this.waitersByTask.get(taskId);
+    if (set === undefined) return;
+    for (const id of [...set]) {
+      const response = this.pendingResponses.get(id);
+      if (response !== undefined && !response.settled) {
+        response.reject(new TaskCancelledError());
+      }
+      const hub = this.pendingHubRequests.get(id);
+      if (hub !== undefined && !hub.settled) {
+        hub.reject(new TaskCancelledError());
+      }
+      this.releaseWaiter(id);
+    }
+    this.waitersByTask.delete(taskId);
   }
 
   /** Sweep terminal/zombie replay entries past their TTL. */
@@ -1125,7 +1185,7 @@ export class ACPAgentServer {
       })();
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
       clearTimeout(handshakeTimer);
       try {
         noise.close();
@@ -1143,8 +1203,14 @@ export class ACPAgentServer {
       for (const entry of this.taskReplay.values()) {
         if (entry.route === (ws as ShepawWebSocket)) entry.route = undefined;
       }
+      // Keep the close code/reason: 1006 (abnormal, no close frame) vs a
+      // deliberate 4400-range close is the only way to tell a network flap
+      // from an intentional disconnect when reading logs.
+      const reasonText = reason?.toString('utf-8') ?? '';
       // eslint-disable-next-line no-console
-      console.log('[ACP] WebSocket connection closed');
+      console.log(
+        `[ACP] WebSocket connection closed (code=${code}${reasonText.length > 0 ? ` reason=${reasonText}` : ''})`,
+      );
     });
   }
 
@@ -1554,6 +1620,10 @@ export class ACPAgentServer {
       pendingHubRequests: this.pendingHubRequests,
       pendingResponses: this.pendingResponses,
       takeEarlyResponse: (id) => this.takeEarlyResponse(id, taskId),
+      waiterRegistry: {
+        claim: (id) => this.claimWaiter(id, taskId),
+        release: (id) => this.releaseWaiter(id),
+      },
       transport,
     });
 
@@ -1567,9 +1637,13 @@ export class ACPAgentServer {
     );
     // Store a no-reject tail so the queue head never becomes a rejected promise
     // that would swallow subsequent entries.
-    this.chatQueues.set(sessionId, next.then(() => undefined, () => undefined));
-    // Detach so the WS reader keeps flowing.
-    void next;
+    const tail = next.then(() => undefined, () => undefined);
+    this.chatQueues.set(sessionId, tail);
+    // Reclaim the per-session entry once nothing else is queued behind us.
+    // Without this a long-lived process keeps one promise per session forever.
+    void tail.then(() => {
+      if (this.chatQueues.get(sessionId) === tail) this.chatQueues.delete(sessionId);
+    });
   }
 
   private async runChatTask(
@@ -1633,6 +1707,7 @@ export class ACPAgentServer {
     } finally {
       this.activeTasks.delete(taskId);
       this.discardEarlyResponsesForTask(taskId);
+      this.dropWaitersForTask(taskId);
       // 有空位时优先消化信箱 backlog，避免实时流量饿死留言
       void this.drainMailbox();
     }
@@ -1898,6 +1973,10 @@ export class ACPAgentServer {
       sessionId,
       pendingHubRequests: this.pendingHubRequests,
       pendingResponses: this.pendingResponses,
+      waiterRegistry: {
+        claim: (id) => this.claimWaiter(id, taskId),
+        release: (id) => this.releaseWaiter(id),
+      },
       mailboxStream,
     });
 
@@ -1938,6 +2017,7 @@ export class ACPAgentServer {
       // 不 ack → visibility timeout 后重试
     } finally {
       this.activeTasks.delete(taskId);
+      this.dropWaitersForTask(taskId);
     }
   }
 
@@ -2025,7 +2105,7 @@ export class ACPAgentServer {
     // rebind would otherwise be lost to the old (dead) route.
     entry.route = ws as ShepawWebSocket;
 
-    const base = Math.max(0, Math.min(known, entry.accumulated.length));
+    const base = resumeDeltaBase(entry.accumulated, known);
     const delta = entry.accumulated.slice(base);
     if (entry.status === 'streaming') {
       await wsSend(
@@ -2066,11 +2146,15 @@ export class ACPAgentServer {
       );
     }
 
-    // Re-emit tool-call confirmations that never reached a client so the
-    // (re-attached) client can relay the approval cards. Cards acked by a
-    // previous route are NOT re-sent — the client is already showing them.
+    // Re-emit every still-outstanding confirmation. A card leaves
+    // `pendingConfirmations` only when its verdict (submitResponse) arrives,
+    // so anything left here is genuinely unanswered — resuming MUST re-send
+    // it. The old `delivered` flag only proved our socket accepted the write,
+    // not that a human ever saw the card: on a half-open tunnel the write
+    // succeeded, `delivered` went true, resume skipped the card, and the turn
+    // hung on [pending] forever. A duplicate card the user can simply answer
+    // again is far cheaper than a stuck turn.
     for (const pending of entry.pendingConfirmations.values()) {
-      if (pending.delivered) continue;
       try {
         await wsSend(ws, jsonrpcNotification('ui.actionConfirmation', pending.params));
         pending.delivered = true;
@@ -2092,13 +2176,10 @@ export class ACPAgentServer {
     const ctrl = this.activeTasks.get(taskId);
     if (ctrl !== undefined) {
       ctrl.abort();
-      // Abort any pending waitForResponse / hubRequest so the task exits quickly.
-      for (const d of this.pendingResponses.values()) {
-        if (!d.settled) d.reject(new TaskCancelledError());
-      }
-      for (const d of this.pendingHubRequests.values()) {
-        if (!d.settled) d.reject(new TaskCancelledError());
-      }
+      // Release only the waiters THIS task owns. The old code rejected every
+      // pending waiter process-wide, which denied unrelated tasks' permission
+      // prompts (they surfaced as `cancelled` and the tool call was refused).
+      this.cancelWaitersForTask(taskId);
       await wsSend(
         ws,
         jsonrpcResponse(msgId, { result: { task_id: taskId, status: 'cancelled' } }),
@@ -2132,8 +2213,15 @@ export class ACPAgentServer {
       const componentId = responseData[idKey];
       if (typeof componentId === 'string' && componentId.length > 0) {
         // Resolved — stop re-emitting this card on future taskResume rebinds.
-        for (const entry of this.taskReplay.values()) {
-          entry.pendingConfirmations.delete(componentId);
+        // Scoped to the owning task: ids are not unique across tasks, and the
+        // old global sweep could delete another task's outstanding card.
+        const owner = taskId.length > 0 ? this.taskReplay.get(taskId) : undefined;
+        if (owner !== undefined) {
+          owner.pendingConfirmations.delete(componentId);
+        } else {
+          for (const entry of this.taskReplay.values()) {
+            entry.pendingConfirmations.delete(componentId);
+          }
         }
         const deferred = this.pendingResponses.get(componentId);
         if (deferred !== undefined && !deferred.settled) {

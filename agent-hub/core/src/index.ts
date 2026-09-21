@@ -420,3 +420,39 @@ export {
   resolveEngineAvatarFile,
 } from './engine-avatars.js';
 export type { EngineAvatarPayload } from './engine-avatars.js';
+
+// ── post-hoc session analytics ─────────────────────────────────────
+// Reads finished transcripts off disk (claude-code, codex) and reports tool
+// usage + token distribution. Offline by design: no ACP, no live stream.
+export {
+  aggregate,
+  CLAUDE_CODE_ENGINE,
+  CODEX_ENGINE,
+  claudeProjectSlug,
+  defaultScanRoots,
+  distribution,
+  renderJson,
+  renderMarkdown,
+  runAnalyze,
+  scanSessions,
+  workspaceMatches,
+} from './session-analytics/index.js';
+export type {
+  Aggregate,
+  AnalyzeFilters,
+  AnalyzeOptions,
+  AnalyzeOutput,
+  AnomalySummary,
+  Distribution,
+  GroupTotals,
+  RecordFlag,
+  ScanOptions,
+  ScanResult,
+  ScanRoots,
+  ScanStats,
+  ToolStat,
+  ToolUse,
+  TurnRecord,
+  Usage,
+} from './session-analytics/index.js';
+export { addUsage, emptyUsage } from './session-analytics/index.js';

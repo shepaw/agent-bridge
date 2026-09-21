@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 
 import * as acp from '@agentclientprotocol/sdk';
@@ -551,6 +551,10 @@ export class AcpSubprocess {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: augmentAgentEnv(mergedEnv, this.spec.id),
+      // Own process group so teardown can signal the whole tree: these CLIs
+      // are usually `npx …`, and killing the wrapper alone orphans the real
+      // agent process (it keeps holding the workspace and the ACP port).
+      detached: process.platform !== 'win32',
     });
 
     child.on('error', (err) => {
@@ -707,11 +711,42 @@ export class AcpSubprocess {
     this.terminals.disposeAll();
     this.connection?.close();
     this.connection = undefined;
-    if (this.child !== undefined && !this.child.killed) {
-      this.child.kill('SIGTERM');
+    if (this.child !== undefined) {
+      this.killUpstream(this.child);
     }
     this.child = undefined;
     this.initPromise = undefined;
+  }
+
+  /**
+   * SIGTERM the upstream process group, escalating to SIGKILL if it ignores
+   * the signal. Always targets the detached group: these CLIs are `npx`
+   * wrappers, and signalling only the wrapper orphans the real agent.
+   */
+  private killUpstream(child: ChildProcess): void {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const pid = child.pid;
+    const grouped = pid !== undefined && process.platform !== 'win32';
+    const signal = (sig: NodeJS.Signals): void => {
+      try {
+        if (grouped) process.kill(-(pid as number), sig);
+        else child.kill(sig);
+      } catch {
+        try {
+          child.kill(sig);
+        } catch {
+          /* already gone */
+        }
+      }
+    };
+    signal('SIGTERM');
+    const force = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      log('upstream ignored SIGTERM; sending SIGKILL');
+      signal('SIGKILL');
+    }, 5_000);
+    force.unref?.();
+    child.once('exit', () => clearTimeout(force));
   }
 
   /** Upstream ACP subprocess metrics for Hub /status. */
@@ -1045,13 +1080,39 @@ export class AcpSubprocess {
     }
   }
 
+  /**
+   * Drop every live session handle. Runs when the upstream connection dies
+   * (exit / spawn error / restart) or when we stop: the handles are bound to a
+   * process that is gone, so keeping them would hand the next turn a session
+   * that can never answer.
+   *
+   * In-flight turns MUST be forgotten at the same time. They are keyed by
+   * upstream session id and hold the app-facing TaskContext; leaving them
+   * registered after the upstream died is what produced dangling lookups
+   * (`Cannot read properties of undefined (reading 'agent')`) and routed a
+   * later `session/request_permission` at a turn that no longer exists.
+   *
+   * The Shepaw→ACP id mapping lives outside this class, so affected
+   * conversations are restored (resume/load) on their next turn.
+   */
   private disposeSessions(): void {
+    const inFlight = [...this.turnsByUpstreamSession.keys()];
     for (const session of this.sessions.values()) {
       session.dispose();
     }
+    const dropped = this.sessions.size;
     this.sessions.clear();
     this.configByShepawSession.clear();
     this.modesByShepawSession.clear();
+    this.turnsByUpstreamSession.clear();
+    if (dropped > 0 || inFlight.length > 0) {
+      log(
+        'disposed %d session(s), dropped %d in-flight turn(s)%s',
+        dropped,
+        inFlight.length,
+        inFlight.length > 0 ? ` (upstream: ${inFlight.join(', ')})` : '',
+      );
+    }
   }
 
   private rememberConfigOptions(
@@ -1446,8 +1507,8 @@ export class AcpSubprocess {
       /* ignore */
     }
     this.connection = undefined;
-    if (this.child !== undefined && !this.child.killed) {
-      this.child.kill('SIGTERM');
+    if (this.child !== undefined) {
+      this.killUpstream(this.child);
     }
     this.child = undefined;
     this.initPromise = undefined;
@@ -1754,18 +1815,41 @@ export class AcpSubprocess {
     }
   }
 
+  /**
+   * Confine an agent-supplied path to the session's workspace roots.
+   *
+   * `fs/readTextFile` + `fs/writeTextFile` are served by US (the client), so
+   * an unconstrained path let the upstream agent — or anything that can
+   * influence it, e.g. a prompt-injected tool call — read and overwrite any
+   * file the Hub user can touch. Absolute paths are honoured only when they
+   * land inside `cwd` or an explicit `--additional-directory`.
+   */
+  private resolveWorkspacePath(rawPath: string): string {
+    const roots = [resolve(this.cwd), ...this.additionalDirectories.map((d) => resolve(d))];
+    const target = resolve(this.cwd, rawPath);
+    const inside = roots.some((root) => target === root || target.startsWith(root + sep));
+    if (!inside) {
+      throw new Error(
+        `fs access denied: "${rawPath}" resolves outside the session workspace ` +
+          `(${roots.join(', ')})`,
+      );
+    }
+    return target;
+  }
+
   private async handleReadTextFile(
     params: acp.ReadTextFileRequest,
   ): Promise<acp.ReadTextFileResponse> {
-    const content = await readFile(params.path, 'utf-8');
+    const content = await readFile(this.resolveWorkspacePath(params.path), 'utf-8');
     return { content };
   }
 
   private async handleWriteTextFile(
     params: acp.WriteTextFileRequest,
   ): Promise<acp.WriteTextFileResponse> {
-    await mkdir(dirname(params.path), { recursive: true });
-    await writeFile(params.path, params.content, 'utf-8');
+    const target = this.resolveWorkspacePath(params.path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, params.content, 'utf-8');
     return {};
   }
 }

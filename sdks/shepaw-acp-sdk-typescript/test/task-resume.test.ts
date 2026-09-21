@@ -258,7 +258,7 @@ describe('approval waiter survives disconnect', () => {
     rmSync(workdir, { recursive: true, force: true });
   });
 
-  it('card delivered before the flap: no duplicate re-emit; verdict rides the new connection', async () => {
+  it('card raised before the flap: rebind re-emits it; verdict rides the new connection', async () => {
     const client1 = await connectApproval();
     await client1.request('agent.chat', {
       task_id: 'a1',
@@ -276,17 +276,20 @@ describe('approval waiter survives disconnect', () => {
     await client1.close();
     await sleep(150);
 
-    // Reconnect + resume. The card WAS delivered pre-flap, so the rebind must
-    // NOT re-emit it (the client — or its hub — is already showing it).
+    // Reconnect + resume. The card was pushed pre-flap but never ANSWERED, and
+    // a successful socket write is not proof a human saw it (half-open
+    // tunnels). Re-emitting is the only way to guarantee the approval is
+    // reachable again — otherwise the turn hangs on [pending] forever.
     const client2 = await connectApproval();
     const resp = await client2.request<{ status: string }>('agent.taskResume', {
       task_id: 'a1',
       known_length: 0,
     });
     expect(resp.result).toMatchObject({ status: 'streaming' });
-    await expect(
-      client2.waitForNotification('ui.actionConfirmation', 400),
-    ).rejects.toThrow(/timed out/);
+    const reEmitted = await client2.waitForNotification('ui.actionConfirmation', 2000);
+    expect((reEmitted.params as Record<string, unknown>).confirmation_id).toBe(
+      confirmationId,
+    );
 
     // The verdict arrives on the NEW connection and resolves the OLD waiter.
     await client2.request('agent.submitResponse', {

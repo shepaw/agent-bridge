@@ -300,6 +300,7 @@ export class StoreToolsClient {
       for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
         const chunk = bytes.subarray(offset, Math.min(offset + 64 * 1024, bytes.length));
         await this.storeOp('write.chunk', {
+          space,
           upload_id: uploadId,
           offset,
           data: Buffer.from(chunk).toString('base64'),

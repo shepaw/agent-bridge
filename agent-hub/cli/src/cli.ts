@@ -39,6 +39,9 @@
  *   peers remove <id> <fp>         Revoke a device
  *
  *   web [--port <n>]               Start the web dashboard (API + UI); also starts Peer
+ *
+ *   analyze                        Post-hoc token/tool statistics over finished session
+ *                                  transcripts on disk (offline; --json for piping)
  */
 
 import { existsSync } from 'node:fs';
@@ -101,6 +104,7 @@ import { instancePaths, hubRoot, hubConfigPath, gatewayLogFile, restartLogFile }
 import { tailLog } from '@shepaw/agent-hub-core';
 import { probeInstanceRuntime, createHubPairing } from '@shepaw/agent-hub-core';
 import { updateInstance } from '@shepaw/agent-hub-core';
+import { runAnalyzeCommand } from './analyze.js';
 import { runDoctor } from './doctor.js';
 import {
   checkHubUpdate,
@@ -220,6 +224,34 @@ cli
         timeoutMs: opts.timeoutMs !== undefined ? Number(opts.timeoutMs) : undefined,
       });
       if (failures > 0) process.exitCode = 1;
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('analyze', 'Token + tool statistics over finished session transcripts on disk (offline)')
+  .option('--session <id>', 'Only this session (prefix match; sub-agent ids also match)')
+  .option('--workspace <slug>', 'Only this workspace (project slug, absolute path, or fragment)')
+  .option('--instance <id>', "Only this registered instance's working directory")
+  .option('--engine <id>', 'Only this engine (claude-code, codex)')
+  .option('--since <ISO>', 'Only requests at or after this timestamp')
+  .option('--until <ISO>', 'Only requests before this timestamp')
+  .option('--json', 'Emit JSON instead of Markdown')
+  .option('--out <path>', 'Write the report to a file instead of stdout')
+  .action(async (opts: {
+    session?: string;
+    workspace?: string;
+    instance?: string;
+    engine?: string;
+    since?: string;
+    until?: string;
+    json?: boolean;
+    out?: string;
+  }) => {
+    try {
+      const code = await runAnalyzeCommand(opts);
+      if (code !== 0) process.exitCode = code;
     } catch (err) {
       exitWithError(err);
     }

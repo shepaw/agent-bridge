@@ -117,13 +117,23 @@ export interface SendMessageMetadataOpts {
 
 export interface WaitForResponseOpts {
   /**
-   * Cap on how long to block for a reply. `0` (or `Infinity`) disables the
-   * cap entirely: the waiter stays live until the reply arrives, the task is
-   * cancelled (waiter rejected with TaskCancelledError), or the connection/
-   * process is torn down. Defaults to 300_000 (5 minutes) when omitted.
+   * Cap on how long to block for a reply. `0` (or `Infinity`) means "no
+   * artificial deadline": the waiter stays live until the reply arrives, the
+   * task is cancelled (waiter rejected with TaskCancelledError), or the
+   * hard ceiling `WAIT_FOREVER_CAP_MS` (30 min) trips — a review that never
+   * comes must not park the turn on [pending] forever. Defaults to 300_000
+   * (5 minutes) when omitted.
    */
   timeoutMs?: number;
 }
+
+/**
+ * Hard ceiling for `waitForResponse` when the caller passed `timeoutMs: 0`.
+ * Human review legitimately takes minutes, so there is no short clock — but
+ * a card that never reaches a reviewer must still fail the turn eventually
+ * instead of hanging on [pending] with no way to recover.
+ */
+export const WAIT_FOREVER_CAP_MS = 30 * 60 * 1000;
 
 export interface HubRequestOpts {
   timeoutMs?: number;
@@ -140,6 +150,15 @@ export interface TaskContextInit {
   /** Optional early-submitResponse buffer shared with the server. */
   earlyResponses?: Map<string, Record<string, unknown>>;
   takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
+  /**
+   * Lets the server attribute every waiter / hub-request to the task that
+   * created it, so `agent.cancelTask` can release only that task's waiters
+   * instead of every pending one in the process.
+   */
+  waiterRegistry?: {
+    claim: (id: string, taskId: string) => void;
+    release: (id: string) => void;
+  };
   /**
    * Offline / mailbox mode: when set, `sendText` appends here and lifecycle
    * notifications are no-ops (no live caller WebSocket).
@@ -168,6 +187,10 @@ export class TaskContext {
   private readonly pendingHubRequests: Map<string, Deferred<unknown>>;
   private readonly pendingResponses: Map<string, Deferred<Record<string, unknown>>>;
   private readonly takeEarlyResponse?: (componentId: string) => Record<string, unknown> | undefined;
+  private readonly waiterRegistry?: {
+    claim: (id: string, taskId: string) => void;
+    release: (id: string) => void;
+  };
   private readonly offlineSink?: { texts: string[] };
   private readonly mailboxStream?: MailboxStreamSink;
   private readonly transport?: (message: Record<string, unknown>) => Promise<void>;
@@ -179,6 +202,7 @@ export class TaskContext {
     this.pendingHubRequests = init.pendingHubRequests;
     this.pendingResponses = init.pendingResponses;
     this.takeEarlyResponse = init.takeEarlyResponse;
+    this.waiterRegistry = init.waiterRegistry;
     this.offlineSink = init.offlineSink;
     this.mailboxStream = init.mailboxStream;
     this.transport = init.transport;
@@ -433,11 +457,13 @@ export class TaskContext {
     const req = jsonrpcRequest(method, params, reqId);
     const deferred = createDeferred<unknown>();
     this.pendingHubRequests.set(reqId, deferred);
+    this.waiterRegistry?.claim(reqId, this.taskId);
     try {
       await this.sendRaw(req);
       return (await withTimeout(deferred.promise, opts.timeoutMs ?? 10_000, `hub.${method}`)) as T;
     } finally {
       this.pendingHubRequests.delete(reqId);
+      this.waiterRegistry?.release(reqId);
     }
   }
 
@@ -470,6 +496,7 @@ export class TaskContext {
     // these races with peer loopback submitResponse and drops the verdict.
     const deferred = createDeferred<Record<string, unknown>>();
     this.pendingResponses.set(componentId, deferred);
+    this.waiterRegistry?.claim(componentId, this.taskId);
     const early = this.takeEarlyResponse?.(componentId);
     if (early !== undefined) {
       deferred.resolve(early);
@@ -479,11 +506,16 @@ export class TaskContext {
       // timeoutMs: 0 / Infinity = wait for the reply (or task teardown)
       // without an artificial deadline — see WaitForResponseOpts.
       if (timeoutMs === 0 || timeoutMs === Infinity) {
-        return await deferred.promise;
+        return await withTimeout(
+          deferred.promise,
+          WAIT_FOREVER_CAP_MS,
+          `component ${componentId}`,
+        );
       }
       return await withTimeout(deferred.promise, timeoutMs ?? 300_000, `component ${componentId}`);
     } finally {
       this.pendingResponses.delete(componentId);
+      this.waiterRegistry?.release(componentId);
     }
   }
 

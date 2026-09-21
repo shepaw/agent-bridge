@@ -7,6 +7,8 @@ describe('store tools (Nexuspouch HTTP)', () => {
   let server: Server;
   let base = '';
   const files = new Map<string, Buffer>();
+  /** Every frame the client sent, so tests can assert protocol fields. */
+  const seen: Array<{ op: string; payload: Record<string, unknown> }> = [];
 
   const frame = (op: string, payload: unknown) => ({ op, payload });
 
@@ -22,6 +24,14 @@ describe('store tools (Nexuspouch HTTP)', () => {
         req.on('data', (c) => (raw += c));
         req.on('end', () => {
           const { op, payload } = JSON.parse(raw) as { op: string; payload: any };
+          seen.push({ op, payload });
+          // Mirror the real peer store protocol: write.* / commit all require
+          // `space`, and a missing one is rejected with bad_op.
+          if (['write.begin', 'write.chunk', 'commit', 'handoff.create'].includes(op)) {
+            if (!payload.space) {
+              return send(200, { op: 'error', code: 'bad_op', message: 'space required' });
+            }
+          }
           if (op === 'write.begin') {
             files.set(payload.path, Buffer.alloc(0));
             return send(200, { op: 'result', data: { upload_id: `u-${payload.path}` } });
@@ -120,6 +130,23 @@ describe('store tools (Nexuspouch HTTP)', () => {
     const read = await executeStoreTool('store_read', { uri }, client);
     expect(read.ok).toBe(true);
     expect((read.data as { encoding: string; content: string }).content).toBe('hello store tools');
+  });
+
+  it('write sends space on every frame, including chunks', async () => {
+    const client = new StoreToolsClient(base, 'tok', 'aaaaaaaaaaaaaaaa');
+    seen.length = 0;
+    // Larger than the 64 KiB chunk size so the loop actually iterates twice.
+    const big = 'x'.repeat(70 * 1024);
+    const written = await executeStoreTool(
+      'store_write',
+      { filename: 'big.txt', content: big, space: 'files', task: 't-3' },
+      client,
+    );
+    expect(written.ok).toBe(true);
+    const chunks = seen.filter((f) => f.op === 'write.chunk');
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const f of chunks) expect(f.payload.space).toBe('files');
+    expect(seen.find((f) => f.op === 'commit')?.payload.space).toBe('files');
   });
 
   it('store_write with context uses handoff.create', async () => {

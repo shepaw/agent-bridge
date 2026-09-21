@@ -56,7 +56,15 @@ export function supportsAdditionalDirectories(caps: acp.InitializeResponse | und
 }
 
 export interface DiscardReplayOptions {
-  /** Stop after this many ms without a replay update. Default 400. */
+  /**
+   * Stop after this many ms without a replay update. Default 1000.
+   *
+   * Raised from 400: engines replaying a long transcript (or cold-starting
+   * their backend) routinely gap more than 400 ms between chunks. Ending the
+   * drain early lets the remaining replay chunks flow into the next turn's
+   * `drainUpdates`, which streams the PREVIOUS answer to the app as the reply
+   * to the new message.
+   */
   idleMs?: number;
   /** Hard cap even if replay updates keep arriving. Default 15_000. */
   maxMs?: number;
@@ -104,7 +112,7 @@ export async function discardLoadReplayUpdates(
   session: acp.ActiveSession,
   opts: DiscardReplayOptions = {},
 ): Promise<number> {
-  const idleMs = opts.idleMs ?? 400;
+  const idleMs = opts.idleMs ?? 1000;
   const maxMs = opts.maxMs ?? 15_000;
   const pollMs = opts.pollMs ?? 100;
   const warmupMs = opts.warmupMs ?? 0;
