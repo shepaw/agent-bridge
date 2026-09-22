@@ -8,13 +8,14 @@ import { loadClaudeCodeHistory } from '../src/disk-history/claude-code.js';
 import { loadCodebuddyHistory } from '../src/disk-history/codebuddy.js';
 import { loadCodexHistory } from '../src/disk-history/codex.js';
 import { loadOpencodeHistory } from '../src/disk-history/opencode.js';
-import { claudeProjectSlug, codebuddyProjectSlug, textFromContentBlocks } from '../src/disk-history/util.js';
+import { claudeProjectSlug, codebuddyProjectSlug, cursorProjectSlug, textFromContentBlocks } from '../src/disk-history/util.js';
 import { tryLoadDiskHistory } from '../src/disk-history/index.js';
 
 describe('disk-history util', () => {
   it('encodes project slugs', () => {
     expect(claudeProjectSlug('/Users/edenzou/proj')).toBe('-Users-edenzou-proj');
     expect(codebuddyProjectSlug('/Users/edenzou/proj')).toBe('Users-edenzou-proj');
+    expect(cursorProjectSlug('/Users/edenzou/proj')).toBe('Users-edenzou-proj');
   });
 
   it('extracts text from content blocks', () => {

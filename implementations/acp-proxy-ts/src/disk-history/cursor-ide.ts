@@ -2,7 +2,8 @@
  * Cursor IDE desktop client transcripts:
  *   ~/.cursor/projects/{slug}/agent-transcripts/{sessionId}/{sessionId}.jsonl
  *
- * Slug encodes the absolute workspace path with `/` → `-` (same rule as Claude Code).
+ * Slug drops the leading `/` then encodes the rest with `/` → `-`
+ * (`/Users/me/proj` → `Users-me-proj`). That is not Claude Code's leading-dash slug.
  * Only sessions under the matching workspace slug are visible to a Hub instance.
  */
 
@@ -10,7 +11,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import {
-  claudeProjectSlug,
+  cursorProjectSlug,
   homePath,
   pushTurn,
   splitAnthropicBlocks,
@@ -25,7 +26,7 @@ export interface CursorIdeSessionSummary {
 }
 
 function cursorIdeTranscriptsRoot(cwd: string): string {
-  return homePath('.cursor', 'projects', claudeProjectSlug(cwd), 'agent-transcripts');
+  return homePath('.cursor', 'projects', cursorProjectSlug(cwd), 'agent-transcripts');
 }
 
 function transcriptPath(cwd: string, sessionId: string): string {
@@ -169,5 +170,5 @@ export async function listCursorIdeDiskSessions(cwd: string): Promise<CursorIdeS
 export function cursorIdeCwdMatches(instanceCwd: string, candidateCwd?: string): boolean {
   const base = resolve(instanceCwd);
   const other = resolve(candidateCwd ?? instanceCwd);
-  return claudeProjectSlug(base) === claudeProjectSlug(other);
+  return cursorProjectSlug(base) === cursorProjectSlug(other);
 }

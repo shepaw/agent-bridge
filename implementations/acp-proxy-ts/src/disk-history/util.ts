@@ -17,6 +17,16 @@ export function claudeProjectSlug(cwd: string): string {
   return abs.replace(/\//g, '-');
 }
 
+/**
+ * Encode an absolute cwd the way Cursor does for `~/.cursor/projects/`.
+ * Unlike Claude Code, the leading `/` is dropped, so `/Users/me/proj` becomes
+ * `Users-me-proj` rather than `-Users-me-proj`.
+ */
+export function cursorProjectSlug(cwd: string): string {
+  const abs = cwd.startsWith('/') ? cwd : join(process.cwd(), cwd);
+  return abs.replace(/^\//, '').replace(/\//g, '-');
+}
+
 /** Encode cwd the way CodeBuddy does for `~/.codebuddy/projects/` (no leading slash → dash). */
 export function codebuddyProjectSlug(cwd: string): string {
   const abs = cwd.startsWith('/') ? cwd : join(process.cwd(), cwd);

@@ -12,8 +12,9 @@ import {
   previewCursorIdeSync,
   runCursorIdeSync,
   loadCursorIdeSyncManifest,
+  shouldBindListedSessionAsAcp,
 } from '../src/cursor-ide-sync.js';
-import { claudeProjectSlug } from '../src/disk-history/util.js';
+import { claudeProjectSlug, cursorProjectSlug } from '../src/disk-history/util.js';
 
 const prevHome = process.env.HOME;
 
@@ -37,7 +38,7 @@ describe('cursor IDE disk history', () => {
     const root = await mkdtemp(join(tmpdir(), 'shepaw-cursor-ide-'));
     process.env.HOME = root;
     const cwd = '/Users/test/workspace/my-app';
-    const slug = claudeProjectSlug(cwd);
+    const slug = cursorProjectSlug(cwd);
     const sessionId = 'aaaa-bbbb-cccc-dddd';
     const dir = join(root, '.cursor', 'projects', slug, 'agent-transcripts', sessionId);
     await mkdir(dir, { recursive: true });
@@ -80,6 +81,41 @@ describe('cursor IDE disk history', () => {
     // Different cwd → different slug → no sessions.
     expect(await listCursorIdeDiskSessions('/other/project')).toEqual([]);
   });
+
+  it('ignores transcripts stored under the Claude Code leading-dash slug', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shepaw-cursor-ide-dash-'));
+    process.env.HOME = root;
+    const cwd = '/Users/test/workspace/my-app';
+    const sessionId = 'dash-slug-session';
+    const dir = join(
+      root,
+      '.cursor',
+      'projects',
+      claudeProjectSlug(cwd),
+      'agent-transcripts',
+      sessionId,
+    );
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, `${sessionId}.jsonl`),
+      JSON.stringify({
+        role: 'user',
+        message: { content: [{ type: 'text', text: '<user_query>\nwrong slug</user_query>' }] },
+      }),
+      'utf-8',
+    );
+
+    expect(await listCursorIdeDiskSessions(cwd)).toEqual([]);
+  });
+});
+
+describe('shouldBindListedSessionAsAcp', () => {
+  it('keeps ACP sessions bound and leaves Cursor IDE transcripts unbound', () => {
+    const ideOnly = new Set(['ide-session']);
+    expect(shouldBindListedSessionAsAcp('acp-session', ideOnly)).toBe(true);
+    expect(shouldBindListedSessionAsAcp('ide-session', ideOnly)).toBe(false);
+    expect(shouldBindListedSessionAsAcp('ide-session', undefined)).toBe(true);
+  });
 });
 
 describe('cursor IDE sync manifest', () => {
@@ -87,7 +123,7 @@ describe('cursor IDE sync manifest', () => {
     const root = await mkdtemp(join(tmpdir(), 'shepaw-cursor-sync-'));
     process.env.HOME = root;
     const cwd = '/Users/test/workspace/agent-bridge';
-    const slug = claudeProjectSlug(cwd);
+    const slug = cursorProjectSlug(cwd);
     const sessionId = '11111111-2222-3333-4444-555555555555';
     const dir = join(root, '.cursor', 'projects', slug, 'agent-transcripts', sessionId);
     await mkdir(dir, { recursive: true });
@@ -122,7 +158,7 @@ describe('cursor IDE sync manifest', () => {
     const root = await mkdtemp(join(tmpdir(), 'shepaw-cursor-acp-skip-'));
     process.env.HOME = root;
     const cwd = '/Users/test/workspace/agent-bridge';
-    const slug = claudeProjectSlug(cwd);
+    const slug = cursorProjectSlug(cwd);
     const managedId = 'aaaaaaaa-1111-2222-3333-444444444444';
     const orphanedId = 'bbbbbbbb-1111-2222-3333-444444444444';
     const nativeId = 'cccccccc-1111-2222-3333-444444444444';

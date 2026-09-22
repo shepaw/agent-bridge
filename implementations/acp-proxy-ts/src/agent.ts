@@ -70,6 +70,7 @@ import {
   isCursorIdeSessionSynced,
   loadCursorIdeSyncManifest,
   listSyncedCursorIdeSessions,
+  shouldBindListedSessionAsAcp,
 } from './cursor-ide-sync.js';
 import {
   opencodeSyncPathFromSessionStore,
@@ -686,19 +687,30 @@ export class AcpProxyAgent extends ACPAgentServer {
     // `title`. Merge in sessions discovered on disk (with a derived title +
     // updatedAt) so historical CodeBuddy conversations actually surface and show
     // a real title instead of the raw session id.
-    const listed = mergeListedSessions(upstream, await this.listEngineDiskSessions(params.cwd));
+    const diskSessions = await this.listEngineDiskSessions(params.cwd);
+    const listed = mergeListedSessions(upstream, diskSessions);
+    const upstreamIds = new Set(upstream.map((s) => s.sessionId));
+    // Synced Cursor IDE transcripts share the list with ACP sessions, but their
+    // ids live in agent-transcripts, not in cursor-agent's ACP store.
+    const cursorIdeOnlyIds =
+      this.engineId === 'cursor'
+        ? new Set(diskSessions.map((s) => s.sessionId).filter((id) => !upstreamIds.has(id)))
+        : undefined;
     const sessions: SessionInfo[] = listed.map((s) => {
       // If the app already has a mapping to this upstream session, surface it
       // under the app's own session id so it reuses the existing local channel
       // instead of adopting a second (crossing) one.
       const knownShepawId = this.sessionStore.findShepawIdBySdkId(s.sessionId);
       const sessionId = knownShepawId ?? s.sessionId;
-      // For a not-yet-known session the app adopts the upstream id verbatim.
+      // For a not-yet-known ACP session the app adopts the upstream id verbatim.
       // Pre-seed the mapping (id → same upstream id) so the first chat on this
       // adopted id goes through getOrCreateSession → tryRestoreSession and
       // RESUMES the real upstream session (rather than spawning an empty one),
       // which is exactly what prevents "session crossing".
-      if (knownShepawId === undefined) {
+      if (
+        knownShepawId === undefined &&
+        shouldBindListedSessionAsAcp(s.sessionId, cursorIdeOnlyIds)
+      ) {
         this.sessionStore.set(sessionId, s.sessionId);
       }
       return {

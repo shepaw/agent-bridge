@@ -19,6 +19,7 @@ export {
   runCursorIdeSync,
   loadCursorIdeSyncManifest,
   cursorIdeSyncPathFromSessionStore,
+  shouldBindListedSessionAsAcp,
   CURSOR_IDE_SYNC_FILENAME,
   type CursorIdeSyncManifest,
   type CursorIdeSyncPreview,
@@ -77,6 +78,7 @@ export {
   parseCursorIdeUserText,
   cursorIdeCwdMatches,
 } from './disk-history/cursor-ide.js';
+export { cursorProjectSlug } from './disk-history/util.js';
 export {
   PermissionPolicy,
   loadPolicyFromEnv,

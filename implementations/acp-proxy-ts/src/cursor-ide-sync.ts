@@ -17,7 +17,7 @@ import {
   listCursorIdeDiskSessions,
   type CursorIdeSessionSummary,
 } from './disk-history/cursor-ide.js';
-import { claudeProjectSlug } from './disk-history/util.js';
+import { cursorProjectSlug } from './disk-history/util.js';
 import { dropManagedCliSessions, readManagedAcpSessionIdsForSync } from './sessions-list.js';
 
 export const CURSOR_IDE_SYNC_FILENAME = 'cursor-ide-sync.json';
@@ -112,7 +112,7 @@ export async function previewCursorIdeSync(opts: {
 
   return {
     cwd,
-    workspaceSlug: claudeProjectSlug(cwd),
+    workspaceSlug: cursorProjectSlug(cwd),
     onDisk,
     synced,
     pending,
@@ -183,6 +183,21 @@ export async function listSyncedCursorIdeSessions(opts: {
     updatedAt: meta.updatedAt,
     cwd,
   }));
+}
+
+/**
+ * Cursor IDE transcript ids are not ACP session ids. Binding one as the
+ * upstream id makes the next turn try to resume a session cursor-agent does
+ * not have, and writes that id into sessions.json so later syncs treat the
+ * client conversation as already ACP-managed. Leave it unbound: history still
+ * loads from the transcript, and the first prompt opens a new ACP session
+ * rehydrated from that history. ACP `session/list` entries stay bound.
+ */
+export function shouldBindListedSessionAsAcp(
+  sessionId: string,
+  cursorIdeOnlyIds: ReadonlySet<string> | undefined,
+): boolean {
+  return cursorIdeOnlyIds === undefined || !cursorIdeOnlyIds.has(sessionId);
 }
 
 export function isCursorIdeSessionSynced(
