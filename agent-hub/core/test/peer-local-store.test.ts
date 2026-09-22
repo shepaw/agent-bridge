@@ -479,6 +479,38 @@ describe('PeerLocalStore', () => {
     expect(existsSync(join(dir, '.cursors', `${other}.json`))).toBe(true);
   });
 
+  it('delete of a directory tombstones each file and does not follow a symlink', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const write = (path: string, text: string) => {
+      const content = Buffer.from(text);
+      const sha = createHash('sha256').update(content).digest('hex');
+      const begin = store.writeBegin({
+        deviceId: device,
+        space: 'files',
+        path,
+        size: content.length,
+        sha256: sha,
+      });
+      store.writeChunk(device, begin.upload_id, 0, content);
+      store.commit(device, 'files', [begin.upload_id]);
+    };
+    write('notes/keep.txt', 'keep');
+    write('notes/node_modules/pkg/a.txt', 'skip');
+    const outside = join(dir, 'outside.txt');
+    writeFileSync(outside, 'secret');
+    symlinkSync(outside, join(dir, device, 'files', 'notes', 'linked'));
+    store.delete(device, 'files', 'notes');
+    expect(store.tombstone(device, 'files', 'notes/keep.txt')?.sha256).toBe(
+      createHash('sha256').update('keep').digest('hex'),
+    );
+    expect(store.tombstone(device, 'files', 'notes/node_modules/pkg/a.txt')).toBeNull();
+    expect(store.tombstone(device, 'files', 'notes')).toBeNull();
+    expect(existsSync(outside)).toBe(true);
+    expect(existsSync(join(dir, device, 'files', 'notes'))).toBe(false);
+  });
+
   it('a corrupt cursor is not reported as synced through 0', () => {
     dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
     const store = new PeerLocalStore(dir);

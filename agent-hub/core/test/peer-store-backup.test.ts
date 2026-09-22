@@ -8,6 +8,7 @@ import {
   planPeerBackup,
   reconcilePeerBackup,
   replicateToRemote,
+  shouldRetryBackup,
   type StoreCaller,
 } from '../src/peer/peer-store-backup.js';
 
@@ -118,6 +119,21 @@ describe('planPeerBackup', () => {
       remoteMaster: 'dddddddddddddddd',
       selfId: self,
     })).toEqual({ announce: 'dddddddddddddddd', pull: false, push: false });
+  });
+});
+
+describe('shouldRetryBackup', () => {
+  const done = { pulled: 1, skipped: 0, incomplete: 0, complete: true };
+  const dropped = { pulled: 0, skipped: 0, incomplete: 2, complete: true };
+  const shortPage = { pulled: 0, skipped: 0, incomplete: 0, complete: false };
+
+  it('retries dropped files, and a short listing only once', () => {
+    expect(shouldRetryBackup([done], 0)).toBe(false);
+    expect(shouldRetryBackup([dropped], 0)).toBe(true);
+    expect(shouldRetryBackup([dropped], 2)).toBe(true);
+    expect(shouldRetryBackup([dropped], 3)).toBe(false);
+    expect(shouldRetryBackup([shortPage], 0)).toBe(true);
+    expect(shouldRetryBackup([shortPage], 1)).toBe(false);
   });
 });
 
@@ -248,5 +264,22 @@ describe('reconcilePeerBackup', () => {
     expect(remote.read(device, 'runtime', 'secret.txt').data.toString()).toBe('keep-me');
     expect(remote.read(device, 'files', 'note.txt').data.toString()).toBe('send');
     expect(() => remote.read(device, 'files', 'node_modules/pkg/a.txt')).toThrow();
+  });
+
+  it('removes a directory of files from the remote master after a local delete', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-backup-'));
+    const device = 'aaaaaaaaaaaaaaaa';
+    const local = new PeerLocalStore(join(dir, 'local'));
+    const remote = new PeerLocalStore(join(dir, 'remote'));
+    seed(local, device, 'files', 'notes/keep.txt', 'gone');
+    seed(remote, device, 'files', 'notes/keep.txt', 'gone');
+    local.delete(device, 'files', 'notes');
+    await replicateToRemote({
+      store: local,
+      deviceId: device,
+      call: remoteCall(remote, device),
+      spaces: ['files'],
+    });
+    expect(() => remote.read(device, 'files', 'notes/keep.txt')).toThrow();
   });
 });

@@ -61,7 +61,7 @@ import {
 } from './peer-pending-approvals.js';
 import { loadPairedPeers } from './peer-store.js';
 import { handleInboundStoreFrame } from './peer-store-protocol.js';
-import { onPeerConnectedForBackup } from './peer-store-backup.js';
+import { cancelPeerBackupRetries, onPeerConnectedForBackup } from './peer-store-backup.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
@@ -1464,6 +1464,7 @@ export async function drivePeerConnection(opts: {
       // (glare) connection takes over as the new top.
       const i = peerSession.liveRoutes.findIndex((r) => r.token === connToken);
       if (i >= 0) peerSession.liveRoutes.splice(i, 1);
+      if (!peerHasLiveConnection(peerId)) cancelPeerBackupRetries(peerId);
       // A peer WS flap must NOT kill agent work. In-memory approval waiters
       // are MIGRATED ({migrated}) so turn bookkeeping unwinds without sending
       // a verdict; persisted records stay 'pending' — the card replays on

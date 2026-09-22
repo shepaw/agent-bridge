@@ -20,6 +20,7 @@ import {
   existsSync,
   fsyncSync,
   mkdirSync,
+  lstatSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -659,19 +660,7 @@ export class PeerLocalStore {
     if (!existsSync(abs)) {
       throw Object.assign(new Error('not_found'), { code: 'not_found' });
     }
-    try {
-      if (statSync(abs).isFile()) {
-        const data = readFileSync(abs);
-        this.putTombstone(deviceId, {
-          space,
-          path,
-          size: data.length,
-          sha256: createHash('sha256').update(data).digest('hex'),
-        });
-      }
-    } catch {
-      /* still remove the path */
-    }
+    this.tombstoneTree(deviceId, space, abs, path);
     rmSync(abs, { recursive: true, force: true });
     if (typeof uptoSeq === 'number') this.setAppliedSeq(deviceId, uptoSeq);
     return { applied_seq: this.appliedSeq(deviceId) };
@@ -799,6 +788,47 @@ export class PeerLocalStore {
     const hit = this.readTombstones(id).find((entry) => entry.space === space && entry.path === path);
     if (!hit?.sha256) return null;
     return { size: hit.size, sha256: hit.sha256 };
+  }
+
+  /**
+   * Record every real file under `abs` before it is removed.
+   * Symlinks are not followed, and dependency or git trees are skipped:
+   * a later backup must be able to delete those copies, not copy them.
+   */
+  private tombstoneTree(deviceId: string, space: string, abs: string, rel: string): void {
+    let st: Stats;
+    try {
+      st = lstatSync(abs);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) return;
+    if (st.isDirectory()) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(abs);
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        if (name === '.' || name === '..' || name === 'node_modules' || name === '.git') continue;
+        const child = rel ? `${rel}/${name}` : name;
+        this.tombstoneTree(deviceId, space, join(abs, name), child);
+      }
+      return;
+    }
+    if (!st.isFile()) return;
+    try {
+      const data = readFileSync(abs);
+      this.putTombstone(deviceId, {
+        space,
+        path: rel,
+        size: data.length,
+        sha256: createHash('sha256').update(data).digest('hex'),
+      });
+    } catch {
+      /* still remove the path */
+    }
   }
 
   private putTombstone(deviceId: string, entry: TombstoneEntry): void {

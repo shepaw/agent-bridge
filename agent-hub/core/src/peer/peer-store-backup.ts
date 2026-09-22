@@ -37,7 +37,11 @@ export interface ReconcileStats {
 }
 
 const BACKUP_PAGE = 500;
+const BACKUP_RETRY_LIMIT = 3;
+const BACKUP_RETRY_BASE_MS = 5_000;
 const inFlight = new Map<string, Promise<ReconcileStats>>();
+const pushTail = new Map<string, Promise<void>>();
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function emptyStats(): ReconcileStats {
   return { pulled: 0, skipped: 0, incomplete: 0, complete: true };
@@ -109,12 +113,49 @@ function announceMaster(peerId: string, master: string): Promise<void> {
 }
 
 /**
+ * Retry a run that dropped files or stopped on a list error.
+ * A peer that never pages is tried only once more; repeated file failures
+ * stop after {@link BACKUP_RETRY_LIMIT}.
+ */
+export function shouldRetryBackup(stats: readonly ReconcileStats[], attempt: number): boolean {
+  if (attempt >= BACKUP_RETRY_LIMIT) return false;
+  const failedFiles = stats.some((item) => item.incomplete > 0);
+  if (failedFiles) return true;
+  return stats.some((item) => !item.complete) && attempt === 0;
+}
+
+/** Drop a pending retry. Safe when this peer still has another live connection. */
+export function cancelPeerBackupRetries(peerId: string): void {
+  const timer = retryTimers.get(peerId);
+  if (timer) clearTimeout(timer);
+  retryTimers.delete(peerId);
+}
+
+function enqueuePush<T>(deviceId: string, work: () => Promise<T>): Promise<T> {
+  const prev = pushTail.get(deviceId) ?? Promise.resolve();
+  const run = prev.then(work, work);
+  const settled = run.then(() => undefined, () => undefined);
+  pushTail.set(deviceId, settled);
+  void settled.finally(() => {
+    if (pushTail.get(deviceId) === settled) pushTail.delete(deviceId);
+  });
+  return run;
+}
+
+/**
  * On connect: tell the peer who our master is, pull if they named us,
  * and push if we named them. The caller must already be able to send.
+ * A run that did not finish is tried again while this peer stays connected.
  */
 export function onPeerConnectedForBackup(peerId: string, fingerprint: string): Promise<void> {
+  return runPeerBackup(peerId, fingerprint, 0);
+}
+
+async function runPeerBackup(peerId: string, fingerprint: string, attempt: number): Promise<void> {
   const id = fingerprint.trim().toLowerCase();
-  if (!/^[a-f0-9]{16}$/.test(id)) return Promise.resolve();
+  if (!/^[a-f0-9]{16}$/.test(id)) return;
+  if (attempt > 0 && !peerHasLiveConnection(peerId)) return;
+  if (attempt === 0) cancelPeerBackupRetries(peerId);
   const selfId = selfIdOrEmpty();
   const plan = planPeerBackup({
     peerFingerprint: id,
@@ -122,12 +163,30 @@ export function onPeerConnectedForBackup(peerId: string, fingerprint: string): P
     remoteMaster: configuredRemoteMaster(),
     selfId,
   });
-  const tasks: Promise<unknown>[] = [
-    announceMaster(peerId, plan.announce).catch(() => undefined),
-  ];
-  if (plan.pull) tasks.push(startPeerBackup(peerId, id));
-  if (plan.push) tasks.push(pushLocalPouch(peerId));
-  return Promise.all(tasks).then(() => undefined);
+  const stats: ReconcileStats[] = [];
+  const tasks: Promise<unknown>[] = [];
+  if (attempt === 0) {
+    tasks.push(announceMaster(peerId, plan.announce).catch(() => undefined));
+  }
+  if (plan.pull) {
+    tasks.push(startPeerBackup(peerId, id).then((item) => {
+      stats.push(item);
+    }));
+  }
+  if (plan.push) {
+    tasks.push(pushLocalPouch(peerId).then((item) => {
+      stats.push(item);
+    }));
+  }
+  await Promise.all(tasks);
+  if (!shouldRetryBackup(stats, attempt) || !peerHasLiveConnection(peerId)) return;
+  const timer = setTimeout(() => {
+    retryTimers.delete(peerId);
+    if (!peerHasLiveConnection(peerId)) return;
+    void runPeerBackup(peerId, id, attempt + 1).catch(() => undefined);
+  }, BACKUP_RETRY_BASE_MS * (attempt + 1));
+  timer.unref();
+  retryTimers.set(peerId, timer);
 }
 
 /**
@@ -160,11 +219,11 @@ export function pushLocalPouch(peerId: string): Promise<ReconcileStats> {
   }
   const existing = inFlight.get(`push:${self}`);
   if (existing) return existing;
-  const job = replicateToRemote({
+  const job = enqueuePush(self, () => replicateToRemote({
     store: getPeerLocalStore(),
     deviceId: self,
     call: (op, payload) => callStoreOnPeerId(peerId, op, payload),
-  }).finally(() => {
+  })).finally(() => {
     inFlight.delete(`push:${self}`);
   });
   inFlight.set(`push:${self}`, job);
@@ -365,13 +424,25 @@ async function pushSpace(
   }
 }
 
-async function pushOnePath(peerId: string, space: string, path: string, deleted: boolean): Promise<void> {
-  const store = getPeerLocalStore();
+function pushOnePath(peerId: string, space: string, path: string, deleted: boolean): Promise<void> {
   const deviceId = selfStoreDeviceId();
+  return enqueuePush(deviceId, () => pushOnePathNow(peerId, deviceId, space, path, deleted));
+}
+
+async function pushOnePathNow(
+  peerId: string,
+  deviceId: string,
+  space: string,
+  path: string,
+  deleted: boolean,
+): Promise<void> {
+  const store = getPeerLocalStore();
   const call: StoreCaller = (op, payload) => callStoreOnPeerId(peerId, op, payload);
   if (deleted) {
-    const tomb = store.tombstone(deviceId, space, path);
-    if (!tomb) return;
+    const covered = store.listTombstones(deviceId).some((tomb) =>
+      tomb.space === space && (tomb.path === path || tomb.path.startsWith(`${path}/`)),
+    );
+    if (!covered) return;
     await call('delete', { space, device: deviceId, path });
     return;
   }
