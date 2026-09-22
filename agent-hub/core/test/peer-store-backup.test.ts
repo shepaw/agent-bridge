@@ -255,6 +255,38 @@ describe('reconcilePeerBackup', () => {
     expect(meta.sha256).toBe(createHash('sha256').update(text).digest('hex'));
   });
 
+  it('reads several chunks of one file at the same time', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-backup-'));
+    const device = 'aaaaaaaaaaaaaaaa';
+    const remote = new PeerLocalStore(join(dir, 'remote'));
+    const master = new PeerLocalStore(join(dir, 'master'));
+    seed(remote, device, 'files', 'wide.bin', 'x'.repeat(5 * 64 * 1024));
+    const inner = remoteCall(remote, device);
+    let active = 0;
+    let maxActive = 0;
+    const call: StoreCaller = async (op, payload) => {
+      if (op !== 'read') return inner(op, payload);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      try {
+        return await inner(op, payload);
+      } finally {
+        active -= 1;
+      }
+    };
+    const stats = await reconcilePeerBackup({
+      store: master,
+      deviceId: device,
+      call,
+      spaces: ['files'],
+    });
+    expect(stats.incomplete).toBe(0);
+    expect(stats.pulled).toBe(1);
+    expect(maxActive).toBeGreaterThan(1);
+    expect(master.meta(device, 'files', 'wide.bin').size).toBe(5 * 64 * 1024);
+  });
+
   it('does not treat a full page without a cursor as finished', async () => {
     dir = mkdtempSync(join(tmpdir(), 'peer-backup-'));
     const master = new PeerLocalStore(join(dir, 'master'));

@@ -43,6 +43,8 @@ const BACKUP_RETRY_BASE_MS = 5_000;
 /** While the peer stays connected, look again for files it did not push. */
 export const BACKUP_POLL_MS = 60_000;
 const CHUNK_ATTEMPTS = 3;
+/** How many chunk RPCs stay in flight for one file. */
+const CHUNK_WINDOW = 4;
 const inFlight = new Map<string, Promise<ReconcileStats>>();
 const pushTail = new Map<string, Promise<void>>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -72,6 +74,90 @@ async function callStore(
     if (!last._error || !isTransientStoreError(String(last._error))) return last;
   }
   return last;
+}
+
+type ChunkAck = {
+  offset: number;
+  length: number;
+  result: Record<string, unknown>;
+};
+
+/**
+ * Keep several chunks in flight. A peer that only accepts the next offset
+ * answers `resume`; the rest of the file is then sent one chunk at a time
+ * from the contiguous prefix it reported.
+ */
+async function pipelineChunks(
+  size: number,
+  start: number,
+  prepare: (offset: number) => { length: number; send: () => Promise<Record<string, unknown>> },
+): Promise<void> {
+  let next = start;
+  let pipeline = true;
+  let steps = 0;
+  const cap = Math.ceil(Math.max(0, size - start) / MAX_CHUNK) * 2 + CHUNK_WINDOW;
+  const pending = new Map<number, Promise<ChunkAck>>();
+
+  const launch = (): void => {
+    if (next >= size) return;
+    if (steps >= cap) {
+      throw Object.assign(new Error('short_read'), { code: 'short_read' });
+    }
+    const offset = next;
+    const prepared = prepare(offset);
+    if (prepared.length <= 0) {
+      throw Object.assign(new Error('short_read'), { code: 'short_read' });
+    }
+    next += prepared.length;
+    steps += 1;
+    pending.set(
+      offset,
+      prepared.send().then(
+        (result) => ({ offset, length: prepared.length, result }),
+        (err: unknown) => ({
+          offset,
+          length: prepared.length,
+          result: {
+            _error: err && typeof err === 'object' && 'code' in err
+              ? String((err as { code?: unknown }).code)
+              : 'internal',
+          },
+        }),
+      ),
+    );
+  };
+
+  while (next < size || pending.size > 0) {
+    if (pipeline) {
+      while (next < size && pending.size < CHUNK_WINDOW) launch();
+    } else if (pending.size === 0 && next < size) {
+      launch();
+    }
+    if (pending.size === 0) break;
+    const acked = await Promise.race(pending.values());
+    pending.delete(acked.offset);
+    if (!acked.result._error) continue;
+    if (acked.result._error !== 'resume') {
+      throw Object.assign(new Error(String(acked.result._error)), { code: String(acked.result._error) });
+    }
+    pipeline = false;
+    const rest = await Promise.all([...pending.values()]);
+    pending.clear();
+    let received = typeof acked.result.received === 'number' ? acked.result.received : acked.offset;
+    for (const item of rest) {
+      if (item.result._error && item.result._error !== 'resume') {
+        throw Object.assign(new Error(String(item.result._error)), { code: String(item.result._error) });
+      }
+      if (typeof item.result.received === 'number') {
+        received = Math.max(received, item.result.received);
+      }
+    }
+    if (received < 0 || received > size) received = acked.offset;
+    next = received;
+  }
+  if (next !== size) {
+    throw Object.assign(new Error('short_read'), { code: 'short_read' });
+  }
 }
 
 /** Pull a peer's pouch. Concurrent calls for the same device share one run. */
@@ -550,33 +636,20 @@ async function pushFile(
     throw Object.assign(new Error(String(begin._error)), { code: String(begin._error) });
   }
   const uploadId = String(begin.upload_id ?? '');
-  let offset = typeof begin.received === 'number' ? begin.received : 0;
-  const maxSteps = Math.ceil(size / MAX_CHUNK) + 8;
-  for (let step = 0; step < maxSteps && offset < size; step++) {
+  const start = typeof begin.received === 'number' ? begin.received : 0;
+  await pipelineChunks(size, start, (offset) => {
     const part = store.read(deviceId, space, path, offset, MAX_CHUNK);
-    const chunked = await callStore(call, 'write.chunk', {
-      space,
-      device: deviceId,
-      upload_id: uploadId,
-      offset,
-      data: part.data.toString('base64'),
-    });
-    if (chunked._error === 'resume') {
-      const received = typeof chunked.received === 'number' ? chunked.received : -1;
-      if (received > offset && received <= size) {
-        offset = received;
-        continue;
-      }
-    }
-    if (chunked._error) {
-      throw Object.assign(new Error(String(chunked._error)), { code: String(chunked._error) });
-    }
-    offset += part.data.length;
-    if (part.eof && offset >= size) break;
-  }
-  if (offset !== size) {
-    throw Object.assign(new Error('short_read'), { code: 'short_read' });
-  }
+    return {
+      length: part.data.length,
+      send: () => callStore(call, 'write.chunk', {
+        space,
+        device: deviceId,
+        upload_id: uploadId,
+        offset,
+        data: part.data.toString('base64'),
+      }),
+    };
+  });
   const committed = await callStore(call, 'commit', { space, device: deviceId, upload_ids: [uploadId] });
   if (committed._error || (Array.isArray(committed.failed) && committed.failed.length > 0)) {
     throw Object.assign(new Error('commit_failed'), { code: 'commit_failed' });
@@ -659,6 +732,63 @@ async function describeRemote(
   return { size, sha256 };
 }
 
+function sliceRemoteChunk(
+  buf: Buffer,
+  offset: number,
+  requested: number,
+  size: number,
+): { chunk: Buffer; whole: boolean } {
+  const whole = buf.length > requested && buf.length >= size;
+  const chunk = whole
+    ? buf.subarray(offset, Math.min(buf.length, offset + requested))
+    : buf.subarray(0, Math.min(buf.length, requested));
+  return { chunk, whole };
+}
+
+async function readRemoteChunk(
+  call: StoreCaller,
+  space: string,
+  deviceId: string,
+  path: string,
+  offset: number,
+  size: number,
+): Promise<{ buf: Buffer; chunk: Buffer; whole: boolean }> {
+  const requested = Math.min(MAX_CHUNK, size - offset);
+  const part = await callStore(call, 'read', {
+    space,
+    device: deviceId,
+    path,
+    offset,
+    length: requested,
+  });
+  if (part._error) {
+    throw Object.assign(new Error(String(part._error)), { code: String(part._error) });
+  }
+  const buf = Buffer.from(String(part.data ?? ''), 'base64');
+  const sliced = sliceRemoteChunk(buf, offset, requested, size);
+  if (sliced.chunk.length === 0) {
+    throw Object.assign(new Error('short_read'), { code: 'short_read' });
+  }
+  return { buf, ...sliced };
+}
+
+/** Write a buffer the peer already returned in full, without asking again. */
+function writeLocalSpan(
+  store: PeerLocalStore,
+  deviceId: string,
+  uploadId: string,
+  buf: Buffer,
+  offset: number,
+  size: number,
+): void {
+  let at = offset;
+  while (at < size) {
+    const end = Math.min(at + MAX_CHUNK, size);
+    store.writeChunk(deviceId, uploadId, at, buf.subarray(at, end));
+    at = end;
+  }
+}
+
 async function pullFile(
   store: PeerLocalStore,
   deviceId: string,
@@ -675,36 +805,30 @@ async function pullFile(
     sha256: described.sha256,
   });
   let offset = begin.received;
-  const maxSteps = Math.ceil(described.size / MAX_CHUNK) + 8;
-  for (let step = 0; step < maxSteps && offset < described.size; step++) {
-    const part = await callStore(call, 'read', {
-      space,
-      device: deviceId,
-      path,
-      offset,
-      length: MAX_CHUNK,
-    });
-    if (part._error) {
-      throw Object.assign(new Error(String(part._error)), { code: String(part._error) });
+  if (offset < described.size) {
+    const first = await readRemoteChunk(call, space, deviceId, path, offset, described.size);
+    if (first.whole) {
+      writeLocalSpan(store, deviceId, begin.upload_id, first.buf, offset, described.size);
+    } else {
+      store.writeChunk(deviceId, begin.upload_id, offset, first.chunk);
+      offset += first.chunk.length;
+      if (offset < described.size) {
+        await pipelineChunks(described.size, offset, (at) => {
+          const length = Math.min(MAX_CHUNK, described.size - at);
+          return {
+            length,
+            send: async () => {
+              const part = await readRemoteChunk(call, space, deviceId, path, at, described.size);
+              if (part.chunk.length !== length) {
+                return { _error: 'short_read' };
+              }
+              store.writeChunk(deviceId, begin.upload_id, at, part.chunk);
+              return { received: at + part.chunk.length };
+            },
+          };
+        });
+      }
     }
-    const buf = Buffer.from(String(part.data ?? ''), 'base64');
-    if (buf.length === 0) {
-      throw Object.assign(new Error('short_read'), { code: 'short_read' });
-    }
-    const requested = Math.min(MAX_CHUNK, described.size - offset);
-    const chunk =
-      offset > 0 && buf.length > requested && buf.length >= described.size
-        ? buf.subarray(offset, Math.min(buf.length, offset + requested))
-        : buf.subarray(0, Math.min(buf.length, requested));
-    if (chunk.length === 0) {
-      throw Object.assign(new Error('short_read'), { code: 'short_read' });
-    }
-    store.writeChunk(deviceId, begin.upload_id, offset, chunk);
-    offset += chunk.length;
-    if (part.eof === true && offset >= described.size) break;
-  }
-  if (offset !== described.size) {
-    throw Object.assign(new Error('short_read'), { code: 'short_read' });
   }
   const committed = store.commit(deviceId, space, [begin.upload_id]);
   if (committed.failed.length > 0) {

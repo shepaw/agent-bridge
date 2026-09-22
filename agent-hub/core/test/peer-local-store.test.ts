@@ -460,6 +460,26 @@ describe('PeerLocalStore', () => {
     expect(existsSync(join(dir, '.staging', device, fresh.upload_id, 'meta.json'))).toBe(true);
   });
 
+  it('accepts a later chunk before the gap in front of it is filled', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const content = Buffer.from('aaabbbccc');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'gap.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    expect(store.writeChunk(device, begin.upload_id, 6, content.subarray(6)).received).toBe(0);
+    expect(store.writeChunk(device, begin.upload_id, 3, content.subarray(3, 6)).received).toBe(0);
+    expect(store.writeChunk(device, begin.upload_id, 0, content.subarray(0, 3)).received).toBe(9);
+    expect(store.commit(device, 'files', [begin.upload_id]).failed).toEqual([]);
+    expect(store.read(device, 'files', 'gap.txt').data.toString()).toBe('aaabbbccc');
+  });
+
   it('resuming an upload refreshes it so a following sweep keeps it', () => {
     dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
     const store = new PeerLocalStore(dir);

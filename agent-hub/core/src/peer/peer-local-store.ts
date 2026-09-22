@@ -708,21 +708,35 @@ export class PeerLocalStore {
       meta.received = sizeOnDisk;
       atomicWriteFile(metaPath, JSON.stringify(meta));
     }
+    if (data.length === 0) return { received: meta.received };
     if (offset < meta.received && offset + data.length <= meta.received) {
+      return { received: meta.received };
+    }
+    if (offset > meta.received && offset + data.length <= meta.size) {
+      // A later block arrived first. Keep it until the gap in front is filled.
+      const ahead = join(staging, 'ahead', String(offset));
+      ensureDir(dirname(ahead));
+      writeFileSync(ahead, data);
       return { received: meta.received };
     }
     if (offset !== meta.received) {
       throw Object.assign(new Error('resume'), { code: 'resume', received: meta.received });
     }
-    if (data.length === 0) return { received: meta.received };
     const fd = openSync(dataPath, 'r+');
     try {
       writeSync(fd, data, 0, data.length, offset);
+      meta.received = offset + data.length;
+      const aheadDir = join(staging, 'ahead');
+      while (existsSync(join(aheadDir, String(meta.received)))) {
+        const extra = readFileSync(join(aheadDir, String(meta.received)));
+        writeSync(fd, extra, 0, extra.length, meta.received);
+        rmSync(join(aheadDir, String(meta.received)));
+        meta.received += extra.length;
+      }
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    meta.received = offset + data.length;
     atomicWriteFile(metaPath, JSON.stringify(meta));
     return { received: meta.received };
   }
