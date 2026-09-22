@@ -372,14 +372,25 @@ export class StoreToolsClient {
             : typeof b64 === 'string'
               ? b64
               : '';
+        const max = 512 * 1024;
+        const raw = b64 !== undefined ? Buffer.from(content, 'base64') : Buffer.from(content);
+        const sliced = raw.length > max ? raw.subarray(0, max) : raw;
+        const size = Number(data.size ?? raw.length) || 0;
+        const text = sliced.toString('utf8');
+        const encoding =
+          b64 !== undefined
+            ? 'base64'
+            : sliced.length > 0 && !text.includes('\uFFFD')
+              ? 'text'
+              : 'base64';
         return {
           ok: true,
           data: {
             uri,
-            size: Number(data.size ?? content.length) || 0,
-            truncated: false,
-            encoding: b64 !== undefined ? 'base64' : 'text',
-            content,
+            size,
+            truncated: raw.length > max || size > sliced.length,
+            encoding,
+            content: encoding === 'text' ? text : sliced.toString('base64'),
           },
         };
       }

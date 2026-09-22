@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -338,7 +338,7 @@ describe('PeerLocalStore', () => {
       rest.push(...page.entries.map((entry) => entry.path));
       cursor = page.next_cursor ?? undefined;
     }
-    expect([first.entries[0]!.path, ...rest].sort()).toEqual(['src/a.txt', 'src/c.txt', 'src2/b.txt']);
+    expect([first.entries[0]!.path, ...rest]).toEqual(['src/a.txt', 'src/c.txt', 'src2/b.txt']);
   });
 
   it('list keeps dotfiles only when includeHidden is set', () => {
@@ -423,6 +423,15 @@ describe('PeerLocalStore', () => {
     const committed = store.commit(device, 'files', [begin.upload_id]);
     expect(committed.failed).toEqual([]);
     expect(store.read(device, 'files', 'big.txt').data.toString()).toBe('abcdefgh');
+    const first = store.read(device, 'files', 'big.txt', 0, 3);
+    expect(first).toMatchObject({ size: 8, eof: false });
+    expect(first.data.toString()).toBe('abc');
+    const rest = store.read(device, 'files', 'big.txt', 6, 10);
+    expect(rest.data.toString()).toBe('gh');
+    expect(rest.eof).toBe(true);
+    const past = store.read(device, 'files', 'big.txt', 8, 4);
+    expect(past.data.length).toBe(0);
+    expect(past.eof).toBe(true);
   });
 
   it('gcStaging removes abandoned uploads and keeps a fresh one', () => {
@@ -451,6 +460,34 @@ describe('PeerLocalStore', () => {
     expect(existsSync(join(dir, '.staging', device, fresh.upload_id, 'meta.json'))).toBe(true);
   });
 
+  it('resuming an upload refreshes it so a following sweep keeps it', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const content = Buffer.from('abcdefgh');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'paused.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    store.writeChunk(device, begin.upload_id, 0, content.subarray(0, 3));
+    const meta = join(dir, '.staging', device, begin.upload_id, 'meta.json');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(meta, old, old);
+    expect(store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'paused.txt',
+      size: content.length,
+      sha256: sha,
+    }).received).toBe(3);
+    expect(store.gcStaging(1_000)).toBe(0);
+    expect(existsSync(meta)).toBe(true);
+  });
+
   it('delete records a tombstone and cursors are per device', () => {
     dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
     const store = new PeerLocalStore(dir);
@@ -470,6 +507,9 @@ describe('PeerLocalStore', () => {
     store.delete(device, 'files', 'gone.txt', 3);
     expect(existsSync(join(dir, device, 'files', 'gone.txt'))).toBe(false);
     expect(store.tombstone(device, 'files', 'gone.txt')).toEqual({ size: content.length, sha256: sha });
+    const tombDir = join(dir, '.tombstones', device);
+    expect(readdirSync(tombDir).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+    expect(existsSync(join(dir, '.tombstones', `${device}.json`))).toBe(false);
     expect(store.appliedSeq(device)).toBe(3);
 
     store.setAppliedSeq(other, 7);
@@ -570,6 +610,81 @@ describe('PeerLocalStore', () => {
     expect(backup.entries.map((entry) => entry.path)).toEqual(['note.txt']);
     const browse = store.list(device, 'files');
     expect(browse.some((entry) => entry.path.startsWith('node_modules/'))).toBe(true);
+  });
+
+  it('workspace backup skips build caches and keeps them in other spaces', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const write = (space: string, path: string) => {
+      const content = Buffer.from(path);
+      const sha = createHash('sha256').update(content).digest('hex');
+      const begin = store.writeBegin({
+        deviceId: device,
+        space,
+        path,
+        size: content.length,
+        sha256: sha,
+      });
+      store.writeChunk(device, begin.upload_id, 0, content);
+      store.commit(device, space, [begin.upload_id]);
+    };
+    write('workspaces', 'src/app.ts');
+    write('workspaces', 'dist/app.js');
+    write('workspaces', '.venv/lib/python');
+    write('files', 'dist/keep.txt');
+    const workspace = store.listPage({
+      deviceId: device,
+      space: 'workspaces',
+      includeHidden: true,
+      forBackup: true,
+      computeHash: false,
+    });
+    expect(workspace.entries.map((entry) => entry.path)).toEqual(['src/app.ts']);
+    const files = store.listPage({
+      deviceId: device,
+      space: 'files',
+      includeHidden: true,
+      forBackup: true,
+      computeHash: false,
+    });
+    expect(files.entries.map((entry) => entry.path)).toEqual(['dist/keep.txt']);
+  });
+
+  it('a legacy tombstone list is split, and one bad file does not drop the rest', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    mkdirSync(join(dir, '.tombstones'), { recursive: true });
+    writeFileSync(
+      join(dir, '.tombstones', `${device}.json`),
+      JSON.stringify({
+        entries: [
+          { space: 'files', path: 'old.txt', size: 1, sha256: 'aa' },
+          { space: 'files', path: 'also.txt', size: 2, sha256: 'bb' },
+        ],
+      }),
+    );
+    const content = Buffer.from('gone');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'gone.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    store.writeChunk(device, begin.upload_id, 0, content);
+    store.commit(device, 'files', [begin.upload_id]);
+    store.delete(device, 'files', 'gone.txt');
+    expect(existsSync(join(dir, '.tombstones', `${device}.json`))).toBe(false);
+    expect(store.tombstone(device, 'files', 'old.txt')).toEqual({ size: 1, sha256: 'aa' });
+    expect(store.tombstone(device, 'files', 'also.txt')).toEqual({ size: 2, sha256: 'bb' });
+    expect(store.tombstone(device, 'files', 'gone.txt')?.sha256).toBe(sha);
+    const tombDir = join(dir, '.tombstones', device);
+    const names = readdirSync(tombDir).filter((name) => name.endsWith('.json'));
+    writeFileSync(join(tombDir, names[0]!), '{', 'utf-8');
+    expect(store.listTombstones(device).length).toBe(2);
   });
 
   it('a peer that names a caller as master can be read, and clearing the claim keeps files', () => {

@@ -68,6 +68,20 @@ describe('store tools — foreign pouch goes through the App', () => {
     });
   });
 
+  it('caps a foreign read at 512KB', async () => {
+    const big = 'x'.repeat(600 * 1024);
+    const { client } = clientFor(() => ({
+      ok: true,
+      uri: foreignUri,
+      size: big.length,
+      content: big,
+    }));
+    const out = await executeStoreTool('store_read', { uri: foreignUri }, client);
+    const content = (out.data as { content: string }).content;
+    expect(out.data).toMatchObject({ truncated: true, size: big.length, encoding: 'text' });
+    expect(Buffer.byteLength(content)).toBe(512 * 1024);
+  });
+
   it('keeps base64 payloads flagged as base64', async () => {
     const { client } = clientFor(() => ({
       ok: true,

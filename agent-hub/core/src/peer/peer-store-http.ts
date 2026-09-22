@@ -30,73 +30,81 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(raw);
 }
 
-async function readUriBytes(
+async function resolveUriMeta(
   uri: string,
   selfDeviceId: string,
-): Promise<{ bytes: Buffer; meta: Record<string, unknown> } | { error: string; message: string }> {
+): Promise<{ parsed: { space: string; device: string; path: string }; meta: Record<string, unknown>; local: boolean } | { error: string; message: string }> {
   const parsed = parseStoreUri(uri);
   if (!parsed) return { error: 'bad_uri', message: 'invalid store:// URI' };
-
-  // Prefer local mirror / self; fall back to live peer when needed.
   const local = executeLocalStoreOp(
     'meta',
     { space: parsed.space, device: parsed.device, path: parsed.path },
     selfDeviceId,
   );
-  if (!local._error) {
-    const chunks: Buffer[] = [];
-    let offset = 0;
-    for (;;) {
-      const part = executeLocalStoreOp(
-        'read',
-        {
-          space: parsed.space,
-          device: parsed.device,
-          path: parsed.path,
-          offset,
-          length: 64 * 1024,
-        },
-        selfDeviceId,
-      );
-      if (part._error) break;
-      const data = Buffer.from(String(part.data ?? ''), 'base64');
-      chunks.push(data);
-      offset += data.length;
-      if (part.eof === true || data.length === 0) break;
-    }
-    return { bytes: Buffer.concat(chunks), meta: local };
-  }
-
+  if (!local._error) return { parsed, meta: local, local: true };
   if (parsed.device === selfDeviceId) {
     return { error: String(local._error), message: String(local.message ?? '') };
   }
-
-  // Remote live read via peer channel.
-  const meta = await callStoreOnDevice(parsed.device, 'meta', {
+  const remote = await callStoreOnDevice(parsed.device, 'meta', {
     space: parsed.space,
     device: parsed.device,
     path: parsed.path,
   });
-  if (meta._error) {
-    return { error: String(meta._error), message: String(meta.message ?? '') };
+  if (remote._error) {
+    return { error: String(remote._error), message: String(remote.message ?? '') };
+  }
+  return { parsed, meta: remote, local: false };
+}
+
+function takeRange(data: Buffer, offset: number, want: number, size: number): Buffer {
+  if (data.length <= want) return data;
+  // A peer that ignores offset returns the whole object. Keep only this slice.
+  const from = offset > 0 && data.length > offset && data.length >= size ? offset : 0;
+  return data.subarray(from, from + want);
+}
+
+async function readUriBytes(
+  uri: string,
+  selfDeviceId: string,
+  start = 0,
+  maxBytes?: number,
+): Promise<{ bytes: Buffer; meta: Record<string, unknown> } | { error: string; message: string }> {
+  const resolved = await resolveUriMeta(uri, selfDeviceId);
+  if ('error' in resolved) return resolved;
+  const { parsed, meta, local } = resolved;
+  const size = typeof meta.size === 'number' ? meta.size : 0;
+  const offset0 = Number.isFinite(start) && start > 0 ? Math.floor(start) : 0;
+  if (offset0 >= size || maxBytes === 0) {
+    return { bytes: Buffer.alloc(0), meta };
   }
   const chunks: Buffer[] = [];
-  let offset = 0;
-  for (;;) {
-    const part = await callStoreOnDevice(parsed.device, 'read', {
+  let offset = offset0;
+  let remaining = maxBytes == null || !Number.isFinite(maxBytes) ? Number.POSITIVE_INFINITY : maxBytes;
+  while (remaining > 0 && offset < size) {
+    const want = Math.min(64 * 1024, remaining);
+    const payload = {
       space: parsed.space,
       device: parsed.device,
       path: parsed.path,
       offset,
-      length: 64 * 1024,
-    });
+      length: want,
+    };
+    const part = local
+      ? executeLocalStoreOp('read', payload, selfDeviceId)
+      : await callStoreOnDevice(parsed.device, 'read', payload);
     if (part._error) {
-      return { error: String(part._error), message: String(part.message ?? '') };
+      if (chunks.length === 0) {
+        return { error: String(part._error), message: String(part.message ?? '') };
+      }
+      break;
     }
-    const data = Buffer.from(String(part.data ?? ''), 'base64');
+    let data = takeRange(Buffer.from(String(part.data ?? ''), 'base64'), offset, want, size);
+    if (data.length === 0) break;
+    if (data.length > remaining) data = data.subarray(0, remaining);
     chunks.push(data);
     offset += data.length;
-    if (part.eof === true || data.length === 0) break;
+    remaining -= data.length;
+    if (part.eof === true && offset >= size) break;
   }
   return { bytes: Buffer.concat(chunks), meta };
 }
@@ -146,9 +154,9 @@ export async function handleStoreHttp(
       sendJson(res, 400, { error: 'bad_uri', message: 'invalid store:// URI' });
       return true;
     }
-    const out = await readUriBytes(uri, self);
-    if ('error' in out) {
-      sendJson(res, 404, { error: out.error, message: out.message });
+    const resolved = await resolveUriMeta(uri, self);
+    if ('error' in resolved) {
+      sendJson(res, 404, { error: resolved.error, message: resolved.message });
       return true;
     }
     sendJson(res, 200, {
@@ -156,10 +164,10 @@ export async function handleStoreHttp(
       space: parsed.space,
       device: parsed.device,
       path: parsed.path,
-      size: out.meta.size,
-      sha256: out.meta.sha256,
-      kind: out.meta.kind,
-      meta: out.meta,
+      size: resolved.meta.size,
+      sha256: resolved.meta.sha256,
+      kind: resolved.meta.kind,
+      meta: resolved.meta,
     });
     return true;
   }
@@ -204,7 +212,16 @@ export async function handleStoreHttp(
 
   if (req.method === 'GET' && path === '/api/v1/read') {
     const uri = url.searchParams.get('uri') ?? '';
-    const out = await readUriBytes(uri, self);
+    const offsetRaw = url.searchParams.get('offset');
+    const lengthRaw = url.searchParams.get('length');
+    const offset = offsetRaw != null && offsetRaw !== '' ? Number(offsetRaw) : 0;
+    const length = lengthRaw != null && lengthRaw !== '' ? Number(lengthRaw) : undefined;
+    const out = await readUriBytes(
+      uri,
+      self,
+      Number.isFinite(offset) ? offset : 0,
+      length != null && Number.isFinite(length) ? length : undefined,
+    );
     if ('error' in out) {
       sendJson(res, 404, { error: out.error, message: out.message });
       return true;

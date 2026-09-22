@@ -5,7 +5,8 @@
  *   <root>/<device_id>/<space>/<relpath>
  *   <root>/.staging/<device_id>/<upload_id>/…
  *   <root>/.cursors/<device_id>.json — applied_seq for that device
- *   <root>/.tombstones/<device_id>.json — explicit deletes
+ *   <root>/.tombstones/<device_id>/<key>.json — one explicit delete each
+ *   <root>/.tombstones/<device_id>.json — legacy combined delete list
  *   <root>/.cursors.json — legacy shared cursor map (read fallback only)
  *
  * Supports list / meta / read and write.begin / write.chunk / commit / delete
@@ -24,6 +25,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -53,6 +55,33 @@ export const ALL_SPACES = new Set([
   'agents',
 ]);
 export const MAX_CHUNK = 64 * 1024;
+
+/** Dependency and VCS trees are never part of a backup, in any space. */
+const BACKUP_DIR_SKIP = new Set(['node_modules', '.git']);
+/**
+ * Workspaces point at a real project. Build and tool caches stay on the
+ * source machine; copying them fills the master disk.
+ */
+const WORKSPACE_BACKUP_DIR_SKIP = new Set([
+  ...BACKUP_DIR_SKIP,
+  'dist',
+  'build',
+  'coverage',
+  'target',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.cache',
+  '__pycache__',
+  '.venv',
+  'venv',
+]);
+
+/** True when a backup must not copy or delete this path. */
+export function isBackupExcluded(space: string, path: string): boolean {
+  const skip = space === 'workspaces' ? WORKSPACE_BACKUP_DIR_SKIP : BACKUP_DIR_SKIP;
+  return path.split('/').some((part) => skip.has(part));
+}
 
 /** Cap on files scanned per device when enumerating backup mirrors. */
 export const MAX_BACKUP_WALK_FILES = 50_000;
@@ -132,8 +161,70 @@ function matchesPrefix(path: string, prefix?: string): boolean {
   return path === p || path.startsWith(`${p}/`);
 }
 
+/** A directory can hold files matching `prefix` (segment match, not a string prefix). */
+function dirCouldMatch(dirRel: string, prefix?: string): boolean {
+  if (!prefix) return true;
+  const p = prefix.replace(/^\/+|\/+$/g, '');
+  if (!p || !dirRel) return true;
+  return dirRel === p || dirRel.startsWith(`${p}/`) || p.startsWith(`${dirRel}/`);
+}
+
+function heapPush(heap: ListedNode[], node: ListedNode): void {
+  heap.push(node);
+  let i = heap.length - 1;
+  while (i > 0) {
+    const parent = (i - 1) >> 1;
+    if (heap[parent]!.path <= heap[i]!.path) break;
+    const tmp = heap[parent]!;
+    heap[parent] = heap[i]!;
+    heap[i] = tmp;
+    i = parent;
+  }
+}
+
+function heapPop(heap: ListedNode[]): ListedNode | undefined {
+  if (heap.length === 0) return undefined;
+  const top = heap[0];
+  const last = heap.pop()!;
+  if (heap.length === 0 || top === last) return top;
+  heap[0] = last;
+  let i = 0;
+  for (;;) {
+    const left = i * 2 + 1;
+    const right = left + 1;
+    let smallest = i;
+    if (left < heap.length && heap[left]!.path < heap[smallest]!.path) smallest = left;
+    if (right < heap.length && heap[right]!.path < heap[smallest]!.path) smallest = right;
+    if (smallest === i) break;
+    const tmp = heap[i]!;
+    heap[i] = heap[smallest]!;
+    heap[smallest] = tmp;
+    i = smallest;
+  }
+  return top;
+}
+
 function isCommitTmpName(name: string): boolean {
   return /^\..+\.[0-9a-f-]{36}\.tmp$/i.test(name);
+}
+
+/** SHA-256 of a file without reading it all into memory. */
+function hashFile(abs: string): { size: number; sha256: string } {
+  const hash = createHash('sha256');
+  const fd = openSync(abs, 'r');
+  try {
+    const buf = Buffer.alloc(MAX_CHUNK);
+    let size = 0;
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, size);
+      if (n <= 0) break;
+      hash.update(buf.subarray(0, n));
+      size += n;
+    }
+    return { size, sha256: hash.digest('hex') };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Write `data` via a temp file in the same directory, fsync, then rename. */
@@ -290,7 +381,7 @@ export class PeerLocalStore {
     computeHash?: boolean;
     cursor?: string;
     includeHidden?: boolean;
-    /** Backup inventory: skip node_modules/.git and symlinks that leave this space. */
+    /** Backup inventory: skip dependency/build trees and symlinks that leave this space. */
     forBackup?: boolean;
   }): { entries: StoreEntryJson[]; next_cursor: string | null } {
     const {
@@ -334,7 +425,7 @@ export class PeerLocalStore {
 
     const skipName = (name: string): boolean => {
       if (name === '.' || name === '..' || isCommitTmpName(name)) return true;
-      if (forBackup && (name === 'node_modules' || name === '.git')) return true;
+      if (forBackup && isBackupExcluded(space, name)) return true;
       if (!includeHidden && name.startsWith('.')) return true;
       return false;
     };
@@ -396,7 +487,10 @@ export class PeerLocalStore {
       };
       walkShallow(startDir, startRel, maxDepth);
     } else if (markDir(base)) {
-      const walk = (dir: string, rel: string): void => {
+      // Expand one directory when its path is next. The heap holds the frontier,
+      // so a deep tree is not copied into memory before the page is cut.
+      const heap: ListedNode[] = [];
+      const expand = (dir: string, rel: string): void => {
         let names: string[];
         try {
           names = readdirSync(dir);
@@ -415,9 +509,10 @@ export class PeerLocalStore {
             continue;
           }
           if (st.isDirectory()) {
-            if (markDir(abs)) walk(abs, childRel);
+            if (!dirCouldMatch(childRel, prefix) || !markDir(abs)) continue;
+            heapPush(heap, { abs, path: childRel, kind: 'dir', size: 0, mtime: st.mtimeMs });
           } else if (st.isFile() && matchesPrefix(childRel, prefix)) {
-            pending.push({
+            heapPush(heap, {
               abs,
               path: childRel,
               kind: 'file',
@@ -427,7 +522,27 @@ export class PeerLocalStore {
           }
         }
       };
-      walk(base, '');
+      expand(base, '');
+      const page: ListedNode[] = [];
+      let more = false;
+      while (heap.length > 0) {
+        const node = heapPop(heap);
+        if (!node) break;
+        if (node.kind === 'dir') {
+          expand(node.abs, node.path);
+          continue;
+        }
+        if (cursor && !(node.path > cursor)) continue;
+        if (page.length < cap) page.push(node);
+        else {
+          more = true;
+          break;
+        }
+      }
+      return {
+        entries: page.map((entry) => this.entryJson(entry, computeHash)),
+        next_cursor: more ? (page[page.length - 1]?.path ?? null) : null,
+      };
     }
 
     pending.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -450,11 +565,11 @@ export class PeerLocalStore {
         kind: entry.kind,
       };
     }
-    const bytes = readFileSync(entry.abs);
+    const hashed = hashFile(entry.abs);
     return {
       path: entry.path,
-      size: entry.size,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: hashed.size,
+      sha256: hashed.sha256,
       mtime: entry.mtime,
       kind: 'file',
     };
@@ -480,11 +595,11 @@ export class PeerLocalStore {
     if (!st.isFile()) {
       throw Object.assign(new Error('not_found'), { code: 'not_found' });
     }
-    const bytes = readFileSync(abs);
+    const hashed = hashFile(abs);
     return {
       kind: 'file',
-      size: st.size,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: hashed.size,
+      sha256: hashed.sha256,
       mtime: st.mtimeMs,
     };
   }
@@ -504,10 +619,20 @@ export class PeerLocalStore {
       throw Object.assign(new Error('not_found'), { code: 'not_found' });
     }
     const size = statSync(abs).size;
-    const len = Math.min(Math.max(1, length), MAX_CHUNK, Math.max(0, size - offset));
-    const fd = readFileSync(abs);
-    const slice = fd.subarray(offset, offset + len);
-    return { data: slice, size, eof: offset + slice.length >= size };
+    const start = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+    if (start >= size) {
+      return { data: Buffer.alloc(0), size, eof: true };
+    }
+    const len = Math.min(Math.max(1, length), MAX_CHUNK, size - start);
+    const data = Buffer.alloc(len);
+    const fd = openSync(abs, 'r');
+    try {
+      const n = readSync(fd, data, 0, len, start);
+      const slice = n === len ? data : data.subarray(0, n);
+      return { data: slice, size, eof: start + n >= size };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   writeBegin(opts: {
@@ -542,6 +667,8 @@ export class PeerLocalStore {
       ) {
         /* different object: start a new upload below */
       } else {
+        // Refresh mtime so a later staging sweep does not drop an upload we just resumed.
+        atomicWriteFile(metaPath, JSON.stringify(existing));
         return { upload_id: uploadId, received: existing.received };
       }
     }
@@ -622,14 +749,21 @@ export class PeerLocalStore {
           failed.push({ upload_id: uploadId, code: 'integrity_required' });
           continue;
         }
-        const data = readFileSync(join(staging, 'data.bin'));
-        const sha = createHash('sha256').update(data).digest('hex');
-        if (meta.sha256 !== sha || meta.size !== data.length) {
+        const dataPath = join(staging, 'data.bin');
+        const hashed = hashFile(dataPath);
+        if (meta.sha256 !== hashed.sha256 || meta.size !== hashed.size) {
           failed.push({ upload_id: uploadId, code: 'hash_mismatch' });
           continue;
         }
         const dest = resolveUnder(this.root, deviceId, space, ...meta.path.split('/'));
-        atomicWriteFile(dest, data);
+        ensureDir(dirname(dest));
+        const staged = openSync(dataPath, 'r+');
+        try {
+          fsyncSync(staged);
+        } finally {
+          closeSync(staged);
+        }
+        renameSync(dataPath, dest);
         this.clearTombstonePath(deviceId, space, meta.path);
         rmSync(staging, { recursive: true, force: true });
         paths.push(meta.path);
@@ -811,7 +945,7 @@ export class PeerLocalStore {
         return;
       }
       for (const name of names) {
-        if (name === '.' || name === '..' || name === 'node_modules' || name === '.git') continue;
+        if (name === '.' || name === '..' || isBackupExcluded(space, name)) continue;
         const child = rel ? `${rel}/${name}` : name;
         this.tombstoneTree(deviceId, space, join(abs, name), child);
       }
@@ -819,12 +953,12 @@ export class PeerLocalStore {
     }
     if (!st.isFile()) return;
     try {
-      const data = readFileSync(abs);
+      const hashed = hashFile(abs);
       this.putTombstone(deviceId, {
         space,
         path: rel,
-        size: data.length,
-        sha256: createHash('sha256').update(data).digest('hex'),
+        size: hashed.size,
+        sha256: hashed.sha256,
       });
     } catch {
       /* still remove the path */
@@ -834,27 +968,62 @@ export class PeerLocalStore {
   private putTombstone(deviceId: string, entry: TombstoneEntry): void {
     const id = normalizeDeviceId(deviceId);
     if (!id || !entry.sha256) return;
-    const next = this.readTombstones(id).filter(
-      (item) => item.space !== entry.space || item.path !== entry.path,
-    );
-    next.push(entry);
-    this.writeTombstones(id, next);
+    this.migrateLegacyTombstones(id);
+    atomicWriteFile(this.tombstoneEntryPath(id, entry.space, entry.path), JSON.stringify(entry));
   }
 
   private clearTombstonePath(deviceId: string, space: string, path: string): void {
     const id = normalizeDeviceId(deviceId);
     if (!id) return;
-    const all = this.readTombstones(id);
-    const next = all.filter((item) => item.space !== space || item.path !== path);
-    if (next.length === all.length) return;
-    this.writeTombstones(id, next);
+    this.migrateLegacyTombstones(id);
+    const file = this.tombstoneEntryPath(id, space, path);
+    if (existsSync(file)) rmSync(file, { force: true });
   }
 
+  /** Legacy combined file. New deletes are one file each so two processes cannot drop each other's entries. */
   private tombstoneFile(id: string): string {
     return join(this.root, '.tombstones', `${id}.json`);
   }
 
+  private tombstoneDir(id: string): string {
+    return join(this.root, '.tombstones', id);
+  }
+
+  private tombstoneEntryPath(id: string, space: string, path: string): string {
+    const key = createHash('sha256').update(`${space}\0${path}`).digest('hex');
+    return join(this.tombstoneDir(id), `${key}.json`);
+  }
+
   private readTombstones(id: string): TombstoneEntry[] {
+    const merged = new Map<string, TombstoneEntry>();
+    for (const entry of this.readLegacyTombstones(id)) {
+      merged.set(`${entry.space}\0${entry.path}`, entry);
+    }
+    const dir = this.tombstoneDir(id);
+    if (existsSync(dir)) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(dir);
+      } catch {
+        names = [];
+      }
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue;
+        try {
+          const entry = JSON.parse(readFileSync(join(dir, name), 'utf-8')) as TombstoneEntry;
+          if (!entry || typeof entry.path !== 'string' || typeof entry.space !== 'string' || !entry.sha256) {
+            continue;
+          }
+          merged.set(`${entry.space}\0${entry.path}`, entry);
+        } catch {
+          continue;
+        }
+      }
+    }
+    return [...merged.values()];
+  }
+
+  private readLegacyTombstones(id: string): TombstoneEntry[] {
     const file = this.tombstoneFile(id);
     if (!existsSync(file)) return [];
     try {
@@ -865,13 +1034,18 @@ export class PeerLocalStore {
     }
   }
 
-  private writeTombstones(id: string, entries: TombstoneEntry[]): void {
-    const file = this.tombstoneFile(id);
-    if (entries.length === 0) {
-      if (existsSync(file)) rmSync(file, { force: true });
-      return;
+  /** Split the legacy list into per-path files, then drop it. Concurrent splits write the same paths. */
+  private migrateLegacyTombstones(id: string): void {
+    const legacy = this.readLegacyTombstones(id);
+    if (!existsSync(this.tombstoneFile(id))) return;
+    for (const entry of legacy) {
+      if (!entry.sha256 || !entry.path || !entry.space) continue;
+      const dest = this.tombstoneEntryPath(id, entry.space, entry.path);
+      if (!existsSync(dest)) {
+        atomicWriteFile(dest, JSON.stringify(entry));
+      }
     }
-    atomicWriteFile(file, JSON.stringify({ entries }));
+    rmSync(this.tombstoneFile(id), { force: true });
   }
 
   /**
@@ -984,6 +1158,8 @@ export class PeerLocalStore {
     const id = fingerprint.toLowerCase();
     const tomb = this.tombstoneFile(id);
     if (existsSync(tomb)) rmSync(tomb, { force: true });
+    const tombDir = this.tombstoneDir(id);
+    if (existsSync(tombDir)) rmSync(tombDir, { recursive: true, force: true });
     const staging = join(this.root, '.staging', id);
     if (existsSync(staging)) rmSync(staging, { recursive: true, force: true });
   }

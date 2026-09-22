@@ -13,6 +13,7 @@ import { loadPairedPeers } from './peer-store.js';
 import {
   ALL_SPACES,
   getPeerLocalStore,
+  isBackupExcluded,
   MAX_CHUNK,
   type PeerLocalStore,
 } from './peer-local-store.js';
@@ -39,16 +40,38 @@ export interface ReconcileStats {
 const BACKUP_PAGE = 500;
 const BACKUP_RETRY_LIMIT = 3;
 const BACKUP_RETRY_BASE_MS = 5_000;
+/** While the peer stays connected, look again for files it did not push. */
+export const BACKUP_POLL_MS = 60_000;
+const CHUNK_ATTEMPTS = 3;
 const inFlight = new Map<string, Promise<ReconcileStats>>();
 const pushTail = new Map<string, Promise<void>>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const mirrorTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function emptyStats(): ReconcileStats {
   return { pulled: 0, skipped: 0, incomplete: 0, complete: true };
 }
 
-export function backupPathExcluded(path: string): boolean {
-  return path.split('/').some((part) => part === 'node_modules' || part === '.git');
+export function backupPathExcluded(path: string, space = ''): boolean {
+  return isBackupExcluded(space, path);
+}
+
+function isTransientStoreError(code: string): boolean {
+  return code === 'master_offline' || code === 'internal' || code === 'peer_offline';
+}
+
+/** Retry one chunk. A dropped reply must not fail the whole file. */
+async function callStore(
+  call: StoreCaller,
+  op: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let last: Record<string, unknown> = { _error: 'master_offline' };
+  for (let attempt = 0; attempt < CHUNK_ATTEMPTS; attempt++) {
+    last = await call(op, payload);
+    if (!last._error || !isTransientStoreError(String(last._error))) return last;
+  }
+  return last;
 }
 
 /** Pull a peer's pouch. Concurrent calls for the same device share one run. */
@@ -124,11 +147,31 @@ export function shouldRetryBackup(stats: readonly ReconcileStats[], attempt: num
   return stats.some((item) => !item.complete) && attempt === 0;
 }
 
+/**
+ * Delay before the next pass, or null when this peer needs nothing further.
+ * Incomplete files retry quickly. A finished pass waits, then looks again
+ * while the connection is still up.
+ */
+export function nextBackupDelay(
+  stats: readonly ReconcileStats[],
+  attempt: number,
+  followUp: boolean,
+): number | null {
+  if (shouldRetryBackup(stats, attempt)) return BACKUP_RETRY_BASE_MS * (attempt + 1);
+  if (followUp) return BACKUP_POLL_MS;
+  return null;
+}
+
 /** Drop a pending retry. Safe when this peer still has another live connection. */
 export function cancelPeerBackupRetries(peerId: string): void {
   const timer = retryTimers.get(peerId);
   if (timer) clearTimeout(timer);
   retryTimers.delete(peerId);
+  for (const [key, mirror] of mirrorTimers) {
+    if (!key.startsWith(`${peerId}\0`)) continue;
+    clearTimeout(mirror);
+    mirrorTimers.delete(key);
+  }
 }
 
 function enqueuePush<T>(deviceId: string, work: () => Promise<T>): Promise<T> {
@@ -148,10 +191,23 @@ function enqueuePush<T>(deviceId: string, work: () => Promise<T>): Promise<T> {
  * A run that did not finish is tried again while this peer stays connected.
  */
 export function onPeerConnectedForBackup(peerId: string, fingerprint: string): Promise<void> {
-  return runPeerBackup(peerId, fingerprint, 0);
+  return runPeerBackup(peerId, fingerprint, 0, true);
 }
 
-async function runPeerBackup(peerId: string, fingerprint: string, attempt: number): Promise<void> {
+/**
+ * The peer named us master after the socket was already up.
+ * Pull now, and retry, without sending hello back (that would loop).
+ */
+export function resumePeerBackup(peerId: string, fingerprint: string): Promise<void> {
+  return runPeerBackup(peerId, fingerprint, 0, false);
+}
+
+async function runPeerBackup(
+  peerId: string,
+  fingerprint: string,
+  attempt: number,
+  announce: boolean,
+): Promise<void> {
   const id = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{16}$/.test(id)) return;
   if (attempt > 0 && !peerHasLiveConnection(peerId)) return;
@@ -165,7 +221,7 @@ async function runPeerBackup(peerId: string, fingerprint: string, attempt: numbe
   });
   const stats: ReconcileStats[] = [];
   const tasks: Promise<unknown>[] = [];
-  if (attempt === 0) {
+  if (attempt === 0 && announce) {
     tasks.push(announceMaster(peerId, plan.announce).catch(() => undefined));
   }
   if (plan.pull) {
@@ -179,12 +235,15 @@ async function runPeerBackup(peerId: string, fingerprint: string, attempt: numbe
     }));
   }
   await Promise.all(tasks);
-  if (!shouldRetryBackup(stats, attempt) || !peerHasLiveConnection(peerId)) return;
+  const followUp = (plan.pull || plan.push) && peerHasLiveConnection(peerId);
+  const delay = nextBackupDelay(stats, attempt, followUp);
+  if (delay == null || !peerHasLiveConnection(peerId)) return;
+  const retrying = shouldRetryBackup(stats, attempt);
   const timer = setTimeout(() => {
     retryTimers.delete(peerId);
     if (!peerHasLiveConnection(peerId)) return;
-    void runPeerBackup(peerId, id, attempt + 1).catch(() => undefined);
-  }, BACKUP_RETRY_BASE_MS * (attempt + 1));
+    void runPeerBackup(peerId, id, retrying ? attempt + 1 : 0, true).catch(() => undefined);
+  }, delay);
   timer.unref();
   retryTimers.set(peerId, timer);
 }
@@ -239,10 +298,32 @@ export function scheduleMirrorLocalChange(
 ): void {
   const master = configuredRemoteMaster();
   if (!master || deviceId.trim().toLowerCase() !== selfStoreDeviceId()) return;
-  if (backupPathExcluded(path)) return;
+  if (backupPathExcluded(path, space)) return;
   const peer = loadPairedPeers().find((item) => item.fingerprint.toLowerCase() === master);
   if (!peer || !peerHasLiveConnection(peer.id)) return;
-  void pushOnePath(peer.id, space, path, deleted).catch(() => undefined);
+  pushMirroredPath(peer.id, space, path, deleted, 0);
+}
+
+function pushMirroredPath(
+  peerId: string,
+  space: string,
+  path: string,
+  deleted: boolean,
+  attempt: number,
+): void {
+  void pushOnePath(peerId, space, path, deleted).catch(() => {
+    if (attempt + 1 >= BACKUP_RETRY_LIMIT || !peerHasLiveConnection(peerId)) return;
+    const key = `${peerId}\0${space}\0${path}\0${deleted ? '1' : '0'}`;
+    const prev = mirrorTimers.get(key);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      mirrorTimers.delete(key);
+      if (!peerHasLiveConnection(peerId)) return;
+      pushMirroredPath(peerId, space, path, deleted, attempt + 1);
+    }, BACKUP_RETRY_BASE_MS * (attempt + 1));
+    timer.unref();
+    mirrorTimers.set(key, timer);
+  });
 }
 
 export async function reconcilePeerBackup(opts: {
@@ -253,12 +334,16 @@ export async function reconcilePeerBackup(opts: {
 }): Promise<ReconcileStats> {
   const stats = emptyStats();
   const deviceId = opts.deviceId.trim().toLowerCase();
-  opts.store.gcStaging();
   const spaces = opts.spaces ?? ALL_SPACES;
-  for (const space of spaces) {
-    await reconcileSpace(opts.store, deviceId, space, opts.call, stats);
+  try {
+    for (const space of spaces) {
+      await reconcileSpace(opts.store, deviceId, space, opts.call, stats);
+    }
+    return stats;
+  } finally {
+    // After resume, so an upload this pass just continued is not swept first.
+    opts.store.gcStaging();
   }
-  return stats;
 }
 
 export async function replicateToRemote(opts: {
@@ -312,7 +397,7 @@ async function reconcileSpace(
       if (!raw || typeof raw !== 'object') continue;
       const entry = raw as { path?: unknown; size?: unknown; sha256?: unknown; kind?: unknown };
       if (entry.kind === 'dir') continue;
-      if (typeof entry.path !== 'string' || !entry.path || backupPathExcluded(entry.path)) continue;
+      if (typeof entry.path !== 'string' || !entry.path || backupPathExcluded(entry.path, space)) continue;
       try {
         const pulled = await reconcileFile(store, deviceId, space, entry, local, call);
         if (pulled === 'pulled') stats.pulled += 1;
@@ -368,7 +453,7 @@ async function pushSpace(
       if (!raw || typeof raw !== 'object') continue;
       const entry = raw as { path?: unknown; size?: unknown; kind?: unknown };
       if (entry.kind === 'dir' || typeof entry.path !== 'string') continue;
-      if (backupPathExcluded(entry.path)) continue;
+      if (backupPathExcluded(entry.path, space)) continue;
       remote.set(entry.path, typeof entry.size === 'number' ? entry.size : -1);
     }
     const next = listed.next_cursor;
@@ -392,7 +477,7 @@ async function pushSpace(
       cursor: localCursor,
     });
     for (const entry of listed.entries) {
-      if (entry.kind === 'dir' || backupPathExcluded(entry.path)) continue;
+      if (entry.kind === 'dir' || backupPathExcluded(entry.path, space)) continue;
       try {
         const remoteSize = remote.get(entry.path);
         if (remoteSize === entry.size) {
@@ -415,7 +500,7 @@ async function pushSpace(
   }
 
   for (const tomb of store.listTombstones(deviceId)) {
-    if (tomb.space !== space || backupPathExcluded(tomb.path)) continue;
+    if (tomb.space !== space || backupPathExcluded(tomb.path, space)) continue;
     if (!remote.has(tomb.path)) continue;
     const meta = await call('meta', { space, device: deviceId, path: tomb.path });
     if (meta._error || meta.sha256 !== tomb.sha256 || meta.size !== tomb.size) continue;
@@ -460,22 +545,29 @@ async function pushFile(
   const size = typeof meta.size === 'number' ? meta.size : -1;
   const sha256 = typeof meta.sha256 === 'string' ? meta.sha256 : '';
   if (!sha256 || size < 0 || meta.kind === 'dir') return;
-  const begin = await call('write.begin', { space, device: deviceId, path, size, sha256 });
+  const begin = await callStore(call, 'write.begin', { space, device: deviceId, path, size, sha256 });
   if (begin._error) {
     throw Object.assign(new Error(String(begin._error)), { code: String(begin._error) });
   }
   const uploadId = String(begin.upload_id ?? '');
   let offset = typeof begin.received === 'number' ? begin.received : 0;
-  const maxSteps = Math.ceil(size / MAX_CHUNK) + 2;
+  const maxSteps = Math.ceil(size / MAX_CHUNK) + 8;
   for (let step = 0; step < maxSteps && offset < size; step++) {
     const part = store.read(deviceId, space, path, offset, MAX_CHUNK);
-    const chunked = await call('write.chunk', {
+    const chunked = await callStore(call, 'write.chunk', {
       space,
       device: deviceId,
       upload_id: uploadId,
       offset,
       data: part.data.toString('base64'),
     });
+    if (chunked._error === 'resume') {
+      const received = typeof chunked.received === 'number' ? chunked.received : -1;
+      if (received > offset && received <= size) {
+        offset = received;
+        continue;
+      }
+    }
     if (chunked._error) {
       throw Object.assign(new Error(String(chunked._error)), { code: String(chunked._error) });
     }
@@ -485,7 +577,7 @@ async function pushFile(
   if (offset !== size) {
     throw Object.assign(new Error('short_read'), { code: 'short_read' });
   }
-  const committed = await call('commit', { space, device: deviceId, upload_ids: [uploadId] });
+  const committed = await callStore(call, 'commit', { space, device: deviceId, upload_ids: [uploadId] });
   if (committed._error || (Array.isArray(committed.failed) && committed.failed.length > 0)) {
     throw Object.assign(new Error('commit_failed'), { code: 'commit_failed' });
   }
@@ -510,7 +602,7 @@ async function localSizes(
       cursor,
     });
     for (const entry of listed.entries) {
-      if (entry.kind === 'dir' || backupPathExcluded(entry.path)) continue;
+      if (entry.kind === 'dir' || backupPathExcluded(entry.path, space)) continue;
       sizes.set(entry.path, entry.size);
     }
     if (!listed.next_cursor || seen.has(listed.next_cursor)) break;
@@ -559,7 +651,7 @@ async function describeRemote(
   const listedSha = typeof entry.sha256 === 'string' ? entry.sha256 : '';
   const listedSize = typeof entry.size === 'number' ? entry.size : -1;
   if (listedSha && listedSize >= 0) return { size: listedSize, sha256: listedSha };
-  const meta = await call('meta', { space, device: deviceId, path });
+  const meta = await callStore(call, 'meta', { space, device: deviceId, path });
   if (meta._error) return null;
   const sha256 = typeof meta.sha256 === 'string' ? meta.sha256 : '';
   const size = typeof meta.size === 'number' ? meta.size : -1;
@@ -583,9 +675,9 @@ async function pullFile(
     sha256: described.sha256,
   });
   let offset = begin.received;
-  const maxSteps = Math.ceil(described.size / MAX_CHUNK) + 2;
+  const maxSteps = Math.ceil(described.size / MAX_CHUNK) + 8;
   for (let step = 0; step < maxSteps && offset < described.size; step++) {
-    const part = await call('read', {
+    const part = await callStore(call, 'read', {
       space,
       device: deviceId,
       path,

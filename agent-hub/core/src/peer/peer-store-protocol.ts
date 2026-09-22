@@ -237,7 +237,7 @@ function dispatchLocal(
         }
         if (recorded && peerId && self && recorded === self) {
           void import('./peer-store-backup.js')
-            .then((mod) => mod.startPeerBackup(peerId, callerDeviceId))
+            .then((mod) => mod.resumePeerBackup(peerId, callerDeviceId))
             .catch(() => undefined);
         }
       }

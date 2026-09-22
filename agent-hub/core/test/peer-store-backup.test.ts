@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, afterEach } from 'vitest';
 import { PeerLocalStore } from '../src/peer/peer-local-store.js';
 import {
+  BACKUP_POLL_MS,
+  nextBackupDelay,
   planPeerBackup,
   reconcilePeerBackup,
   replicateToRemote,
@@ -135,6 +137,13 @@ describe('shouldRetryBackup', () => {
     expect(shouldRetryBackup([shortPage], 0)).toBe(true);
     expect(shouldRetryBackup([shortPage], 1)).toBe(false);
   });
+
+  it('keeps looking while the peer is still connected', () => {
+    expect(nextBackupDelay([done], 0, true)).toBe(BACKUP_POLL_MS);
+    expect(nextBackupDelay([done], 0, false)).toBeNull();
+    expect(nextBackupDelay([dropped], 0, true)).toBe(5_000);
+    expect(nextBackupDelay([shortPage], 1, true)).toBe(BACKUP_POLL_MS);
+  });
 });
 
 describe('reconcilePeerBackup', () => {
@@ -199,6 +208,32 @@ describe('reconcilePeerBackup', () => {
     expect(second.pulled).toBe(1);
     expect(master.read(device, 'artifacts', 'note.txt').data.toString()).toBe('v2');
     expect(master.tombstone(device, 'artifacts', 'note.txt')).toBeNull();
+  });
+
+  it('retries a read that fails once and still stores the file', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-backup-'));
+    const device = 'aaaaaaaaaaaaaaaa';
+    const remote = new PeerLocalStore(join(dir, 'remote'));
+    const master = new PeerLocalStore(join(dir, 'master'));
+    seed(remote, device, 'files', 'note.txt', 'hello');
+    const inner = remoteCall(remote, device);
+    let reads = 0;
+    const call: StoreCaller = async (op, payload) => {
+      if (op === 'read') {
+        reads += 1;
+        if (reads === 1) return { _error: 'master_offline' };
+      }
+      return inner(op, payload);
+    };
+    const stats = await reconcilePeerBackup({
+      store: master,
+      deviceId: device,
+      call,
+      spaces: ['files'],
+    });
+    expect(stats.incomplete).toBe(0);
+    expect(stats.pulled).toBe(1);
+    expect(master.read(device, 'files', 'note.txt').data.toString()).toBe('hello');
   });
 
   it('pulls a file when the peer returns the whole object on every read', async () => {
