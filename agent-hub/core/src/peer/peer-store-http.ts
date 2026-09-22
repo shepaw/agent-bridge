@@ -30,6 +30,30 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(raw);
 }
 
+/** The peer never answered. A mirror may stand in. Any other error is the answer. */
+const UNREACHABLE_STORE_ERRORS = new Set(['master_offline', 'not_paired', 'peer_offline']);
+
+/**
+ * Live owner wins when the peer answers, including "gone" and "forbidden".
+ * Only a transport failure keeps a local mirror. An empty list is not a
+ * mirror: the caller still hears that the device could not be reached.
+ */
+export function chooseLiveOrMirror(
+  local: Record<string, unknown>,
+  remote: Record<string, unknown> | null,
+  opts?: { emptyMirrorIsMiss?: boolean },
+): Record<string, unknown> {
+  if (!remote) return local;
+  if (!remote._error) return remote;
+  const code = String(remote._error);
+  if (!UNREACHABLE_STORE_ERRORS.has(code) || local._error) return remote;
+  if (opts?.emptyMirrorIsMiss) {
+    const entries = Array.isArray(local.entries) ? local.entries : [];
+    if (entries.length === 0) return remote;
+  }
+  return local;
+}
+
 async function resolveUriMeta(
   uri: string,
   selfDeviceId: string,
@@ -41,19 +65,20 @@ async function resolveUriMeta(
     { space: parsed.space, device: parsed.device, path: parsed.path },
     selfDeviceId,
   );
-  if (!local._error) return { parsed, meta: local, local: true };
   if (parsed.device === selfDeviceId) {
-    return { error: String(local._error), message: String(local.message ?? '') };
+    if (local._error) return { error: String(local._error), message: String(local.message ?? '') };
+    return { parsed, meta: local, local: true };
   }
   const remote = await callStoreOnDevice(parsed.device, 'meta', {
     space: parsed.space,
     device: parsed.device,
     path: parsed.path,
   });
-  if (remote._error) {
-    return { error: String(remote._error), message: String(remote.message ?? '') };
+  const chosen = chooseLiveOrMirror(local, remote);
+  if (chosen._error) {
+    return { error: String(chosen._error), message: String(chosen.message ?? '') };
   }
-  return { parsed, meta: remote, local: false };
+  return { parsed, meta: chosen, local: chosen === local };
 }
 
 function takeRange(data: Buffer, offset: number, want: number, size: number): Buffer {
@@ -68,8 +93,11 @@ async function readUriBytes(
   selfDeviceId: string,
   start = 0,
   maxBytes?: number,
+  mirrorOnly = false,
 ): Promise<{ bytes: Buffer; meta: Record<string, unknown> } | { error: string; message: string }> {
-  const resolved = await resolveUriMeta(uri, selfDeviceId);
+  const resolved = mirrorOnly
+    ? await resolveMirroredMeta(uri, selfDeviceId)
+    : await resolveUriMeta(uri, selfDeviceId);
   if ('error' in resolved) return resolved;
   const { parsed, meta, local } = resolved;
   const size = typeof meta.size === 'number' ? meta.size : 0;
@@ -93,10 +121,21 @@ async function readUriBytes(
       ? executeLocalStoreOp('read', payload, selfDeviceId)
       : await callStoreOnDevice(parsed.device, 'read', payload);
     if (part._error) {
-      if (chunks.length === 0) {
-        return { error: String(part._error), message: String(part.message ?? '') };
+      if (
+        chunks.length === 0 &&
+        !local &&
+        UNREACHABLE_STORE_ERRORS.has(String(part._error))
+      ) {
+        const mirrored = executeLocalStoreOp(
+          'meta',
+          { space: parsed.space, device: parsed.device, path: parsed.path },
+          selfDeviceId,
+        );
+        if (!mirrored._error) {
+          return readUriBytes(uri, selfDeviceId, start, maxBytes, true);
+        }
       }
-      break;
+      return { error: String(part._error), message: String(part.message ?? '') };
     }
     let data = takeRange(Buffer.from(String(part.data ?? ''), 'base64'), offset, want, size);
     if (data.length === 0) break;
@@ -106,7 +145,28 @@ async function readUriBytes(
     remaining -= data.length;
     if (part.eof === true && offset >= size) break;
   }
+  const wantedEnd = maxBytes == null || !Number.isFinite(maxBytes)
+    ? size
+    : Math.min(size, offset0 + (maxBytes as number));
+  if (offset < wantedEnd) {
+    return { error: 'short_read', message: 'short read' };
+  }
   return { bytes: Buffer.concat(chunks), meta };
+}
+
+async function resolveMirroredMeta(
+  uri: string,
+  selfDeviceId: string,
+): Promise<{ parsed: { space: string; device: string; path: string }; meta: Record<string, unknown>; local: boolean } | { error: string; message: string }> {
+  const parsed = parseStoreUri(uri);
+  if (!parsed) return { error: 'bad_uri', message: 'invalid store:// URI' };
+  const local = executeLocalStoreOp(
+    'meta',
+    { space: parsed.space, device: parsed.device, path: parsed.path },
+    selfDeviceId,
+  );
+  if (local._error) return { error: String(local._error), message: String(local.message ?? '') };
+  return { parsed, meta: local, local: true };
 }
 
 /**
@@ -192,15 +252,9 @@ export async function handleStoreHttp(
     if (Number.isFinite(depth)) payload.depth = depth;
     let data = executeLocalStoreOp('list', payload, self);
     if (parsed.device !== self) {
-      // Prefer live peer when connected. Local empty dirs are NOT an error
-      // (missing mirror), so we must fall back on empty as well as _error.
-      const localEntries = Array.isArray(data.entries) ? data.entries : [];
+      // Live tree when the peer answers. An empty local dir is not a mirror.
       const remote = await callStoreOnDevice(parsed.device, 'list', payload);
-      if (!remote._error) {
-        data = remote;
-      } else if (data._error || localEntries.length === 0) {
-        data = remote;
-      }
+      data = chooseLiveOrMirror(data, remote, { emptyMirrorIsMiss: true });
     }
     if (data._error) {
       sendJson(res, 404, { error: data._error, message: data.message });

@@ -64,6 +64,30 @@ function httpStatusForError(code: string): number {
   return 500;
 }
 
+function unreachableStoreError(code: string): boolean {
+  return code === 'master_offline' || code === 'not_paired' || code === 'peer_offline';
+}
+
+/**
+ * Live owner wins when the peer answers, including "gone" and "forbidden".
+ * Only a transport failure keeps a local mirror.
+ */
+function chooseLiveOrMirror(
+  local: Record<string, unknown>,
+  remote: Record<string, unknown> | null,
+  emptyMirrorIsMiss = false,
+): Record<string, unknown> {
+  if (!remote) return local;
+  if (!remote._error) return remote;
+  const code = String(remote._error);
+  if (!unreachableStoreError(code) || local._error) return remote;
+  if (emptyMirrorIsMiss) {
+    const entries = Array.isArray(local.entries) ? local.entries : [];
+    if (entries.length === 0) return remote;
+  }
+  return local;
+}
+
 function sendOpError(res: Response, result: Record<string, unknown>): boolean {
   if (!result._error) return false;
   const code = String(result._error);
@@ -136,20 +160,53 @@ async function peerReadRemoteBytes(
     const q = new URLSearchParams({ uri });
     const res = await fetch(`${base}/api/v1/read?${q}`);
     if (!res.ok) {
+      let code = 'not_found';
       let message = `peer HTTP ${res.status}`;
       try {
         const body = (await res.json()) as { message?: string; error?: string };
+        if (typeof body.error === 'string' && body.error) code = body.error;
         message = String(body.message ?? body.error ?? message);
       } catch {
         /* ignore */
       }
-      return { error: 'not_found', message };
+      return { error: code, message };
     }
     const ab = await res.arrayBuffer();
     return { bytes: Buffer.from(ab) };
   } catch (e) {
     return {
       error: 'peer_offline',
+      message: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/** Size and hash from the peer, without downloading the file. */
+async function peerResolveRemote(uri: string): Promise<Record<string, unknown> | null> {
+  const base = peerBaseUrl();
+  if (!base) return null;
+  try {
+    const q = new URLSearchParams({ uri });
+    const res = await fetch(`${base}/api/v1/uri/resolve?${q}`);
+    const body = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      return {
+        _error: String(body.error ?? 'peer_offline'),
+        message: String(body.message ?? body.error ?? `peer HTTP ${res.status}`),
+      };
+    }
+    const meta = body.meta && typeof body.meta === 'object'
+      ? body.meta as Record<string, unknown>
+      : {};
+    return {
+      kind: body.kind ?? meta.kind,
+      size: body.size ?? meta.size,
+      sha256: body.sha256 ?? meta.sha256,
+      mtime: meta.mtime,
+    };
+  } catch (e) {
+    return {
+      _error: 'peer_offline',
       message: e instanceof Error ? e.message : String(e),
     };
   }
@@ -174,30 +231,23 @@ async function listLocalOrRemote(
   const local = executeLocalStoreOp('list', payload, self);
   if (parsed.device === self) return local;
 
-  // Remote device: ask live peer via peer HTTP (WS connections live in peer process).
-  // Prefer live result when online; fall back to local mirror; otherwise surface offline.
+  // Live tree when the peer answers. An empty local dir is not a mirror.
   const remote = await peerListRemote(uri, depth);
-  if (remote && !remote._error) return remote;
-
-  if (!local._error) {
-    const entries = Array.isArray(local.entries) ? local.entries : [];
-    if (entries.length > 0) return local;
-  }
-
-  if (remote) {
-    const code = String(remote._error ?? 'peer_offline');
-    const message =
-      code === 'master_offline' || code === 'peer_offline'
-        ? '配对设备未在线，且本机没有该设备的储物袋镜像'
-        : String(remote.message ?? code);
-    return { _error: code, message };
-  }
-
-  if (local._error) return local;
-  return {
+  const offline = remote ?? {
     _error: 'peer_offline',
     message: 'Peer 服务未运行，无法读取配对设备储物袋',
   };
+  const chosen = chooseLiveOrMirror(local, offline, true);
+  if (!chosen._error) return chosen;
+  const code = String(chosen._error);
+  if (!remote) return offline;
+  if (unreachableStoreError(code)) {
+    return {
+      _error: code,
+      message: '配对设备未在线，且本机没有该设备的储物袋镜像',
+    };
+  }
+  return { _error: code, message: String(chosen.message ?? code) };
 }
 
 storeRouter.get('/health', (_req: Request, res: Response) => {
@@ -503,26 +553,17 @@ storeRouter.get('/meta', async (req: Request, res: Response) => {
       return;
     }
     const self = hubStoreDeviceId();
-    let result = executeLocalStoreOp(
+    const local = executeLocalStoreOp(
       'meta',
       { space: parsed.space, device: parsed.device, path: parsed.path },
       self,
     );
-    if (result._error && parsed.device !== self) {
-      // Fallback: read via peer then synthesize meta
-      const remote = await peerReadRemoteBytes(uri);
-      if ('bytes' in remote) {
-        result = {
-          kind: 'file',
-          size: remote.bytes.length,
-          sha256: createHash('sha256').update(remote.bytes).digest('hex'),
-          mtime: Date.now(),
-        };
-      } else {
-        res.status(httpStatusForError(remote.error)).json(remote);
-        return;
-      }
-    }
+    const result = parsed.device === self
+      ? local
+      : chooseLiveOrMirror(local, await peerResolveRemote(uri) ?? {
+        _error: 'peer_offline',
+        message: 'Peer 服务未运行，无法读取远端储物袋',
+      });
     if (sendOpError(res, result)) return;
     res.json({ uri, writable: parsed.device === self, ...result });
   } catch (err) {
@@ -543,25 +584,66 @@ storeRouter.get('/read', async (req: Request, res: Response) => {
       return;
     }
     const self = hubStoreDeviceId();
-
-    let bytes: Buffer | null = null;
-    let sha256 = '';
-    let mtime: unknown;
-
-    const meta = executeLocalStoreOp(
+    const localMeta = executeLocalStoreOp(
       'meta',
       { space: parsed.space, device: parsed.device, path: parsed.path },
       self,
     );
-    if (!meta._error) {
-      const size = typeof meta.size === 'number' ? meta.size : 0;
-      if (size > MAX_WRITE_BYTES) {
+    const meta = parsed.device === self
+      ? localMeta
+      : chooseLiveOrMirror(localMeta, await peerResolveRemote(uri) ?? {
+        _error: 'peer_offline',
+        message: 'Peer 服务未运行，无法读取远端储物袋',
+      });
+    if (meta._error) {
+      sendOpError(res, meta);
+      return;
+    }
+    const size = typeof meta.size === 'number' ? meta.size : 0;
+    if (size > MAX_WRITE_BYTES) {
+      res.status(400).json({
+        error: `file too large to read via dashboard (${size} bytes; max ${MAX_WRITE_BYTES})`,
+        code: 'too_large',
+      });
+      return;
+    }
+
+    let bytes: Buffer | undefined;
+    let sha256 = '';
+    let mtime: unknown = meta.mtime;
+    const fromMirror = meta === localMeta;
+    if (!fromMirror) {
+      const remote = await peerReadRemoteBytes(uri);
+      if ('error' in remote) {
+        if (!unreachableStoreError(remote.error) || localMeta._error) {
+          res.status(httpStatusForError(remote.error)).json({
+            error: remote.message,
+            code: remote.error,
+          });
+          return;
+        }
+        const mirrorSize = typeof localMeta.size === 'number' ? localMeta.size : 0;
+        if (mirrorSize > MAX_WRITE_BYTES) {
+          res.status(400).json({
+            error: `file too large to read via dashboard (${mirrorSize} bytes; max ${MAX_WRITE_BYTES})`,
+            code: 'too_large',
+          });
+          return;
+        }
+      } else if (remote.bytes.length > MAX_WRITE_BYTES) {
         res.status(400).json({
-          error: `file too large to read via dashboard (${size} bytes; max ${MAX_WRITE_BYTES})`,
+          error: `file too large to read via dashboard (${remote.bytes.length} bytes; max ${MAX_WRITE_BYTES})`,
           code: 'too_large',
         });
         return;
+      } else {
+        bytes = remote.bytes;
+        sha256 = typeof meta.sha256 === 'string' && meta.sha256
+          ? meta.sha256
+          : createHash('sha256').update(bytes).digest('hex');
       }
+    }
+    if (fromMirror || sha256 === '') {
       const chunks: Buffer[] = [];
       let offset = 0;
       for (;;) {
@@ -583,27 +665,13 @@ storeRouter.get('/read', async (req: Request, res: Response) => {
         if (part.eof === true || data.length === 0) break;
       }
       bytes = Buffer.concat(chunks);
-      sha256 = typeof meta.sha256 === 'string'
-        ? meta.sha256
+      sha256 = typeof localMeta.sha256 === 'string' && localMeta.sha256
+        ? localMeta.sha256
         : createHash('sha256').update(bytes).digest('hex');
-      mtime = meta.mtime;
-    } else if (parsed.device !== self) {
-      const remote = await peerReadRemoteBytes(uri);
-      if ('error' in remote) {
-        res.status(httpStatusForError(remote.error)).json(remote);
-        return;
-      }
-      if (remote.bytes.length > MAX_WRITE_BYTES) {
-        res.status(400).json({
-          error: `file too large to read via dashboard (${remote.bytes.length} bytes; max ${MAX_WRITE_BYTES})`,
-          code: 'too_large',
-        });
-        return;
-      }
-      bytes = remote.bytes;
-      sha256 = createHash('sha256').update(bytes).digest('hex');
-    } else {
-      sendOpError(res, meta);
+      mtime = localMeta.mtime;
+    }
+    if (!bytes) {
+      res.status(500).json({ error: 'short read', code: 'short_read' });
       return;
     }
 
