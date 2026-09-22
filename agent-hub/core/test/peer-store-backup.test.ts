@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, afterEach } from 'vitest';
 import { PeerLocalStore } from '../src/peer/peer-local-store.js';
 import {
+  planPeerBackup,
   reconcilePeerBackup,
   replicateToRemote,
   type StoreCaller,
@@ -87,6 +88,38 @@ function remoteCall(remote: PeerLocalStore, device: string): StoreCaller {
     }
   };
 }
+
+describe('planPeerBackup', () => {
+  const self = 'aaaaaaaaaaaaaaaa';
+  const peer = 'bbbbbbbbbbbbbbbb';
+
+  it('keeps the pouch here and does not pull a peer that has not named us', () => {
+    expect(planPeerBackup({
+      peerFingerprint: peer,
+      announcedMaster: null,
+      remoteMaster: null,
+      selfId: self,
+    })).toEqual({ announce: self, pull: false, push: false });
+  });
+
+  it('pushes to the device we named, and pulls a peer that named us', () => {
+    expect(planPeerBackup({
+      peerFingerprint: peer,
+      announcedMaster: self,
+      remoteMaster: peer,
+      selfId: self,
+    })).toEqual({ announce: peer, pull: true, push: true });
+  });
+
+  it('stops pulling after the peer clears the claim, and does not push to anyone else', () => {
+    expect(planPeerBackup({
+      peerFingerprint: peer,
+      announcedMaster: 'cccccccccccccccc',
+      remoteMaster: 'dddddddddddddddd',
+      selfId: self,
+    })).toEqual({ announce: 'dddddddddddddddd', pull: false, push: false });
+  });
+});
 
 describe('reconcilePeerBackup', () => {
   let dir: string;

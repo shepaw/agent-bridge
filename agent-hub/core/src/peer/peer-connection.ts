@@ -202,6 +202,12 @@ export function sendToPeer(peerId: string, obj: Record<string, unknown>): boolea
   return true;
 }
 
+/** True once this connection can send store frames and receive the replies. */
+export function peerHasLiveConnection(peerId: string): boolean {
+  const s = peerSessions.get(peerId);
+  return !!s && s.liveRoutes.length > 0;
+}
+
 /** Live paired App for an optional in-flight [agentId], else any connected peer. */
 export function findLivePeerId(agentId?: string): string | undefined {
   const live: string[] = [];
@@ -322,13 +328,6 @@ export async function drivePeerConnection(opts: {
   peerSession.liveConnections += 1;
   const pairedNow = loadPairedPeers().find((p) => p.id === peerId);
   const backupDevice = pairedNow?.fingerprint ?? '';
-  if (/^[a-f0-9]{16}$/i.test(backupDevice)) {
-    void onPeerConnectedForBackup(peerId, backupDevice).catch((err) => {
-      log(
-        `store backup sync failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
-  }
   const acpClients = peerSession.acpClients;
   // Pending tool-call approvals: confirmationId → waiter. The phone replies
   // with agent_approval_resp; a peer disconnect MIGRATES the waiter (kept
@@ -1430,6 +1429,16 @@ export async function drivePeerConnection(opts: {
   };
 
   ws.on('message', onMessage);
+
+  // Store RPC needs the live route and this message handler. Starting earlier
+  // drops the announcement and every pull/push reply.
+  if (/^[a-f0-9]{16}$/i.test(backupDevice)) {
+    void onPeerConnectedForBackup(peerId, backupDevice).catch((err) => {
+      log(
+        `store backup sync failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
 
   // Heartbeat: send ping every 30s; if no activity for 120s, close.
   const heartbeat = setInterval(() => {

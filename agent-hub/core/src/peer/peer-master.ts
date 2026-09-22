@@ -14,6 +14,15 @@ export function selfStoreDeviceId(): string {
   return hubStoreDeviceId().toLowerCase();
 }
 
+/** This hub's fingerprint, or null when the identity is not available yet. */
+export function hubDeviceFingerprint(): string | null {
+  try {
+    return selfStoreDeviceId();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fingerprint of the other device this hub replicates to.
  * Null when this hub is its own master (unset, or set to itself).
@@ -55,14 +64,4 @@ export function callerMayReadPrivate(
   if (device.trim().toLowerCase() !== self) return false;
   const master = configuredRemoteMaster();
   return master !== null && master === callerId;
-}
-
-export function hubIsAnnouncedMaster(store: PeerLocalStore, deviceId: string): boolean {
-  let self = '';
-  try {
-    self = selfStoreDeviceId();
-  } catch {
-    return false;
-  }
-  return store.announcedMaster(deviceId) === self;
 }

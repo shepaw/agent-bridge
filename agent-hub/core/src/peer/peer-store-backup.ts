@@ -16,10 +16,10 @@ import {
   MAX_CHUNK,
   type PeerLocalStore,
 } from './peer-local-store.js';
+import { peerHasLiveConnection } from './peer-connection.js';
 import { callStoreOnPeerId } from './peer-store-protocol.js';
 import {
   configuredRemoteMaster,
-  hubIsAnnouncedMaster,
   selfStoreDeviceId,
 } from './peer-master.js';
 
@@ -64,17 +64,90 @@ export function startPeerBackup(peerId: string, deviceId: string): Promise<Recon
   return job;
 }
 
+export interface PeerBackupPlan {
+  /** Fingerprint to send in sync.hello, or empty when this hub has no identity yet. */
+  announce: string;
+  /** This peer already named us master, so copy their pouch in. */
+  pull: boolean;
+  /** We named this peer master, so copy our pouch out. */
+  push: boolean;
+}
+
 /**
- * On connect: pull if this peer has named us master; push if we named them master.
+ * What to do with one paired device.
+ * `announce` is our master (ourselves, when we keep the pouch here) so the
+ * peer can start or stop pulling. Pull and push are independent.
+ */
+export function planPeerBackup(opts: {
+  peerFingerprint: string;
+  announcedMaster: string | null;
+  remoteMaster: string | null;
+  selfId: string;
+}): PeerBackupPlan {
+  const peer = opts.peerFingerprint.trim().toLowerCase();
+  const selfId = opts.selfId.trim().toLowerCase();
+  const remote = opts.remoteMaster?.trim().toLowerCase() || null;
+  const announced = opts.announcedMaster?.trim().toLowerCase() || null;
+  return {
+    announce: remote && remote !== selfId ? remote : selfId,
+    pull: announced !== null && announced === selfId,
+    push: remote !== null && remote === peer,
+  };
+}
+
+function selfIdOrEmpty(): string {
+  try {
+    return selfStoreDeviceId();
+  } catch {
+    return '';
+  }
+}
+
+function announceMaster(peerId: string, master: string): Promise<void> {
+  if (!/^[a-f0-9]{16}$/.test(master)) return Promise.resolve();
+  return callStoreOnPeerId(peerId, 'sync.hello', { master }).then(() => undefined);
+}
+
+/**
+ * On connect: tell the peer who our master is, pull if they named us,
+ * and push if we named them. The caller must already be able to send.
  */
 export function onPeerConnectedForBackup(peerId: string, fingerprint: string): Promise<void> {
   const id = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{16}$/.test(id)) return Promise.resolve();
-  const tasks: Promise<unknown>[] = [];
-  const store = getPeerLocalStore();
-  if (hubIsAnnouncedMaster(store, id)) tasks.push(startPeerBackup(peerId, id));
-  if (configuredRemoteMaster() === id) tasks.push(pushLocalPouch(peerId));
+  const selfId = selfIdOrEmpty();
+  const plan = planPeerBackup({
+    peerFingerprint: id,
+    announcedMaster: getPeerLocalStore().announcedMaster(id),
+    remoteMaster: configuredRemoteMaster(),
+    selfId,
+  });
+  const tasks: Promise<unknown>[] = [
+    announceMaster(peerId, plan.announce).catch(() => undefined),
+  ];
+  if (plan.pull) tasks.push(startPeerBackup(peerId, id));
+  if (plan.push) tasks.push(pushLocalPouch(peerId));
   return Promise.all(tasks).then(() => undefined);
+}
+
+/**
+ * Master setting changed while peers may already be connected.
+ * Each live peer hears the new claim; the chosen master gets the pouch now.
+ */
+export function syncMasterChoiceToLivePeers(): void {
+  const selfId = selfIdOrEmpty();
+  const remote = configuredRemoteMaster();
+  for (const peer of loadPairedPeers()) {
+    if (!peerHasLiveConnection(peer.id)) continue;
+    const plan = planPeerBackup({
+      peerFingerprint: peer.fingerprint,
+      announcedMaster: null,
+      remoteMaster: remote,
+      selfId,
+    });
+    void announceMaster(peer.id, plan.announce).catch(() => undefined);
+    if (plan.push) void pushLocalPouch(peer.id).catch(() => undefined);
+  }
 }
 
 /** Push this hub's pouch to the paired device that is our master. */
@@ -109,7 +182,7 @@ export function scheduleMirrorLocalChange(
   if (!master || deviceId.trim().toLowerCase() !== selfStoreDeviceId()) return;
   if (backupPathExcluded(path)) return;
   const peer = loadPairedPeers().find((item) => item.fingerprint.toLowerCase() === master);
-  if (!peer) return;
+  if (!peer || !peerHasLiveConnection(peer.id)) return;
   void pushOnePath(peer.id, space, path, deleted).catch(() => undefined);
 }
 

@@ -19,9 +19,11 @@ import {
   mintPairingQr,
   peerServiceStatus,
   removePairedPeer,
+  hubDeviceFingerprint,
   resolveHubMaster,
   resolvePeerDeviceName,
   setHubPeer,
+  syncMasterChoiceToLivePeers,
   startPeerService,
   stopPeerService,
 } from '@shepaw/agent-hub-core';
@@ -125,14 +127,21 @@ peerRouter.put('/master', (req: Request, res: Response) => {
     }
     const master = raw.trim().toLowerCase();
     const cfg = loadOrCreateHubConfig();
-    if (master === 'self' || master === '') {
+    const self = hubDeviceFingerprint();
+    if (master === 'self' || master === '' || (self !== null && master === self)) {
       setHubPeer(cfg, { masterFingerprint: null });
     } else if (/^[a-f0-9]{16}$/.test(master)) {
+      const paired = loadPairedPeers().some((peer) => peer.fingerprint.toLowerCase() === master);
+      if (!paired) {
+        res.status(400).json({ error: 'master must be this hub or a paired device' });
+        return;
+      }
       setHubPeer(cfg, { masterFingerprint: master });
     } else {
       res.status(400).json({ error: 'master must be "self" or a 16-hex fingerprint' });
       return;
     }
+    syncMasterChoiceToLivePeers();
     const resolved = resolveHubMaster();
     res.json({ ok: true, master: resolved.self ? 'self' : resolved.fingerprint });
   } catch (err) {

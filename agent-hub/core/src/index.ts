@@ -125,8 +125,10 @@ export {
 } from './peer/peer-store-protocol.js';
 export {
   configuredRemoteMaster,
+  hubDeviceFingerprint,
   resolveHubMaster,
 } from './peer/peer-master.js';
+export { syncMasterChoiceToLivePeers } from './peer/peer-store-backup.js';
 export {
   assertSafeAttachmentName,
   clearPeerAttachments,
