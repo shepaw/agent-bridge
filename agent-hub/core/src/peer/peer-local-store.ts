@@ -4,7 +4,9 @@
  * Layout mirrors the app/Nexuspouch model:
  *   <root>/<device_id>/<space>/<relpath>
  *   <root>/.staging/<device_id>/<upload_id>/…
- *   <root>/.cursors.json  — applied_seq per device (sync.hello)
+ *   <root>/.cursors/<device_id>.json — applied_seq for that device
+ *   <root>/.tombstones/<device_id>.json — explicit deletes
+ *   <root>/.cursors.json — legacy shared cursor map (read fallback only)
  *
  * Supports list / meta / read and write.begin / write.chunk / commit / delete
  * so a phone can mirror its pouch here when the hub is master.
@@ -12,19 +14,25 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  closeSync,
   copyFileSync,
   cpSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
+  writeSync,
   type Stats,
 } from 'node:fs';
-import { dirname, join, normalize, relative, sep } from 'node:path';
+import { basename, dirname, join, normalize, relative, sep } from 'node:path';
 import { peerStoreRoot } from '../paths.js';
 
 export const SHARED_SPACES = new Set(['artifacts', 'files', 'workspaces', 'public']);
@@ -63,8 +71,10 @@ export interface BackupDeviceInfo {
   totalBytes: number;
   /** Newest file mtime across the mirror (ms). */
   lastModified: number;
-  /** Sync progress from .cursors.json. */
+  /** Sync progress from the per-device cursor. */
   lastSyncSeq: number;
+  /** False when the cursor file is unreadable; lastSyncSeq is then not a confirmation. */
+  cursorReliable: boolean;
 }
 
 export interface StoreEntryJson {
@@ -108,6 +118,61 @@ function isSafeRelPath(rel: string): boolean {
   return true;
 }
 
+function normalizeDeviceId(deviceId: string): string | null {
+  const id = deviceId.trim().toLowerCase();
+  return /^[a-f0-9]{16}$/.test(id) ? id : null;
+}
+
+/** `src` matches `src` and `src/a`, and does not match `src2`. */
+function matchesPrefix(path: string, prefix?: string): boolean {
+  if (!prefix) return true;
+  const p = prefix.replace(/^\/+|\/+$/g, '');
+  if (!p) return true;
+  return path === p || path.startsWith(`${p}/`);
+}
+
+function isCommitTmpName(name: string): boolean {
+  return /^\..+\.[0-9a-f-]{36}\.tmp$/i.test(name);
+}
+
+/** Write `data` via a temp file in the same directory, fsync, then rename. */
+function atomicWriteFile(dest: string, data: Buffer | string): void {
+  ensureDir(dirname(dest));
+  const tmp = join(dirname(dest), `.${basename(dest)}.${randomUUID()}.tmp`);
+  const fd = openSync(tmp, 'w');
+  try {
+    writeSync(fd, typeof data === 'string' ? Buffer.from(data) : data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(tmp, dest);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+}
+
+interface TombstoneEntry {
+  space: string;
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+interface ListedNode {
+  abs: string;
+  path: string;
+  kind: 'file' | 'dir';
+  size: number;
+  mtime: number;
+}
+
 function resolveUnder(root: string, ...segments: string[]): string {
   const target = normalize(join(root, ...segments));
   const rel = relative(root, target);
@@ -129,25 +194,66 @@ export class PeerLocalStore {
     return join(this.root, '.cursors.json');
   }
 
-  appliedSeq(deviceId: string): number {
+  /**
+   * Cursor for one device. A missing file is a reliable 0 (nothing confirmed).
+   * A corrupt file is unreliable: callers must reconcile content instead of
+   * treating the device as synced through 0.
+   */
+  cursorState(deviceId: string): { appliedSeq: number; reliable: boolean } {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return { appliedSeq: 0, reliable: true };
+    const file = this.cursorFile(id);
+    if (!existsSync(file)) return this.legacyCursor(id);
     try {
-      const raw = JSON.parse(readFileSync(this.cursorsPath(), 'utf-8')) as Record<string, number>;
-      return raw[deviceId] ?? 0;
+      const raw = JSON.parse(readFileSync(file, 'utf-8')) as { applied_seq?: unknown };
+      if (typeof raw?.applied_seq !== 'number' || !Number.isFinite(raw.applied_seq)) {
+        return { appliedSeq: 0, reliable: false };
+      }
+      return { appliedSeq: raw.applied_seq, reliable: true };
     } catch {
-      return 0;
+      return { appliedSeq: 0, reliable: false };
     }
   }
 
+  appliedSeq(deviceId: string): number {
+    return this.cursorState(deviceId).appliedSeq;
+  }
+
   setAppliedSeq(deviceId: string, seq: number): void {
-    let map: Record<string, number> = {};
-    try {
-      map = JSON.parse(readFileSync(this.cursorsPath(), 'utf-8')) as Record<string, number>;
-    } catch {
-      /* empty */
+    const id = normalizeDeviceId(deviceId);
+    if (!id || !Number.isFinite(seq)) return;
+    const file = this.cursorFile(id);
+    ensureDir(dirname(file));
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const cur = this.cursorState(id);
+      if (cur.reliable && seq <= cur.appliedSeq) return;
+      atomicWriteFile(file, JSON.stringify({ applied_seq: seq }));
+      const check = this.cursorState(id);
+      if (check.reliable && check.appliedSeq >= seq) return;
     }
-    const prev = map[deviceId] ?? 0;
-    if (seq > prev) map[deviceId] = seq;
-    writeFileSync(this.cursorsPath(), JSON.stringify(map, null, 2));
+  }
+
+  private cursorFile(id: string): string {
+    return join(this.root, '.cursors', `${id}.json`);
+  }
+
+  private legacyCursor(id: string): { appliedSeq: number; reliable: boolean } {
+    const path = this.cursorsPath();
+    if (!existsSync(path)) return { appliedSeq: 0, reliable: true };
+    try {
+      const map = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+      if (!map || typeof map !== 'object' || Array.isArray(map)) {
+        return { appliedSeq: 0, reliable: false };
+      }
+      if (!(id in map)) return { appliedSeq: 0, reliable: true };
+      const value = map[id];
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return { appliedSeq: 0, reliable: false };
+      }
+      return { appliedSeq: value, reliable: true };
+    } catch {
+      return { appliedSeq: 0, reliable: false };
+    }
   }
 
   /**
@@ -166,32 +272,62 @@ export class PeerLocalStore {
     depth?: number,
     computeHash = true,
   ): StoreEntryJson[] {
+    return this.listPage({ deviceId, space, prefix, limit, depth, computeHash }).entries;
+  }
+
+  /**
+   * Inventory page. Paths are sorted. `cursor` is the last path of the previous
+   * page. Dotfiles are included only when `includeHidden` is set. Prefixes match
+   * on a path segment (`src` does not include `src2`).
+   */
+  listPage(opts: {
+    deviceId: string;
+    space: string;
+    prefix?: string;
+    limit?: number;
+    depth?: number;
+    computeHash?: boolean;
+    cursor?: string;
+    includeHidden?: boolean;
+  }): { entries: StoreEntryJson[]; next_cursor: string | null } {
+    const {
+      deviceId,
+      space,
+      prefix,
+      limit = 1000,
+      depth,
+      computeHash = true,
+      cursor,
+      includeHidden = false,
+    } = opts;
     if (!ALL_SPACES.has(space)) {
       throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
     }
+    const cap = Math.max(1, Math.min(limit, 5000));
     const base = resolveUnder(this.root, deviceId, space);
-    if (!existsSync(base)) return [];
-    const out: StoreEntryJson[] = [];
-    const maxDepth = typeof depth === 'number' && depth > 0 ? depth : 0;
+    if (!existsSync(base)) return { entries: [], next_cursor: null };
 
-    const fileEntry = (abs: string, childRel: string, st: Stats): StoreEntryJson => {
-      if (!computeHash) {
-        return {
-          path: childRel,
-          size: st.size,
-          sha256: '',
-          mtime: st.mtimeMs,
-          kind: 'file',
-        };
+    const maxDepth = typeof depth === 'number' && depth > 0 ? depth : 0;
+    const seenDirs = new Set<string>();
+    const pending: ListedNode[] = [];
+
+    const skipName = (name: string): boolean => {
+      if (name === '.' || name === '..' || isCommitTmpName(name)) return true;
+      if (!includeHidden && name.startsWith('.')) return true;
+      return false;
+    };
+
+    const markDir = (abs: string): boolean => {
+      let key: string;
+      try {
+        if (!statSync(abs).isDirectory()) return false;
+        key = realpathSync(abs);
+      } catch {
+        return false;
       }
-      const bytes = readFileSync(abs);
-      return {
-        path: childRel,
-        size: st.size,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        mtime: st.mtimeMs,
-        kind: 'file',
-      };
+      if (seenDirs.has(key)) return false;
+      seenDirs.add(key);
+      return true;
     };
 
     if (maxDepth > 0) {
@@ -202,63 +338,102 @@ export class PeerLocalStore {
       const startDir = startRel
         ? resolveUnder(this.root, deviceId, space, ...startRel.split('/'))
         : base;
-      if (!existsSync(startDir) || !statSync(startDir).isDirectory()) {
-        return [];
-      }
+      if (!markDir(startDir)) return { entries: [], next_cursor: null };
       const walkShallow = (dir: string, rel: string, remaining: number): void => {
-        if (out.length >= limit || remaining < 1) return;
-        for (const name of readdirSync(dir)) {
-          if (out.length >= limit) return;
-          if (name.startsWith('.')) continue;
+        if (remaining < 1) return;
+        let names: string[];
+        try {
+          names = readdirSync(dir);
+        } catch {
+          return;
+        }
+        for (const name of names) {
+          if (skipName(name)) continue;
           const abs = join(dir, name);
           const childRel = rel ? `${rel}/${name}` : name;
-          let st;
+          let st: Stats;
           try {
             st = statSync(abs);
           } catch {
             continue;
           }
           if (st.isDirectory()) {
-            out.push({
-              path: childRel,
-              size: 0,
-              sha256: '',
-              mtime: st.mtimeMs,
-              kind: 'dir',
-            });
-            if (remaining > 1) walkShallow(abs, childRel, remaining - 1);
+            pending.push({ abs, path: childRel, kind: 'dir', size: 0, mtime: st.mtimeMs });
+            if (remaining > 1 && markDir(abs)) walkShallow(abs, childRel, remaining - 1);
           } else if (st.isFile()) {
-            out.push(fileEntry(abs, childRel, st));
+            pending.push({
+              abs,
+              path: childRel,
+              kind: 'file',
+              size: st.size,
+              mtime: st.mtimeMs,
+            });
           }
         }
       };
       walkShallow(startDir, startRel, maxDepth);
-      return out;
+    } else if (markDir(base)) {
+      const walk = (dir: string, rel: string): void => {
+        let names: string[];
+        try {
+          names = readdirSync(dir);
+        } catch {
+          return;
+        }
+        for (const name of names) {
+          if (skipName(name)) continue;
+          const abs = join(dir, name);
+          const childRel = rel ? `${rel}/${name}` : name;
+          let st: Stats;
+          try {
+            st = statSync(abs);
+          } catch {
+            continue;
+          }
+          if (st.isDirectory()) {
+            if (markDir(abs)) walk(abs, childRel);
+          } else if (st.isFile() && matchesPrefix(childRel, prefix)) {
+            pending.push({
+              abs,
+              path: childRel,
+              kind: 'file',
+              size: st.size,
+              mtime: st.mtimeMs,
+            });
+          }
+        }
+      };
+      walk(base, '');
     }
 
-    const walk = (dir: string, rel: string): void => {
-      if (out.length >= limit) return;
-      for (const name of readdirSync(dir)) {
-        if (name.startsWith('.')) continue;
-        const abs = join(dir, name);
-        const childRel = rel ? `${rel}/${name}` : name;
-        let st;
-        try {
-          st = statSync(abs);
-        } catch {
-          continue;
-        }
-        if (st.isDirectory()) {
-          walk(abs, childRel);
-        } else if (st.isFile()) {
-          if (prefix && !childRel.startsWith(prefix)) continue;
-          out.push(fileEntry(abs, childRel, st));
-          if (out.length >= limit) return;
-        }
-      }
+    pending.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const after = cursor ? pending.filter((entry) => entry.path > cursor) : pending;
+    const page = after.slice(0, cap);
+    const next = after.length > cap ? (page[page.length - 1]?.path ?? null) : null;
+    return {
+      entries: page.map((entry) => this.entryJson(entry, computeHash)),
+      next_cursor: next,
     };
-    walk(base, '');
-    return out;
+  }
+
+  private entryJson(entry: ListedNode, computeHash: boolean): StoreEntryJson {
+    if (entry.kind === 'dir' || !computeHash) {
+      return {
+        path: entry.path,
+        size: entry.kind === 'dir' ? 0 : entry.size,
+        sha256: '',
+        mtime: entry.mtime,
+        kind: entry.kind,
+      };
+    }
+    const bytes = readFileSync(entry.abs);
+    return {
+      path: entry.path,
+      size: entry.size,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      mtime: entry.mtime,
+      kind: 'file',
+    };
   }
 
   meta(deviceId: string, space: string, path: string): Record<string, unknown> {
@@ -324,6 +499,18 @@ export class PeerLocalStore {
     }
     const uploadId = opts.uploadId ?? randomUUID();
     const staging = join(this.root, '.staging', opts.deviceId, uploadId);
+    const metaPath = join(staging, 'meta.json');
+    if (opts.uploadId && existsSync(metaPath)) {
+      const existing = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
+      if (
+        existing.deviceId !== opts.deviceId ||
+        existing.space !== opts.space ||
+        existing.path !== opts.path
+      ) {
+        throw Object.assign(new Error('staging_state'), { code: 'staging_state' });
+      }
+      return { upload_id: uploadId, received: existing.received };
+    }
     ensureDir(staging);
     const meta: StagingMeta = {
       deviceId: opts.deviceId,
@@ -333,7 +520,7 @@ export class PeerLocalStore {
       sha256: opts.sha256,
       received: 0,
     };
-    writeFileSync(join(staging, 'meta.json'), JSON.stringify(meta));
+    atomicWriteFile(metaPath, JSON.stringify(meta));
     writeFileSync(join(staging, 'data.bin'), Buffer.alloc(0));
     return { upload_id: uploadId, received: 0 };
   }
@@ -350,18 +537,32 @@ export class PeerLocalStore {
       throw Object.assign(new Error('staging_state'), { code: 'staging_state' });
     }
     const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
-    if (offset !== meta.received) {
-      throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
-    }
     if (data.length > MAX_CHUNK) {
       throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
     }
     const dataPath = join(staging, 'data.bin');
-    const prev = existsSync(dataPath) ? readFileSync(dataPath) : Buffer.alloc(0);
-    const next = Buffer.concat([prev, data]);
-    writeFileSync(dataPath, next);
-    meta.received = next.length;
-    writeFileSync(metaPath, JSON.stringify(meta));
+    if (!existsSync(dataPath)) writeFileSync(dataPath, Buffer.alloc(0));
+    const sizeOnDisk = statSync(dataPath).size;
+    if (sizeOnDisk > meta.received) {
+      meta.received = sizeOnDisk;
+      atomicWriteFile(metaPath, JSON.stringify(meta));
+    }
+    if (offset < meta.received && offset + data.length <= meta.received) {
+      return { received: meta.received };
+    }
+    if (offset !== meta.received) {
+      throw Object.assign(new Error('resume'), { code: 'resume', received: meta.received });
+    }
+    if (data.length === 0) return { received: meta.received };
+    const fd = openSync(dataPath, 'r+');
+    try {
+      writeSync(fd, data, 0, data.length, offset);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    meta.received = offset + data.length;
+    atomicWriteFile(metaPath, JSON.stringify(meta));
     return { received: meta.received };
   }
 
@@ -382,19 +583,19 @@ export class PeerLocalStore {
           failed.push({ upload_id: uploadId, code: 'acl_denied' });
           continue;
         }
-        const data = readFileSync(join(staging, 'data.bin'));
-        const sha = createHash('sha256').update(data).digest('hex');
-        if (meta.sha256 && meta.sha256 !== sha) {
-          failed.push({ upload_id: uploadId, code: 'hash_mismatch' });
+        if (!meta.sha256 || meta.size < 0) {
+          failed.push({ upload_id: uploadId, code: 'integrity_required' });
           continue;
         }
-        if (meta.size >= 0 && meta.size !== data.length) {
+        const data = readFileSync(join(staging, 'data.bin'));
+        const sha = createHash('sha256').update(data).digest('hex');
+        if (meta.sha256 !== sha || meta.size !== data.length) {
           failed.push({ upload_id: uploadId, code: 'hash_mismatch' });
           continue;
         }
         const dest = resolveUnder(this.root, deviceId, space, ...meta.path.split('/'));
-        ensureDir(dirname(dest));
-        writeFileSync(dest, data);
+        atomicWriteFile(dest, data);
+        this.clearTombstonePath(deviceId, space, meta.path);
         rmSync(staging, { recursive: true, force: true });
       } catch (e) {
         failed.push({
@@ -423,9 +624,115 @@ export class PeerLocalStore {
     if (!existsSync(abs)) {
       throw Object.assign(new Error('not_found'), { code: 'not_found' });
     }
+    try {
+      if (statSync(abs).isFile()) {
+        const data = readFileSync(abs);
+        this.putTombstone(deviceId, {
+          space,
+          path,
+          size: data.length,
+          sha256: createHash('sha256').update(data).digest('hex'),
+        });
+      }
+    } catch {
+      /* still remove the path */
+    }
     rmSync(abs, { recursive: true, force: true });
     if (typeof uptoSeq === 'number') this.setAppliedSeq(deviceId, uptoSeq);
     return { applied_seq: this.appliedSeq(deviceId) };
+  }
+
+  /** Drop abandoned uploads so a failed transfer cannot fill the disk. */
+  gcStaging(maxAgeMs = 24 * 60 * 60 * 1000): number {
+    const root = join(this.root, '.staging');
+    if (!existsSync(root)) return 0;
+    const now = Date.now();
+    let removed = 0;
+    let devices: string[];
+    try {
+      devices = readdirSync(root);
+    } catch {
+      return 0;
+    }
+    for (const device of devices) {
+      const deviceDir = join(root, device);
+      let uploads: string[];
+      try {
+        if (!statSync(deviceDir).isDirectory()) continue;
+        uploads = readdirSync(deviceDir);
+      } catch {
+        continue;
+      }
+      for (const uploadId of uploads) {
+        const dir = join(deviceDir, uploadId);
+        let mtime = 0;
+        try {
+          const meta = join(dir, 'meta.json');
+          mtime = statSync(existsSync(meta) ? meta : dir).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (now - mtime < maxAgeMs) continue;
+        rmSync(dir, { recursive: true, force: true });
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  tombstone(
+    deviceId: string,
+    space: string,
+    path: string,
+  ): { size: number; sha256: string } | null {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return null;
+    const hit = this.readTombstones(id).find((entry) => entry.space === space && entry.path === path);
+    if (!hit?.sha256) return null;
+    return { size: hit.size, sha256: hit.sha256 };
+  }
+
+  private putTombstone(deviceId: string, entry: TombstoneEntry): void {
+    const id = normalizeDeviceId(deviceId);
+    if (!id || !entry.sha256) return;
+    const next = this.readTombstones(id).filter(
+      (item) => item.space !== entry.space || item.path !== entry.path,
+    );
+    next.push(entry);
+    this.writeTombstones(id, next);
+  }
+
+  private clearTombstonePath(deviceId: string, space: string, path: string): void {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return;
+    const all = this.readTombstones(id);
+    const next = all.filter((item) => item.space !== space || item.path !== path);
+    if (next.length === all.length) return;
+    this.writeTombstones(id, next);
+  }
+
+  private tombstoneFile(id: string): string {
+    return join(this.root, '.tombstones', `${id}.json`);
+  }
+
+  private readTombstones(id: string): TombstoneEntry[] {
+    const file = this.tombstoneFile(id);
+    if (!existsSync(file)) return [];
+    try {
+      const raw = JSON.parse(readFileSync(file, 'utf-8')) as { entries?: TombstoneEntry[] };
+      return Array.isArray(raw.entries) ? raw.entries : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeTombstones(id: string, entries: TombstoneEntry[]): void {
+    const file = this.tombstoneFile(id);
+    if (entries.length === 0) {
+      if (existsSync(file)) rmSync(file, { force: true });
+      return;
+    }
+    atomicWriteFile(file, JSON.stringify({ entries }));
   }
 
   /**
@@ -504,13 +811,15 @@ export class PeerLocalStore {
         }
       }
 
+      const cursor = this.cursorState(name);
       out.push({
         fingerprint: name,
         spaces,
         totalFiles,
         totalBytes,
         lastModified,
-        lastSyncSeq: this.appliedSeq(name),
+        lastSyncSeq: cursor.appliedSeq,
+        cursorReliable: cursor.reliable,
       });
     }
     return out;
@@ -533,17 +842,35 @@ export class PeerLocalStore {
     }
     rmSync(abs, { recursive: true, force: true });
     this.clearAppliedSeq(fingerprint);
+    const id = fingerprint.toLowerCase();
+    const tomb = this.tombstoneFile(id);
+    if (existsSync(tomb)) rmSync(tomb, { force: true });
+    const staging = join(this.root, '.staging', id);
+    if (existsSync(staging)) rmSync(staging, { recursive: true, force: true });
   }
 
   private clearAppliedSeq(deviceId: string): void {
-    let map: Record<string, number> = {};
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return;
+    const file = this.cursorFile(id);
+    if (existsSync(file)) rmSync(file, { force: true });
+    this.clearLegacyKey(id);
+  }
+
+  private clearLegacyKey(id: string): void {
+    const path = this.cursorsPath();
+    if (!existsSync(path)) return;
+    let map: Record<string, unknown>;
     try {
-      map = JSON.parse(readFileSync(this.cursorsPath(), 'utf-8')) as Record<string, number>;
+      const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      map = parsed;
     } catch {
-      /* empty */
+      return;
     }
-    delete map[deviceId];
-    writeFileSync(this.cursorsPath(), JSON.stringify(map, null, 2));
+    if (!(id in map)) return;
+    delete map[id];
+    atomicWriteFile(path, JSON.stringify(map, null, 2));
   }
 
   /**

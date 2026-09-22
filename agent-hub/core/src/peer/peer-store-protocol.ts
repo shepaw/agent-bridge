@@ -58,6 +58,7 @@ function errorFrame(
   reqId: string | undefined,
   code: string,
   message?: string,
+  extra?: Record<string, unknown>,
 ): StoreFrame {
   return {
     type: 'store',
@@ -67,7 +68,14 @@ function errorFrame(
     req_id: reqId,
     code,
     message: message ?? code,
+    ...extra,
   };
+}
+
+function errorExtra(e: unknown): Record<string, unknown> | undefined {
+  if (!e || typeof e !== 'object' || !('received' in e)) return undefined;
+  const received = (e as { received: unknown }).received;
+  return typeof received === 'number' ? { received } : undefined;
 }
 
 function parseUri(uri: string): { space: string; device: string; path: string } | null {
@@ -121,7 +129,12 @@ export function handleInboundStoreFrame(
     const data = dispatchLocal(store, op, frame, opts.callerDeviceId);
     return resultFrame(reqId, data);
   } catch (e) {
-    return errorFrame(reqId, errorCode(e), e instanceof Error ? e.message : String(e));
+    return errorFrame(
+      reqId,
+      errorCode(e),
+      e instanceof Error ? e.message : String(e),
+      errorExtra(e),
+    );
   }
 }
 
@@ -148,15 +161,17 @@ function dispatchLocal(
           : typeof frame.depth === 'string' && frame.depth.trim()
             ? Number(frame.depth)
             : undefined;
-      const entries = store.list(
-        device,
+      const page = store.listPage({
+        deviceId: device,
         space,
         prefix,
         limit,
-        Number.isFinite(depth) ? depth : undefined,
-        frame.hash !== false,
-      );
-      return { entries, next_cursor: null };
+        depth: Number.isFinite(depth) ? depth : undefined,
+        computeHash: frame.hash !== false,
+        cursor: typeof frame.cursor === 'string' ? frame.cursor : undefined,
+        includeHidden: frame.include_hidden === true,
+      });
+      return { entries: page.entries, next_cursor: page.next_cursor };
     }
     case 'meta': {
       if (!space || !path) throw Object.assign(new Error('space/path required'), { code: 'bad_op' });
@@ -207,7 +222,11 @@ function dispatchLocal(
     case 'sync.hello': {
       const target =
         typeof frame.device === 'string' ? frame.device : callerDeviceId;
-      return { applied_seq: store.appliedSeq(target) };
+      const state = store.cursorState(target);
+      // Unreadable cursor is not "synced through 0". The connect path pulls
+      // shared spaces by content; tell the peer to reconcile instead of acking 0.
+      if (!state.reliable) return { reconcile: true };
+      return { applied_seq: state.appliedSeq };
     }
     case 'share.announce':
       // App notifies us of its outbound shares; hub store is the source of
@@ -290,6 +309,7 @@ export function executeLocalStoreOp(
     return {
       _error: errorCode(e),
       message: e instanceof Error ? e.message : String(e),
+      ...errorExtra(e),
     };
   }
 }

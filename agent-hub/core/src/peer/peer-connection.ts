@@ -61,6 +61,7 @@ import {
 } from './peer-pending-approvals.js';
 import { loadPairedPeers } from './peer-store.js';
 import { handleInboundStoreFrame } from './peer-store-protocol.js';
+import { startPeerBackup } from './peer-store-backup.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
@@ -319,6 +320,15 @@ export async function drivePeerConnection(opts: {
   // a peer flap does not abort in-flight agent turns.
   const peerSession = getPeerSession(peerId);
   peerSession.liveConnections += 1;
+  const pairedNow = loadPairedPeers().find((p) => p.id === peerId);
+  const backupDevice = pairedNow?.fingerprint ?? '';
+  if (/^[a-f0-9]{16}$/i.test(backupDevice)) {
+    void startPeerBackup(peerId, backupDevice).catch((err) => {
+      log(
+        `store backup pull failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
   const acpClients = peerSession.acpClients;
   // Pending tool-call approvals: confirmationId → waiter. The phone replies
   // with agent_approval_resp; a peer disconnect MIGRATES the waiter (kept
