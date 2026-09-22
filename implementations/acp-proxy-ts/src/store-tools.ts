@@ -101,9 +101,9 @@ export const storeToolDefs: StoreToolDef[] = [
     name: 'store_read',
     description:
       'Read a file by store:// URI (store://<space>/<device>/<path>). ' +
-      'Pass URIs verbatim. This Hub serves its own device directly; another ' +
-      "device's URI runs on the paired App, which applies the same gate as " +
-      'the built-in CLI (allowlist / approval / She-only).',
+      'Pass URIs verbatim. This Hub serves its own device directly. Another ' +
+      "device's URI is read on the paired App while it is connected; if the " +
+      'App cannot be reached, the copy kept on this Hub is used.',
     inputSchema: {
       type: 'object',
       properties: { uri: { type: 'string' } },
@@ -127,7 +127,8 @@ export const storeToolDefs: StoreToolDef[] = [
       'Use depth=1 (default) to browse one folder level at a time — required for ' +
       'cross-agent trees such as store://agents/<device>/ then store://agents/<device>/<agent-uuid>/. ' +
       'Pass depth=0 for a full recursive file listing. Another device\'s tree is ' +
-      'listed on the paired App (same gate as the built-in CLI).',
+      'listed on the paired App while it is connected; if the App cannot be ' +
+      'reached, the copy kept on this Hub is used.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -211,6 +212,20 @@ export class StoreToolsClient {
     }
     const { ok: _ok, ...data } = out;
     return { ok: true, data };
+  }
+
+  /**
+   * The App never answered. A gate rejection or a live "not found" is an
+   * answer and must not be replaced by the Hub mirror.
+   */
+  private appUnreachable(result: StoreToolResult): boolean {
+    if (result.ok) return false;
+    const code = result.code ?? '';
+    if (code === 'peer_offline' || code === 'master_offline' || code === 'not_paired') {
+      return true;
+    }
+    const err = (result.error ?? '').toLowerCase();
+    return err.includes('not connected') || err.includes('timeout waiting for app');
   }
 
   private async json(path: string, init?: RequestInit): Promise<unknown> {
@@ -363,36 +378,38 @@ export class StoreToolsClient {
       if (!uri) return { ok: false, code: 'bad_op', error: 'uri required' };
       if (this.foreignStoreDevice(uri)) {
         const out = await this.storeOnApp('read', { uri });
-        if (!out.ok) return out;
-        const data = (out.data ?? {}) as Record<string, unknown>;
-        const b64 = data.content_base64;
-        const content =
-          typeof data.content === 'string'
-            ? data.content
-            : typeof b64 === 'string'
-              ? b64
-              : '';
-        const max = 512 * 1024;
-        const raw = b64 !== undefined ? Buffer.from(content, 'base64') : Buffer.from(content);
-        const sliced = raw.length > max ? raw.subarray(0, max) : raw;
-        const size = Number(data.size ?? raw.length) || 0;
-        const text = sliced.toString('utf8');
-        const encoding =
-          b64 !== undefined
-            ? 'base64'
-            : sliced.length > 0 && !text.includes('\uFFFD')
-              ? 'text'
-              : 'base64';
-        return {
-          ok: true,
-          data: {
-            uri,
-            size,
-            truncated: raw.length > max || size > sliced.length,
-            encoding,
-            content: encoding === 'text' ? text : sliced.toString('base64'),
-          },
-        };
+        if (out.ok) {
+          const data = (out.data ?? {}) as Record<string, unknown>;
+          const b64 = data.content_base64;
+          const content =
+            typeof data.content === 'string'
+              ? data.content
+              : typeof b64 === 'string'
+                ? b64
+                : '';
+          const max = 512 * 1024;
+          const raw = b64 !== undefined ? Buffer.from(content, 'base64') : Buffer.from(content);
+          const sliced = raw.length > max ? raw.subarray(0, max) : raw;
+          const size = Number(data.size ?? raw.length) || 0;
+          const text = sliced.toString('utf8');
+          const encoding =
+            b64 !== undefined
+              ? 'base64'
+              : sliced.length > 0 && !text.includes('\uFFFD')
+                ? 'text'
+                : 'base64';
+          return {
+            ok: true,
+            data: {
+              uri,
+              size,
+              truncated: raw.length > max || size > sliced.length,
+              encoding,
+              content: encoding === 'text' ? text : sliced.toString('base64'),
+            },
+          };
+        }
+        if (!this.appUnreachable(out)) return out;
       }
       const meta = (await this.json(`/api/v1/uri/resolve?uri=${encodeURIComponent(uri)}`)) as {
         meta?: { size?: number };
@@ -446,7 +463,8 @@ export class StoreToolsClient {
           depthArg === undefined || depthArg === null || depthArg === ''
             ? undefined
             : String(depthArg);
-        return this.storeOnApp('list', depth ? { uri, depth } : { uri });
+        const live = await this.storeOnApp('list', depth ? { uri, depth } : { uri });
+        if (live.ok || !this.appUnreachable(live)) return live;
       }
       const depthRaw = args.depth;
       const depth =

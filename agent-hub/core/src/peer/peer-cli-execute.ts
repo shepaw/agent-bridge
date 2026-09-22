@@ -40,6 +40,7 @@ export async function requestAppCliExecute(
   if (!peerId) {
     return {
       ok: false,
+      code: 'peer_offline',
       error: 'paired App is not connected; command must run on the phone',
     };
   }
@@ -47,7 +48,11 @@ export async function requestAppCliExecute(
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(reqId);
-      resolve({ ok: false, error: 'timeout waiting for App cli execute' });
+      resolve({
+        ok: false,
+        code: 'peer_offline',
+        error: 'timeout waiting for App cli execute',
+      });
     }, CALL_TIMEOUT_MS);
     pending.set(reqId, { resolve, timer });
     const ok = sendToPeer(peerId, {
@@ -60,6 +65,7 @@ export async function requestAppCliExecute(
       pending.delete(reqId);
       resolve({
         ok: false,
+        code: 'peer_offline',
         error: 'paired App is not connected; command must run on the phone',
       });
     }

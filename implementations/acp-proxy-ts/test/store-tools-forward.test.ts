@@ -118,12 +118,63 @@ describe('store tools — foreign pouch goes through the App', () => {
     expect((out.data as { entries: unknown[] }).entries).toHaveLength(1);
   });
 
+  it('reads the Hub mirror when the App cannot be reached', async () => {
+    const calls: Call[] = [];
+    const handler = async (url: unknown, init?: RequestInit) => {
+      const href = String(url);
+      calls.push({
+        url: href,
+        body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+      });
+      if (href.endsWith('/api/v1/cli/execute')) {
+        return new Response(JSON.stringify({
+          ok: false,
+          code: 'peer_offline',
+          error: 'paired App is not connected; command must run on the phone',
+        }), { status: 200 });
+      }
+      if (href.includes('/api/v1/uri/resolve')) {
+        return new Response(JSON.stringify({ meta: { size: 5 }, size: 5 }), { status: 200 });
+      }
+      return new Response(Buffer.from('hello'), { status: 200 });
+    };
+    const client = new StoreToolsClient(HUB, 'tok', SELF, handler as unknown as typeof fetch, ENV);
+    const out = await executeStoreTool('store_read', { uri: foreignUri }, client);
+    expect(calls.map((call) => call.url)).toEqual([
+      `${HUB}/api/v1/cli/execute`,
+      `${HUB}/api/v1/uri/resolve?uri=${encodeURIComponent(foreignUri)}`,
+      `${HUB}/api/v1/read?uri=${encodeURIComponent(foreignUri)}&offset=0&length=5`,
+    ]);
+    expect(out).toMatchObject({
+      ok: true,
+      data: { content: 'hello', size: 5, truncated: false, encoding: 'text' },
+    });
+  });
+
+  it('lists the Hub mirror when the App cannot be reached', async () => {
+    const uri = `store://files/${FOREIGN}/docs`;
+    const { client, calls } = clientFor((call) => {
+      if (call.url.endsWith('/api/v1/cli/execute')) {
+        return { ok: false, code: 'peer_offline', error: 'paired App is not connected' };
+      }
+      return { entries: [{ path: 'a.txt', kind: 'file' }] };
+    });
+    const out = await executeStoreTool('store_list', { uri, depth: 1 }, client);
+    expect(calls.map((call) => call.url.split('?')[0])).toEqual([
+      `${HUB}/api/v1/cli/execute`,
+      `${HUB}/api/v1/list`,
+    ]);
+    expect(out.ok).toBe(true);
+    expect((out.data as { entries: unknown[] }).entries).toHaveLength(1);
+  });
+
   it('surfaces an App rejection as a tool error', async () => {
-    const { client } = clientFor(() => ({
+    const { client, calls } = clientFor(() => ({
       ok: false,
-      error: "not allowed: store.read",
+      error: 'not allowed: store.read',
     }));
     const out = await executeStoreTool('store_read', { uri: foreignUri }, client);
+    expect(calls).toHaveLength(1);
     expect(out).toMatchObject({
       ok: false,
       code: 'app_cli_error',
