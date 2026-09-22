@@ -322,6 +322,11 @@ export interface PeerServiceConfig {
    * `peer set-name` CLI command, or editing `hub.json`.
    */
   readonly deviceName?: string;
+  /**
+   * Fingerprint of the device that stores this hub's pouch backup.
+   * Absent or equal to this hub means the hub itself is the master.
+   */
+  readonly masterFingerprint?: string;
 }
 
 export interface HubConfig {
@@ -446,8 +451,21 @@ export function setHubPeer(
     port?: number;
     /** Set a custom device name, or `null` to clear back to the hostname default. */
     deviceName?: string | null;
+    /**
+     * Fingerprint of the backup master, or `null` to make this hub its own master.
+     * Ignored when omitted.
+     */
+    masterFingerprint?: string | null;
   },
 ): HubConfig {
+  const masterFingerprint = patch.masterFingerprint === undefined
+    ? config.peer?.masterFingerprint
+    : patch.masterFingerprint === null
+      ? undefined
+      : patch.masterFingerprint.trim().toLowerCase();
+  if (masterFingerprint !== undefined && !/^[a-f0-9]{16}$/.test(masterFingerprint)) {
+    throw Object.assign(new Error('masterFingerprint must be 16 hex characters'), { code: 'bad_path' });
+  }
   const peer = {
     host: patch.host ?? config.peer?.host ?? DEFAULT_PEER_HOST,
     port: patch.port ?? config.peer?.port ?? DEFAULT_PEER_PORT,
@@ -456,6 +474,7 @@ export function setHubPeer(
       : patch.deviceName === null || patch.deviceName.trim().length === 0
         ? {}
         : { deviceName: patch.deviceName.trim() }),
+    ...(masterFingerprint !== undefined && { masterFingerprint }),
   };
   const next: HubConfig = { ...config, peer };
   persist(next.path, next.instances, hubPersistMeta(next));
@@ -1101,7 +1120,14 @@ function parsePeerConfig(v: unknown): PeerServiceConfig | undefined {
   const deviceName = typeof o.deviceName === 'string' && o.deviceName.trim().length > 0
     ? o.deviceName.trim()
     : undefined;
-  return { host, port, ...(deviceName !== undefined && { deviceName }) };
+  const masterRaw = typeof o.masterFingerprint === 'string' ? o.masterFingerprint.trim().toLowerCase() : '';
+  const masterFingerprint = /^[a-f0-9]{16}$/.test(masterRaw) ? masterRaw : undefined;
+  return {
+    host,
+    port,
+    ...(deviceName !== undefined && { deviceName }),
+    ...(masterFingerprint !== undefined && { masterFingerprint }),
+  };
 }
 
 function parseGatewayConfig(v: unknown): GatewayConfig | undefined {

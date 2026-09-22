@@ -50,7 +50,7 @@ export const storeToolDefs: StoreToolDef[] = [
     description:
       'Write a file to the local store pouch and return its store:// URI ' +
       '(prefer runtime: store://runtime/<device>/<owner>/<channel>/artifacts/<task>/<file>). ' +
-      'Local-first; when a master is set, mirrored over the peer channel.',
+      'Local-first. When this hub\'s master is another paired device, commits are mirrored to that device.',
     inputSchema: {
       type: 'object',
       properties: {

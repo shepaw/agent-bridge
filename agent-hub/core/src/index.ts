@@ -124,6 +124,10 @@ export {
   parseStoreUri,
 } from './peer/peer-store-protocol.js';
 export {
+  configuredRemoteMaster,
+  resolveHubMaster,
+} from './peer/peer-master.js';
+export {
   assertSafeAttachmentName,
   clearPeerAttachments,
   deletePeerAttachment,

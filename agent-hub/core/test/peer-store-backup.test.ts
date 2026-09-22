@@ -6,6 +6,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { PeerLocalStore } from '../src/peer/peer-local-store.js';
 import {
   reconcilePeerBackup,
+  replicateToRemote,
   type StoreCaller,
 } from '../src/peer/peer-store-backup.js';
 
@@ -54,6 +55,31 @@ function remoteCall(remote: PeerLocalStore, device: string): StoreCaller {
         );
         return { data: read.data.toString('base64'), size: read.size, eof: read.eof };
       }
+      if (op === 'write.begin') {
+        return remote.writeBegin({
+          deviceId: dev,
+          space,
+          path,
+          size: typeof payload.size === 'number' ? payload.size : -1,
+          sha256: typeof payload.sha256 === 'string' ? payload.sha256 : '',
+          uploadId: typeof payload.upload_id === 'string' ? payload.upload_id : undefined,
+        });
+      }
+      if (op === 'write.chunk') {
+        return remote.writeChunk(
+          dev,
+          String(payload.upload_id ?? ''),
+          typeof payload.offset === 'number' ? payload.offset : 0,
+          Buffer.from(String(payload.data ?? ''), 'base64'),
+        );
+      }
+      if (op === 'commit') {
+        const ids = Array.isArray(payload.upload_ids) ? payload.upload_ids.map(String) : [];
+        return remote.commit(dev, space, ids);
+      }
+      if (op === 'delete') {
+        return remote.delete(dev, space, path);
+      }
       return { _error: 'bad_op' };
     } catch (err) {
       const code = (err as { code?: string }).code ?? 'internal';
@@ -88,13 +114,14 @@ describe('reconcilePeerBackup', () => {
       return remoteCall(remote, device)(op, { ...payload, limit });
     };
     const stats = await reconcilePeerBackup({ store: master, deviceId: device, call });
-    expect(stats.pulled).toBe(2);
-    expect(seen.has('runtime')).toBe(false);
+    expect(stats.pulled).toBe(3);
+    expect(stats.complete).toBe(true);
+    expect(seen.has('runtime')).toBe(true);
     expect(seen.has('files')).toBe(true);
     expect(master.read(device, 'files', 'new.txt').data.toString()).toBe('from-phone');
     expect(master.read(device, 'files', 'changed.txt').data.toString()).toBe('bbbb');
     expect(master.read(device, 'files', 'only-here.txt').data.toString()).toBe('keep');
-    expect(() => master.read(device, 'runtime', 'private.txt')).toThrow();
+    expect(master.read(device, 'runtime', 'private.txt').data.toString()).toBe('secret');
   });
 
   it('does not resurrect a tombstoned file until the remote bytes change', async () => {
@@ -142,5 +169,51 @@ describe('reconcilePeerBackup', () => {
     const meta = master.meta(device, 'public', 'wide.txt');
     expect(meta.size).toBe(text.length);
     expect(meta.sha256).toBe(createHash('sha256').update(text).digest('hex'));
+  });
+
+  it('does not treat a full page without a cursor as finished', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-backup-'));
+    const master = new PeerLocalStore(join(dir, 'master'));
+    const call: StoreCaller = async (op, payload) => {
+      if (op === 'list') {
+        const limit = typeof payload.limit === 'number' ? payload.limit : 500;
+        return {
+          entries: Array.from({ length: limit }, (_, i) => ({
+            path: `f/${i}.txt`,
+            kind: 'file',
+            size: 1,
+          })),
+          next_cursor: null,
+        };
+      }
+      return { _error: 'not_found' };
+    };
+    const stats = await reconcilePeerBackup({
+      store: master,
+      deviceId: 'aaaaaaaaaaaaaaaa',
+      call,
+      spaces: ['files'],
+    });
+    expect(stats.complete).toBe(false);
+  });
+
+  it('pushes this device pouch, including a private space, onto the remote master', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-backup-'));
+    const device = 'aaaaaaaaaaaaaaaa';
+    const local = new PeerLocalStore(join(dir, 'local'));
+    const remote = new PeerLocalStore(join(dir, 'remote'));
+    seed(local, device, 'runtime', 'secret.txt', 'keep-me');
+    seed(local, device, 'files', 'node_modules/pkg/a.txt', 'skip');
+    seed(local, device, 'files', 'note.txt', 'send');
+    const stats = await replicateToRemote({
+      store: local,
+      deviceId: device,
+      call: remoteCall(remote, device),
+      spaces: ['runtime', 'files'],
+    });
+    expect(stats.pulled).toBe(2);
+    expect(remote.read(device, 'runtime', 'secret.txt').data.toString()).toBe('keep-me');
+    expect(remote.read(device, 'files', 'note.txt').data.toString()).toBe('send');
+    expect(() => remote.read(device, 'files', 'node_modules/pkg/a.txt')).toThrow();
   });
 });

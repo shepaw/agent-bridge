@@ -504,4 +504,108 @@ describe('PeerLocalStore', () => {
     expect(store.appliedSeq(device)).toBe(5);
     expect(store.cursorState(device).reliable).toBe(true);
   });
+
+  it('backup inventory skips node_modules and symlinks that leave the space', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const write = (path: string, text: string) => {
+      const content = Buffer.from(text);
+      const sha = createHash('sha256').update(content).digest('hex');
+      const begin = store.writeBegin({
+        deviceId: device,
+        space: 'files',
+        path,
+        size: content.length,
+        sha256: sha,
+      });
+      store.writeChunk(device, begin.upload_id, 0, content);
+      store.commit(device, 'files', [begin.upload_id]);
+    };
+    write('note.txt', 'keep');
+    write('node_modules/pkg/a.txt', 'skip');
+    const outside = join(dir, 'outside');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'secret.txt'), 'nope');
+    symlinkSync(outside, join(dir, device, 'files', 'linked'));
+    const backup = store.listPage({
+      deviceId: device,
+      space: 'files',
+      includeHidden: true,
+      forBackup: true,
+      computeHash: false,
+    });
+    expect(backup.entries.map((entry) => entry.path)).toEqual(['note.txt']);
+    const browse = store.list(device, 'files');
+    expect(browse.some((entry) => entry.path.startsWith('node_modules/'))).toBe(true);
+  });
+
+  it('a peer that names a caller as master can be read, and clearing the claim keeps files', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const owner = 'bbbbbbbbbbbbbbbb';
+    const caller = 'cccccccccccccccc';
+    const content = Buffer.from('private');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: owner,
+      space: 'runtime',
+      path: 'secret.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    store.writeChunk(owner, begin.upload_id, 0, content);
+    store.commit(owner, 'runtime', [begin.upload_id]);
+
+    const denied = handleInboundStoreFrame(
+      { type: 'store', ns: 'store', op: 'read', v: 1, req_id: 'p1', space: 'runtime', device: owner, path: 'secret.txt' },
+      { peerId: 'peer-1', callerDeviceId: caller, store },
+    );
+    expect(denied?.op).toBe('error');
+
+    const hello = handleInboundStoreFrame(
+      { type: 'store', ns: 'store', op: 'sync.hello', v: 1, req_id: 'h2', master: caller },
+      { peerId: 'peer-1', callerDeviceId: owner, store },
+    );
+    expect(hello?.op).toBe('result');
+    expect(store.announcedMaster(owner)).toBe(caller);
+
+    const allowed = handleInboundStoreFrame(
+      { type: 'store', ns: 'store', op: 'read', v: 1, req_id: 'p2', space: 'runtime', device: owner, path: 'secret.txt' },
+      { peerId: 'peer-1', callerDeviceId: caller, store },
+    );
+    expect(allowed?.op).toBe('result');
+
+    handleInboundStoreFrame(
+      { type: 'store', ns: 'store', op: 'sync.hello', v: 1, req_id: 'h3', master: '' },
+      { peerId: 'peer-1', callerDeviceId: owner, store },
+    );
+    expect(store.announcedMaster(owner)).toBeNull();
+    expect(store.read(owner, 'runtime', 'secret.txt').data.toString()).toBe('private');
+  });
+
+  it('writeBegin resumes an open upload for the same path', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const content = Buffer.from('abcdef');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'resume.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    store.writeChunk(device, begin.upload_id, 0, content.subarray(0, 3));
+    const again = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'resume.txt',
+      size: content.length,
+      sha256: sha,
+    });
+    expect(again.upload_id).toBe(begin.upload_id);
+    expect(again.received).toBe(3);
+  });
 });

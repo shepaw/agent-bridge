@@ -15,6 +15,7 @@ import {
 } from './peer-local-store.js';
 import { loadPairedPeers } from './peer-store.js';
 import { sendToPeer } from './peer-connection.js';
+import { callerMayReadPrivate, selfStoreDeviceId } from './peer-master.js';
 
 const CALL_TIMEOUT_MS = 15_000;
 
@@ -126,7 +127,7 @@ export function handleInboundStoreFrame(
   }
 
   try {
-    const data = dispatchLocal(store, op, frame, opts.callerDeviceId);
+    const data = dispatchLocal(store, op, frame, opts.callerDeviceId, opts.peerId);
     return resultFrame(reqId, data);
   } catch (e) {
     return errorFrame(
@@ -143,6 +144,7 @@ function dispatchLocal(
   op: string,
   frame: Record<string, unknown>,
   callerDeviceId: string,
+  peerId?: string,
 ): Record<string, unknown> {
   const space = typeof frame.space === 'string' ? frame.space : undefined;
   const device =
@@ -152,7 +154,7 @@ function dispatchLocal(
   switch (op) {
     case 'list': {
       if (!space) throw Object.assign(new Error('space required'), { code: 'bad_op' });
-      assertReadable(space, device, callerDeviceId);
+      assertReadable(store, space, device, callerDeviceId);
       const prefix = typeof frame.path === 'string' ? frame.path : undefined;
       const limit = typeof frame.limit === 'number' ? frame.limit : 1000;
       const depth =
@@ -169,18 +171,19 @@ function dispatchLocal(
         depth: Number.isFinite(depth) ? depth : undefined,
         computeHash: frame.hash !== false,
         cursor: typeof frame.cursor === 'string' ? frame.cursor : undefined,
-        includeHidden: frame.include_hidden === true,
+        includeHidden: frame.include_hidden === true || frame.backup === true,
+        forBackup: frame.backup === true,
       });
       return { entries: page.entries, next_cursor: page.next_cursor };
     }
     case 'meta': {
       if (!space || !path) throw Object.assign(new Error('space/path required'), { code: 'bad_op' });
-      assertReadable(space, device, callerDeviceId);
+      assertReadable(store, space, device, callerDeviceId);
       return store.meta(device, space, path);
     }
     case 'read': {
       if (!space || !path) throw Object.assign(new Error('space/path required'), { code: 'bad_op' });
-      assertReadable(space, device, callerDeviceId);
+      assertReadable(store, space, device, callerDeviceId);
       const offset = typeof frame.offset === 'number' ? frame.offset : 0;
       const length = typeof frame.length === 'number' ? frame.length : 64 * 1024;
       const { data, size, eof } = store.read(device, space, path, offset, length);
@@ -222,9 +225,25 @@ function dispatchLocal(
     case 'sync.hello': {
       const target =
         typeof frame.device === 'string' ? frame.device : callerDeviceId;
+      if (typeof frame.master === 'string') {
+        const master = frame.master.trim().toLowerCase();
+        const recorded = /^[a-f0-9]{16}$/.test(master) ? master : null;
+        store.setAnnouncedMaster(callerDeviceId, recorded);
+        let self = '';
+        try {
+          self = selfStoreDeviceId();
+        } catch {
+          self = '';
+        }
+        if (recorded && peerId && self && recorded === self) {
+          void import('./peer-store-backup.js')
+            .then((mod) => mod.startPeerBackup(peerId, callerDeviceId))
+            .catch(() => undefined);
+        }
+      }
       const state = store.cursorState(target);
-      // Unreadable cursor is not "synced through 0". The connect path pulls
-      // shared spaces by content; tell the peer to reconcile instead of acking 0.
+      // Unreadable cursor is not "synced through 0". Content reconcile
+      // runs when this hub is the caller's master.
       if (!state.reliable) return { reconcile: true };
       return { applied_seq: state.appliedSeq };
     }
@@ -238,12 +257,18 @@ function dispatchLocal(
   }
 }
 
-function assertReadable(space: string, device: string, caller: string): void {
+function assertReadable(
+  store: PeerLocalStore,
+  space: string,
+  device: string,
+  caller: string,
+): void {
   if (!ALL_SPACES.has(space)) {
     throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
   }
   if (device === caller) return;
   if (SHARED_SPACES.has(space)) return;
+  if (callerMayReadPrivate(store, device, caller)) return;
   throw Object.assign(new Error('acl_denied'), { code: 'acl_denied' });
 }
 
@@ -304,7 +329,26 @@ export function executeLocalStoreOp(
   selfDeviceId: string,
 ): Record<string, unknown> {
   try {
-    return dispatchLocal(getPeerLocalStore(), op, payload, selfDeviceId);
+    const data = dispatchLocal(getPeerLocalStore(), op, payload, selfDeviceId);
+    if (!data._error && (op === 'commit' || op === 'delete')) {
+      const space = typeof payload.space === 'string' ? payload.space : '';
+      const paths = op === 'delete'
+        ? [typeof payload.path === 'string' ? payload.path : '']
+        : Array.isArray(data.paths)
+          ? data.paths.map(String)
+          : [];
+      if (space && paths.some((item) => item.length > 0)) {
+        void import('./peer-store-backup.js')
+          .then((mod) => {
+            for (const path of paths) {
+              if (!path) continue;
+              mod.scheduleMirrorLocalChange(selfDeviceId, space, path, op === 'delete');
+            }
+          })
+          .catch(() => undefined);
+      }
+    }
+    return data;
   } catch (e) {
     return {
       _error: errorCode(e),

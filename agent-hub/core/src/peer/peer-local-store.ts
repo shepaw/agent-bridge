@@ -289,6 +289,8 @@ export class PeerLocalStore {
     computeHash?: boolean;
     cursor?: string;
     includeHidden?: boolean;
+    /** Backup inventory: skip node_modules/.git and symlinks that leave this space. */
+    forBackup?: boolean;
   }): { entries: StoreEntryJson[]; next_cursor: string | null } {
     const {
       deviceId,
@@ -299,6 +301,7 @@ export class PeerLocalStore {
       computeHash = true,
       cursor,
       includeHidden = false,
+      forBackup = false,
     } = opts;
     if (!ALL_SPACES.has(space)) {
       throw Object.assign(new Error('bad_op'), { code: 'bad_op' });
@@ -311,8 +314,26 @@ export class PeerLocalStore {
     const seenDirs = new Set<string>();
     const pending: ListedNode[] = [];
 
+    const spaceReal = (() => {
+      try {
+        return realpathSync(base);
+      } catch {
+        return base;
+      }
+    })();
+    const leavesSpace = (abs: string): boolean => {
+      if (!forBackup) return false;
+      try {
+        const real = realpathSync(abs);
+        return real !== spaceReal && !real.startsWith(spaceReal + sep);
+      } catch {
+        return true;
+      }
+    };
+
     const skipName = (name: string): boolean => {
       if (name === '.' || name === '..' || isCommitTmpName(name)) return true;
+      if (forBackup && (name === 'node_modules' || name === '.git')) return true;
       if (!includeHidden && name.startsWith('.')) return true;
       return false;
     };
@@ -350,6 +371,7 @@ export class PeerLocalStore {
         for (const name of names) {
           if (skipName(name)) continue;
           const abs = join(dir, name);
+          if (leavesSpace(abs)) continue;
           const childRel = rel ? `${rel}/${name}` : name;
           let st: Stats;
           try {
@@ -383,6 +405,7 @@ export class PeerLocalStore {
         for (const name of names) {
           if (skipName(name)) continue;
           const abs = join(dir, name);
+          if (leavesSpace(abs)) continue;
           const childRel = rel ? `${rel}/${name}` : name;
           let st: Stats;
           try {
@@ -497,10 +520,13 @@ export class PeerLocalStore {
     if (!ALL_SPACES.has(opts.space) || !isSafeRelPath(opts.path)) {
       throw Object.assign(new Error('bad_path'), { code: 'bad_path' });
     }
-    const uploadId = opts.uploadId ?? randomUUID();
+    const open = opts.uploadId
+      ? null
+      : this.findOpenStaging(opts.deviceId, opts.space, opts.path);
+    const uploadId = opts.uploadId ?? open?.uploadId ?? randomUUID();
     const staging = join(this.root, '.staging', opts.deviceId, uploadId);
     const metaPath = join(staging, 'meta.json');
-    if (opts.uploadId && existsSync(metaPath)) {
+    if ((opts.uploadId || open) && existsSync(metaPath)) {
       const existing = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
       if (
         existing.deviceId !== opts.deviceId ||
@@ -509,7 +535,14 @@ export class PeerLocalStore {
       ) {
         throw Object.assign(new Error('staging_state'), { code: 'staging_state' });
       }
-      return { upload_id: uploadId, received: existing.received };
+      if (
+        open &&
+        (existing.sha256 !== opts.sha256 || existing.size !== opts.size)
+      ) {
+        /* different object: start a new upload below */
+      } else {
+        return { upload_id: uploadId, received: existing.received };
+      }
     }
     ensureDir(staging);
     const meta: StagingMeta = {
@@ -571,8 +604,9 @@ export class PeerLocalStore {
     space: string,
     uploadIds: string[],
     uptoSeq?: number,
-  ): { failed: unknown[]; applied_seq?: number } {
+  ): { failed: unknown[]; applied_seq?: number; paths: string[] } {
     const failed: unknown[] = [];
+    const paths: string[] = [];
     for (const uploadId of uploadIds) {
       try {
         const staging = join(this.root, '.staging', deviceId, uploadId);
@@ -597,6 +631,7 @@ export class PeerLocalStore {
         atomicWriteFile(dest, data);
         this.clearTombstonePath(deviceId, space, meta.path);
         rmSync(staging, { recursive: true, force: true });
+        paths.push(meta.path);
       } catch (e) {
         failed.push({
           upload_id: uploadId,
@@ -606,9 +641,9 @@ export class PeerLocalStore {
     }
     if (typeof uptoSeq === 'number' && failed.length === 0) {
       this.setAppliedSeq(deviceId, uptoSeq);
-      return { failed, applied_seq: uptoSeq };
+      return { failed, applied_seq: uptoSeq, paths };
     }
-    return { failed, applied_seq: this.appliedSeq(deviceId) };
+    return { failed, applied_seq: this.appliedSeq(deviceId), paths };
   }
 
   delete(
@@ -640,6 +675,80 @@ export class PeerLocalStore {
     rmSync(abs, { recursive: true, force: true });
     if (typeof uptoSeq === 'number') this.setAppliedSeq(deviceId, uptoSeq);
     return { applied_seq: this.appliedSeq(deviceId) };
+  }
+
+  /** Resume an unfinished upload for the same object, if one is still staged. */
+  findOpenStaging(
+    deviceId: string,
+    space: string,
+    path: string,
+  ): { uploadId: string; received: number; size: number; sha256: string } | null {
+    const root = join(this.root, '.staging', deviceId);
+    if (!existsSync(root)) return null;
+    let names: string[];
+    try {
+      names = readdirSync(root);
+    } catch {
+      return null;
+    }
+    for (const uploadId of names) {
+      const metaPath = join(root, uploadId, 'meta.json');
+      if (!existsSync(metaPath)) continue;
+      try {
+        const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
+        if (meta.space === space && meta.path === path && meta.deviceId === deviceId) {
+          return {
+            uploadId,
+            received: meta.received,
+            size: meta.size,
+            sha256: meta.sha256,
+          };
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /** Master fingerprint announced by this device, or null when it has not chosen one. */
+  announcedMaster(deviceId: string): string | null {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return null;
+    const file = this.masterFile(id);
+    if (!existsSync(file)) return null;
+    try {
+      const raw = JSON.parse(readFileSync(file, 'utf-8')) as { master?: unknown };
+      const master = typeof raw.master === 'string' ? raw.master.trim().toLowerCase() : '';
+      return /^[a-f0-9]{16}$/.test(master) ? master : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record that `deviceId` named `master` as its backup master.
+   * `null` clears the claim. The mirrored files stay on disk either way.
+   */
+  setAnnouncedMaster(deviceId: string, master: string | null): void {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return;
+    const file = this.masterFile(id);
+    if (master === null || !/^[a-f0-9]{16}$/i.test(master)) {
+      if (existsSync(file)) rmSync(file, { force: true });
+      return;
+    }
+    atomicWriteFile(file, JSON.stringify({ master: master.toLowerCase() }));
+  }
+
+  listTombstones(deviceId: string): TombstoneEntry[] {
+    const id = normalizeDeviceId(deviceId);
+    if (!id) return [];
+    return this.readTombstones(id);
+  }
+
+  private masterFile(id: string): string {
+    return join(this.root, '.masters', `${id}.json`);
   }
 
   /** Drop abandoned uploads so a failed transfer cannot fill the disk. */

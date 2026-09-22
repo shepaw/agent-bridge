@@ -8,6 +8,7 @@
  * GET    /api/peer/devices         — list paired devices
  * DELETE /api/peer/devices/:fp     — revoke a paired device
  * PUT    /api/peer/device-name     — set the advertised device name ('' clears → hostname)
+ * PUT    /api/peer/master          — set backup master ('self' or a paired fingerprint)
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -18,6 +19,7 @@ import {
   mintPairingQr,
   peerServiceStatus,
   removePairedPeer,
+  resolveHubMaster,
   resolvePeerDeviceName,
   setHubPeer,
   startPeerService,
@@ -30,7 +32,12 @@ peerRouter.get('/', (_req: Request, res: Response) => {
   try {
     const status = peerServiceStatus();
     const devices = loadPairedPeers();
-    res.json({ status, devices });
+    const master = resolveHubMaster();
+    res.json({
+      status,
+      devices,
+      master: master.self ? 'self' : master.fingerprint,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -102,6 +109,32 @@ peerRouter.put('/device-name', (req: Request, res: Response) => {
     const cfg = loadOrCreateHubConfig();
     setHubPeer(cfg, { deviceName: name });
     res.json({ ok: true, deviceName: resolvePeerDeviceName(loadOrCreateHubConfig()) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** PUT /api/peer/master — 'self' keeps the pouch here; a fingerprint replicates to that device. */
+peerRouter.put('/master', (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const raw = body.master;
+    if (typeof raw !== 'string') {
+      res.status(400).json({ error: 'master must be "self" or a device fingerprint' });
+      return;
+    }
+    const master = raw.trim().toLowerCase();
+    const cfg = loadOrCreateHubConfig();
+    if (master === 'self' || master === '') {
+      setHubPeer(cfg, { masterFingerprint: null });
+    } else if (/^[a-f0-9]{16}$/.test(master)) {
+      setHubPeer(cfg, { masterFingerprint: master });
+    } else {
+      res.status(400).json({ error: 'master must be "self" or a 16-hex fingerprint' });
+      return;
+    }
+    const resolved = resolveHubMaster();
+    res.json({ ok: true, master: resolved.self ? 'self' : resolved.fingerprint });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

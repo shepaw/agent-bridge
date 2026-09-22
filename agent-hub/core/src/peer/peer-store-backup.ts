@@ -1,16 +1,27 @@
 /**
- * Master-side backup: when a paired device is online, copy its shared spaces
- * onto this hub. Private spaces stay push-only. A missing remote path is not
- * a delete — only an explicit delete frame removes a local copy.
+ * Pouch backup in two directions:
+ * - A peer that names this hub as master: pull their whole pouch into
+ *   `<root>/<their device>/`. Clearing the claim stops the pull; files stay.
+ * - This hub names another device as master: push this hub's pouch there.
+ *   When this hub is its own master, nothing is pushed.
+ *
+ * A missing remote path is not a delete. Only an explicit delete (or a
+ * tombstone we ourselves recorded) removes a copy.
  */
 
+import { loadPairedPeers } from './peer-store.js';
 import {
+  ALL_SPACES,
   getPeerLocalStore,
   MAX_CHUNK,
-  SHARED_SPACES,
   type PeerLocalStore,
 } from './peer-local-store.js';
 import { callStoreOnPeerId } from './peer-store-protocol.js';
+import {
+  configuredRemoteMaster,
+  hubIsAnnouncedMaster,
+  selfStoreDeviceId,
+} from './peer-master.js';
 
 export type StoreCaller = (
   op: string,
@@ -21,41 +32,114 @@ export interface ReconcileStats {
   pulled: number;
   skipped: number;
   incomplete: number;
+  /** False when a page came back full and without next_cursor. */
+  complete: boolean;
 }
 
+const BACKUP_PAGE = 500;
 const inFlight = new Map<string, Promise<ReconcileStats>>();
 
 function emptyStats(): ReconcileStats {
-  return { pulled: 0, skipped: 0, incomplete: 0 };
+  return { pulled: 0, skipped: 0, incomplete: 0, complete: true };
 }
 
-/** Pull shared spaces for one paired device. Concurrent calls share one run. */
+export function backupPathExcluded(path: string): boolean {
+  return path.split('/').some((part) => part === 'node_modules' || part === '.git');
+}
+
+/** Pull a peer's pouch. Concurrent calls for the same device share one run. */
 export function startPeerBackup(peerId: string, deviceId: string): Promise<ReconcileStats> {
   const id = deviceId.trim().toLowerCase();
   if (!/^[a-f0-9]{16}$/.test(id)) return Promise.resolve(emptyStats());
-  const existing = inFlight.get(id);
+  const existing = inFlight.get(`pull:${id}`);
   if (existing) return existing;
   const job = reconcilePeerBackup({
     store: getPeerLocalStore(),
     deviceId: id,
     call: (op, payload) => callStoreOnPeerId(peerId, op, payload),
   }).finally(() => {
-    inFlight.delete(id);
+    inFlight.delete(`pull:${id}`);
   });
-  inFlight.set(id, job);
+  inFlight.set(`pull:${id}`, job);
   return job;
+}
+
+/**
+ * On connect: pull if this peer has named us master; push if we named them master.
+ */
+export function onPeerConnectedForBackup(peerId: string, fingerprint: string): Promise<void> {
+  const id = fingerprint.trim().toLowerCase();
+  if (!/^[a-f0-9]{16}$/.test(id)) return Promise.resolve();
+  const tasks: Promise<unknown>[] = [];
+  const store = getPeerLocalStore();
+  if (hubIsAnnouncedMaster(store, id)) tasks.push(startPeerBackup(peerId, id));
+  if (configuredRemoteMaster() === id) tasks.push(pushLocalPouch(peerId));
+  return Promise.all(tasks).then(() => undefined);
+}
+
+/** Push this hub's pouch to the paired device that is our master. */
+export function pushLocalPouch(peerId: string): Promise<ReconcileStats> {
+  let self = '';
+  try {
+    self = selfStoreDeviceId();
+  } catch {
+    return Promise.resolve(emptyStats());
+  }
+  const existing = inFlight.get(`push:${self}`);
+  if (existing) return existing;
+  const job = replicateToRemote({
+    store: getPeerLocalStore(),
+    deviceId: self,
+    call: (op, payload) => callStoreOnPeerId(peerId, op, payload),
+  }).finally(() => {
+    inFlight.delete(`push:${self}`);
+  });
+  inFlight.set(`push:${self}`, job);
+  return job;
+}
+
+/** After a local commit or delete, send that one path to the remote master. */
+export function scheduleMirrorLocalChange(
+  deviceId: string,
+  space: string,
+  path: string,
+  deleted: boolean,
+): void {
+  const master = configuredRemoteMaster();
+  if (!master || deviceId.trim().toLowerCase() !== selfStoreDeviceId()) return;
+  if (backupPathExcluded(path)) return;
+  const peer = loadPairedPeers().find((item) => item.fingerprint.toLowerCase() === master);
+  if (!peer) return;
+  void pushOnePath(peer.id, space, path, deleted).catch(() => undefined);
 }
 
 export async function reconcilePeerBackup(opts: {
   store: PeerLocalStore;
   deviceId: string;
   call: StoreCaller;
+  spaces?: Iterable<string>;
 }): Promise<ReconcileStats> {
   const stats = emptyStats();
   const deviceId = opts.deviceId.trim().toLowerCase();
   opts.store.gcStaging();
-  for (const space of SHARED_SPACES) {
+  const spaces = opts.spaces ?? ALL_SPACES;
+  for (const space of spaces) {
     await reconcileSpace(opts.store, deviceId, space, opts.call, stats);
+  }
+  return stats;
+}
+
+export async function replicateToRemote(opts: {
+  store: PeerLocalStore;
+  deviceId: string;
+  call: StoreCaller;
+  spaces?: Iterable<string>;
+}): Promise<ReconcileStats> {
+  const stats = emptyStats();
+  const deviceId = opts.deviceId.trim().toLowerCase();
+  const spaces = opts.spaces ?? ALL_SPACES;
+  for (const space of spaces) {
+    await pushSpace(opts.store, deviceId, space, opts.call, stats);
   }
   return stats;
 }
@@ -72,7 +156,10 @@ async function reconcileSpace(
   let cursor: string | undefined;
   for (let page = 0; page < 20_000; page++) {
     if (cursor) {
-      if (seenCursors.has(cursor)) return;
+      if (seenCursors.has(cursor)) {
+        stats.complete = false;
+        return;
+      }
       seenCursors.add(cursor);
     }
     const listed = await call('list', {
@@ -80,16 +167,20 @@ async function reconcileSpace(
       device: deviceId,
       hash: false,
       include_hidden: true,
-      limit: 500,
+      backup: true,
+      limit: BACKUP_PAGE,
       ...(cursor ? { cursor } : {}),
     });
-    if (listed._error) return;
+    if (listed._error) {
+      stats.complete = false;
+      return;
+    }
     const entries = Array.isArray(listed.entries) ? listed.entries : [];
     for (const raw of entries) {
       if (!raw || typeof raw !== 'object') continue;
       const entry = raw as { path?: unknown; size?: unknown; sha256?: unknown; kind?: unknown };
       if (entry.kind === 'dir') continue;
-      if (typeof entry.path !== 'string' || !entry.path) continue;
+      if (typeof entry.path !== 'string' || !entry.path || backupPathExcluded(entry.path)) continue;
       try {
         const pulled = await reconcileFile(store, deviceId, space, entry, local, call);
         if (pulled === 'pulled') stats.pulled += 1;
@@ -100,8 +191,159 @@ async function reconcileSpace(
       }
     }
     const next = listed.next_cursor;
-    if (typeof next !== 'string' || !next) return;
+    if (typeof next !== 'string' || !next) {
+      if (entries.length >= BACKUP_PAGE) stats.complete = false;
+      return;
+    }
     cursor = next;
+  }
+  stats.complete = false;
+}
+
+async function pushSpace(
+  store: PeerLocalStore,
+  deviceId: string,
+  space: string,
+  call: StoreCaller,
+  stats: ReconcileStats,
+): Promise<void> {
+  const remote = new Map<string, number>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 20_000; page++) {
+    if (cursor) {
+      if (seenCursors.has(cursor)) {
+        stats.complete = false;
+        break;
+      }
+      seenCursors.add(cursor);
+    }
+    const listed = await call('list', {
+      space,
+      device: deviceId,
+      hash: false,
+      include_hidden: true,
+      backup: true,
+      limit: BACKUP_PAGE,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (listed._error) {
+      stats.complete = false;
+      break;
+    }
+    const entries = Array.isArray(listed.entries) ? listed.entries : [];
+    for (const raw of entries) {
+      if (!raw || typeof raw !== 'object') continue;
+      const entry = raw as { path?: unknown; size?: unknown; kind?: unknown };
+      if (entry.kind === 'dir' || typeof entry.path !== 'string') continue;
+      if (backupPathExcluded(entry.path)) continue;
+      remote.set(entry.path, typeof entry.size === 'number' ? entry.size : -1);
+    }
+    const next = listed.next_cursor;
+    if (typeof next !== 'string' || !next) {
+      if (entries.length >= BACKUP_PAGE) stats.complete = false;
+      break;
+    }
+    cursor = next;
+  }
+
+  let localCursor: string | undefined;
+  const seenLocal = new Set<string>();
+  for (let page = 0; page < 20_000; page++) {
+    const listed = store.listPage({
+      deviceId,
+      space,
+      limit: BACKUP_PAGE,
+      computeHash: false,
+      includeHidden: true,
+      forBackup: true,
+      cursor: localCursor,
+    });
+    for (const entry of listed.entries) {
+      if (entry.kind === 'dir' || backupPathExcluded(entry.path)) continue;
+      try {
+        const remoteSize = remote.get(entry.path);
+        if (remoteSize === entry.size) {
+          const localMeta = store.meta(deviceId, space, entry.path);
+          const remoteMeta = await call('meta', { space, device: deviceId, path: entry.path });
+          if (!remoteMeta._error && remoteMeta.sha256 === localMeta.sha256) {
+            stats.skipped += 1;
+            continue;
+          }
+        }
+        await pushFile(store, deviceId, space, entry.path, call);
+        stats.pulled += 1;
+      } catch {
+        stats.incomplete += 1;
+      }
+    }
+    if (!listed.next_cursor || seenLocal.has(listed.next_cursor)) break;
+    seenLocal.add(listed.next_cursor);
+    localCursor = listed.next_cursor;
+  }
+
+  for (const tomb of store.listTombstones(deviceId)) {
+    if (tomb.space !== space || backupPathExcluded(tomb.path)) continue;
+    if (!remote.has(tomb.path)) continue;
+    const meta = await call('meta', { space, device: deviceId, path: tomb.path });
+    if (meta._error || meta.sha256 !== tomb.sha256 || meta.size !== tomb.size) continue;
+    const deleted = await call('delete', { space, device: deviceId, path: tomb.path });
+    if (deleted._error) stats.incomplete += 1;
+  }
+}
+
+async function pushOnePath(peerId: string, space: string, path: string, deleted: boolean): Promise<void> {
+  const store = getPeerLocalStore();
+  const deviceId = selfStoreDeviceId();
+  const call: StoreCaller = (op, payload) => callStoreOnPeerId(peerId, op, payload);
+  if (deleted) {
+    const tomb = store.tombstone(deviceId, space, path);
+    if (!tomb) return;
+    await call('delete', { space, device: deviceId, path });
+    return;
+  }
+  await pushFile(store, deviceId, space, path, call);
+}
+
+async function pushFile(
+  store: PeerLocalStore,
+  deviceId: string,
+  space: string,
+  path: string,
+  call: StoreCaller,
+): Promise<void> {
+  const meta = store.meta(deviceId, space, path);
+  const size = typeof meta.size === 'number' ? meta.size : -1;
+  const sha256 = typeof meta.sha256 === 'string' ? meta.sha256 : '';
+  if (!sha256 || size < 0 || meta.kind === 'dir') return;
+  const begin = await call('write.begin', { space, device: deviceId, path, size, sha256 });
+  if (begin._error) {
+    throw Object.assign(new Error(String(begin._error)), { code: String(begin._error) });
+  }
+  const uploadId = String(begin.upload_id ?? '');
+  let offset = typeof begin.received === 'number' ? begin.received : 0;
+  const maxSteps = Math.ceil(size / MAX_CHUNK) + 2;
+  for (let step = 0; step < maxSteps && offset < size; step++) {
+    const part = store.read(deviceId, space, path, offset, MAX_CHUNK);
+    const chunked = await call('write.chunk', {
+      space,
+      device: deviceId,
+      upload_id: uploadId,
+      offset,
+      data: part.data.toString('base64'),
+    });
+    if (chunked._error) {
+      throw Object.assign(new Error(String(chunked._error)), { code: String(chunked._error) });
+    }
+    offset += part.data.length;
+    if (part.eof && offset >= size) break;
+  }
+  if (offset !== size) {
+    throw Object.assign(new Error('short_read'), { code: 'short_read' });
+  }
+  const committed = await call('commit', { space, device: deviceId, upload_ids: [uploadId] });
+  if (committed._error || (Array.isArray(committed.failed) && committed.failed.length > 0)) {
+    throw Object.assign(new Error('commit_failed'), { code: 'commit_failed' });
   }
 }
 
@@ -117,13 +359,14 @@ async function localSizes(
     const listed = store.listPage({
       deviceId,
       space,
-      limit: 500,
+      limit: BACKUP_PAGE,
       computeHash: false,
       includeHidden: true,
+      forBackup: true,
       cursor,
     });
     for (const entry of listed.entries) {
-      if (entry.kind === 'dir') continue;
+      if (entry.kind === 'dir' || backupPathExcluded(entry.path)) continue;
       sizes.set(entry.path, entry.size);
     }
     if (!listed.next_cursor || seen.has(listed.next_cursor)) break;
@@ -195,7 +438,7 @@ async function pullFile(
     size: described.size,
     sha256: described.sha256,
   });
-  let offset = 0;
+  let offset = begin.received;
   const maxSteps = Math.ceil(described.size / MAX_CHUNK) + 2;
   for (let step = 0; step < maxSteps && offset < described.size; step++) {
     const part = await call('read', {
@@ -213,8 +456,6 @@ async function pullFile(
       throw Object.assign(new Error('short_read'), { code: 'short_read' });
     }
     const requested = Math.min(MAX_CHUNK, described.size - offset);
-    // A peer that ignores offset returns the whole object. Slice that at the
-    // requested window; a longer honoured window is just its leading bytes.
     const chunk =
       offset > 0 && buf.length > requested && buf.length >= described.size
         ? buf.subarray(offset, Math.min(buf.length, offset + requested))

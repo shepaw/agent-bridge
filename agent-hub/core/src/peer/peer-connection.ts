@@ -61,7 +61,7 @@ import {
 } from './peer-pending-approvals.js';
 import { loadPairedPeers } from './peer-store.js';
 import { handleInboundStoreFrame } from './peer-store-protocol.js';
-import { startPeerBackup } from './peer-store-backup.js';
+import { onPeerConnectedForBackup } from './peer-store-backup.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
@@ -323,9 +323,9 @@ export async function drivePeerConnection(opts: {
   const pairedNow = loadPairedPeers().find((p) => p.id === peerId);
   const backupDevice = pairedNow?.fingerprint ?? '';
   if (/^[a-f0-9]{16}$/i.test(backupDevice)) {
-    void startPeerBackup(peerId, backupDevice).catch((err) => {
+    void onPeerConnectedForBackup(peerId, backupDevice).catch((err) => {
       log(
-        `store backup pull failed: ${err instanceof Error ? err.message : String(err)}`,
+        `store backup sync failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
   }
