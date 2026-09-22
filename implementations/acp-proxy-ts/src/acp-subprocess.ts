@@ -1204,15 +1204,14 @@ export class AcpSubprocess {
           throw new Error(msg);
         }
 
-        // resume/load rejected. Empty session/list is `unknown` (typical after
-        // Cursor idle death) — do not treat it as gone. Fork only when:
-        //   - list is non-empty and the id is missing (`no`), or
-        //   - we cannot tell (`unknown`) BUT the app sent prior history, so we
-        //     can rehydrate instead of opening a blank chat.
+        // resume/load rejected. Empty session/list is `unknown` (typical right
+        // after a Cursor or gateway restart) — the session often still exists
+        // on disk. Fork only when the list is non-empty and the id is missing
+        // (`no`). Prior history must not override that: rehydrating into
+        // session/new while the list is empty orphans the real upstream
+        // session and titles the new one with the history preamble.
         const existence = await this.upstreamSessionExists(storedId);
-        const canRehydrate =
-          opts.priorHistory !== undefined && opts.priorHistory.length > 0;
-        if (existence === 'yes' || (existence === 'unknown' && !canRehydrate)) {
+        if (existence !== 'no') {
           const msg =
             `Bound ACP session ${storedId} for shepaw ${shepawSessionId} could not be resumed` +
             (existence === 'yes'
@@ -1223,15 +1222,16 @@ export class AcpSubprocess {
           throw new Error(msg);
         }
 
+        const canRehydrate =
+          opts.priorHistory !== undefined && opts.priorHistory.length > 0;
         log(
-          'stored ACP session %s %s; creating new session for shepaw %s (rehydrate=%s)',
+          'stored ACP session %s confirmed gone from session/list; creating new session for shepaw %s (rehydrate=%s)',
           storedId,
-          existence === 'no' ? 'confirmed gone from session/list' : 'unverified after restore failure',
           shepawSessionId,
           canRehydrate,
         );
         console.error(
-          `[acp-proxy] bound upstream ${storedId} ${existence === 'no' ? 'gone' : 'unverified'}; ` +
+          `[acp-proxy] bound upstream ${storedId} gone; ` +
             `forking new session for shepaw=${shepawSessionId} rehydrate=${canRehydrate}`,
         );
         opts.onAbandonedAcpSessionId?.(storedId);

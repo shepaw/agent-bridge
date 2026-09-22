@@ -160,7 +160,7 @@ describe('getOrCreateSession strict binding', () => {
     expect(abandoned).toEqual([]);
   });
 
-  it('forks and rehydrates when restore fails, list is empty, and prior history is present', async () => {
+  it('keeps the binding when restore fails and list is empty, even with prior history', async () => {
     const h = makeSub();
     h.setConnection(
       fakeConnection({ onRequest: rejectResumeListEmpty, newSessionId: 'sdk-new' }),
@@ -168,17 +168,16 @@ describe('getOrCreateSession strict binding', () => {
 
     const abandoned: string[] = [];
     const restoreFailed: string[] = [];
-    const result = (await h.getOrCreate('shepaw-1', {
-      getStoredAcpSessionId: () => 'sdk-old',
-      onAbandonedAcpSessionId: (id) => abandoned.push(id),
-      onRestoreFailed: (id) => restoreFailed.push(id),
-      priorHistory: [{ role: 'user', content: 'hello' }],
-    })) as { session: FakeActiveSession; origin: string };
-
-    expect(result.session.sessionId).toBe('sdk-new');
-    expect(result.origin).toBe('created');
-    expect(abandoned).toEqual(['sdk-old']);
-    expect(restoreFailed).toEqual(['shepaw-1']);
+    await expect(
+      h.getOrCreate('shepaw-1', {
+        getStoredAcpSessionId: () => 'sdk-old',
+        onAbandonedAcpSessionId: (id) => abandoned.push(id),
+        onRestoreFailed: (id) => restoreFailed.push(id),
+        priorHistory: [{ role: 'user', content: 'hello' }],
+      }),
+    ).rejects.toThrow(/could not verify via session\/list/);
+    expect(abandoned).toEqual([]);
+    expect(restoreFailed).toEqual([]);
   });
 
   it('forks only when restore fails and session/list confirms the upstream id is gone', async () => {
@@ -196,6 +195,7 @@ describe('getOrCreateSession strict binding', () => {
       onAbandonedAcpSessionId: (id) => abandoned.push(id),
       onRestoreFailed: (id) => restoreFailed.push(id),
       onAcpSessionId: (sid, acpId) => mapped.push([sid, acpId]),
+      priorHistory: [{ role: 'user', content: 'hello' }],
     })) as { session: FakeActiveSession; origin: string };
 
     expect(result.session.sessionId).toBe('sdk-new');
