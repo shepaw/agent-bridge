@@ -149,6 +149,24 @@ describe('postCliExecute', () => {
     );
     expect(out).toEqual({ ok: false, error: 'nope' });
   });
+
+  it('gives up on a stalled Hub instead of hanging', async () => {
+    let sawSignal: AbortSignal | undefined;
+    const out = await postCliExecute(
+      { agent_id: 'cursor-1' },
+      {
+        env: { SHEPAW_HUB_STORE_URL: 'http://hub.test' },
+        fetchImpl: (async (_url: string, init?: RequestInit) => {
+          sawSignal = init?.signal ?? undefined;
+          const err = new Error('The operation was aborted due to timeout');
+          err.name = 'TimeoutError';
+          throw err;
+        }) as unknown as typeof fetch,
+      },
+    );
+    expect(sawSignal).toBeInstanceOf(AbortSignal);
+    expect(out).toEqual({ ok: false, error: 'Hub did not answer within 30s' });
+  });
 });
 
 describe('appCliRespToEnvelope', () => {

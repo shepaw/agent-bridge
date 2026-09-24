@@ -1410,6 +1410,14 @@ export async function drivePeerConnection(opts: {
           if (resp !== null) send(resp);
           break;
         }
+        case 'memory':
+        case 'she':
+          // Multi-she network control frames (`docs/storage_space_plan.md` §8,
+          // M8): the app sends presence and memory-digest traffic here. The hub
+          // has no handler for either yet, so they are dropped — recognised
+          // rather than reported as unknown, because they are well-formed
+          // protocol frames and not a decode failure worth a log line per send.
+          break;
         case 'session_create_resp':
           if (!handleSessionCreateResp(obj)) {
             log(`session_create_resp unmatched req_id=${String(obj.req_id ?? '')}`);

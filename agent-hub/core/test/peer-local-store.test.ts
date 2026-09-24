@@ -460,6 +460,155 @@ describe('PeerLocalStore', () => {
     expect(existsSync(join(dir, '.staging', device, fresh.upload_id, 'meta.json'))).toBe(true);
   });
 
+  it('reuses one staging directory when a write to the same path is retried', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const first = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'retry.txt',
+      size: 5,
+      sha256: 'abc',
+    });
+    const second = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'retry.txt',
+      size: 5,
+      sha256: 'abc',
+    });
+    expect(second.upload_id).toBe(first.upload_id);
+    expect(readdirSync(join(dir, '.staging', device))).toHaveLength(1);
+  });
+
+  it('stages each object in its own directory and resumes the right one', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const a = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'a.txt',
+      size: 5,
+      sha256: 'abc',
+    });
+    const b = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'b.txt',
+      size: 5,
+      sha256: 'abc',
+    });
+    expect(a.upload_id).not.toBe(b.upload_id);
+    expect(readdirSync(join(dir, '.staging', device))).toHaveLength(2);
+    expect(store.findOpenStaging(device, 'files', 'a.txt')?.uploadId).toBe(a.upload_id);
+    expect(store.findOpenStaging(device, 'files', 'b.txt')?.uploadId).toBe(b.upload_id);
+    expect(store.findOpenStaging(device, 'files', 'missing.txt')).toBeNull();
+  });
+
+  it('does not let abandoned directories slow down a later write', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    // Legacy/uuid-named leftovers, as an older hub would have written them.
+    const staging = join(dir, '.staging', device);
+    for (let i = 0; i < 50; i++) {
+      mkdirSync(join(staging, `abandoned-${i}`), { recursive: true });
+      writeFileSync(join(staging, `abandoned-${i}`, 'meta.json'), '{}');
+    }
+    const begin = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'fresh.txt',
+      size: 5,
+      sha256: 'abc',
+    });
+    expect(store.findOpenStaging(device, 'files', 'fresh.txt')?.uploadId).toBe(begin.upload_id);
+    expect(store.writeChunk(device, begin.upload_id, 0, Buffer.from('hello')).received).toBe(5);
+    // The lookup must not have picked up an unrelated leftover.
+    expect(store.findOpenStaging(device, 'files', 'fresh.txt')?.received).toBe(5);
+  });
+
+  it('reclaims an upload that never received a byte before a partial one', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const content = Buffer.from('abc');
+    const empty = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'abandoned.txt',
+      size: content.length,
+      sha256: 'abc',
+    });
+    const partial = store.writeBegin({
+      deviceId: device,
+      space: 'files',
+      path: 'slow.txt',
+      size: content.length,
+      sha256: 'abc',
+    });
+    store.writeChunk(device, partial.upload_id, 0, content);
+    // Both sat untouched for 30 minutes: past the empty-upload age, well
+    // inside the general age.
+    const old = new Date(Date.now() - 30 * 60_000);
+    for (const uploadId of [empty.upload_id, partial.upload_id]) {
+      const meta = join(dir, '.staging', device, uploadId, 'meta.json');
+      utimesSync(meta, old, old);
+    }
+    expect(store.gcStaging()).toBe(1);
+    expect(existsSync(join(dir, '.staging', device, empty.upload_id, 'meta.json'))).toBe(false);
+    expect(existsSync(join(dir, '.staging', device, partial.upload_id, 'meta.json'))).toBe(true);
+  });
+
+  it('inspects at most maxScan uploads in one sweep', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    for (let i = 0; i < 5; i++) {
+      store.writeBegin({
+        deviceId: device,
+        space: 'files',
+        path: `stale-${i}.txt`,
+        size: 1,
+        sha256: 'abc',
+      });
+    }
+    // maxAgeMs 0 with a 2-upload budget: a bounded slice, not the whole pile.
+    expect(store.gcStaging(0, 2)).toBe(2);
+    expect(readdirSync(join(dir, '.staging', device))).toHaveLength(3);
+    expect(store.gcStaging(0, 2)).toBe(2);
+    expect(store.gcStaging(0, 2)).toBe(1);
+    expect(readdirSync(join(dir, '.staging', device))).toHaveLength(0);
+  });
+
+  it('ends a sweep on its time budget before the scan budget', () => {
+    dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
+    const store = new PeerLocalStore(dir);
+    const device = 'aaaaaaaaaaaaaaaa';
+    const total = 150;
+    for (let i = 0; i < total; i++) {
+      store.writeBegin({
+        deviceId: device,
+        space: 'files',
+        path: `stale-${i}.txt`,
+        size: 1,
+        sha256: 'abc',
+      });
+    }
+    const deviceDir = join(dir, '.staging', device);
+    // Every upload is stale and the scan budget (`total`) covers all of them,
+    // so only the time budget can end this pass early. A budget of 0 has
+    // already elapsed by the first check, which pins the mechanism down
+    // without depending on how fast the machine unlinks.
+    expect(store.gcStaging(0, total, undefined, 0)).toBe(0);
+    expect(readdirSync(deviceDir)).toHaveLength(total);
+    // What a bounded sweep skipped is still reachable by a later pass.
+    expect(store.gcStaging(0, total, undefined, 60_000)).toBe(total);
+    expect(readdirSync(deviceDir)).toHaveLength(0);
+  });
+
   it('accepts a later chunk before the gap in front of it is filled', () => {
     dir = mkdtempSync(join(tmpdir(), 'peer-store-'));
     const store = new PeerLocalStore(dir);

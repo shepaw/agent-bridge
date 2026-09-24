@@ -8,9 +8,9 @@
  * from the proxy via `agent.taskResume` instead of answered 'lost'.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { peerTurnMapPath } from '../paths.js';
+import { atomicWriteFile } from './atomic-write.js';
 
 /** Terminal entries stay resumable as long as the proxy keeps its replay buffer. */
 export const PEER_TURN_TERMINAL_TTL_MS = 25 * 60 * 1000;
@@ -44,13 +44,8 @@ function loadAll(): PeerTurnRecord[] {
 }
 
 function persist(turns: PeerTurnRecord[]): void {
-  const path = peerTurnMapPath();
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp`;
   const data: StoreShape = { version: 1, turns };
-  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  if (process.platform !== 'win32') chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  atomicWriteFile(peerTurnMapPath(), JSON.stringify(data, null, 2));
 }
 
 function isLive(record: PeerTurnRecord, now: number): boolean {

@@ -31,6 +31,13 @@ export interface StoreToolArgs {
   [key: string]: unknown;
 }
 
+/**
+ * A hub that stops answering must surface as an error the agent can act on.
+ * Without this the request never settles and the agent hangs instead of
+ * reporting, which is indistinguishable from the agent itself being stuck.
+ */
+const STORE_HTTP_TIMEOUT_MS = 30_000;
+
 export interface StoreToolResult {
   ok: boolean;
   error?: string;
@@ -233,7 +240,21 @@ export class StoreToolsClient {
       Authorization: `Bearer ${this.token}`,
       ...((init?.headers as Record<string, string>) ?? {}),
     };
-    const res = await this.fetchImpl(`${this.base}${path}`, { ...init, headers });
+    const res = await this.fetchImpl(`${this.base}${path}`, {
+      ...init,
+      headers,
+      signal: init?.signal ?? AbortSignal.timeout(STORE_HTTP_TIMEOUT_MS),
+    }).catch((e: unknown) => {
+      if (e instanceof StoreToolsError) throw e;
+      const name = e instanceof Error ? e.name : '';
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        throw new StoreToolsError(
+          'hub_timeout',
+          `Hub store did not answer within ${STORE_HTTP_TIMEOUT_MS / 1000}s`,
+        );
+      }
+      throw e;
+    });
     const body = await res.text();
     if (!res.ok) {
       let code = `http_${res.status}`;

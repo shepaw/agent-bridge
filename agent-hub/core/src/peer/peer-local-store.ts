@@ -22,6 +22,7 @@ import {
   fsyncSync,
   mkdirSync,
   lstatSync,
+  opendirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -206,6 +207,34 @@ function heapPop(heap: ListedNode[]): ListedNode | undefined {
 
 function isCommitTmpName(name: string): boolean {
   return /^\..+\.[0-9a-f-]{36}\.tmp$/i.test(name);
+}
+
+/** An upload that never received a byte is abandoned this long after it was begun. */
+export const STAGING_EMPTY_AGE_MS = 10 * 60 * 1000;
+/** Any unfinished upload is abandoned this long after its last write. */
+export const STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Uploads inspected by one {@link PeerLocalStore.gcStaging} call. */
+export const STAGING_GC_SCAN = 2_000;
+/**
+ * Wall-clock ceiling for one {@link PeerLocalStore.gcStaging} call.
+ *
+ * Reclaiming is unlink-bound, not scan-bound: removing an entry from a
+ * `.staging` tree that has grown huge costs milliseconds per upload, so a
+ * count-only bound can still block the event loop for seconds. The budget is
+ * what keeps a pass short enough that a write waiting behind it stays well
+ * inside the peer call timeout.
+ */
+export const STAGING_GC_BUDGET_MS = 250;
+
+/**
+ * Staging directory name for one object.
+ *
+ * Derived from space+path so resuming a write is a single lookup instead of a
+ * scan of every staged upload — a `.staging` that has grown large must not
+ * make each write slower than the last.
+ */
+function stagingKey(space: string, path: string): string {
+  return createHash('sha256').update(`${space}\0${path}`).digest('hex').slice(0, 32);
 }
 
 /** SHA-256 of a file without reading it all into memory. */
@@ -649,7 +678,10 @@ export class PeerLocalStore {
     const open = opts.uploadId
       ? null
       : this.findOpenStaging(opts.deviceId, opts.space, opts.path);
-    const uploadId = opts.uploadId ?? open?.uploadId ?? randomUUID();
+    // A fresh upload is named from space+path so its own retry resumes the one
+    // directory instead of adding another. Callers that resume a specific
+    // transfer still pass their own upload_id.
+    const uploadId = opts.uploadId ?? open?.uploadId ?? stagingKey(opts.space, opts.path);
     const staging = join(this.root, '.staging', opts.deviceId, uploadId);
     const metaPath = join(staging, 'meta.json');
     if ((opts.uploadId || open) && existsSync(metaPath)) {
@@ -814,38 +846,32 @@ export class PeerLocalStore {
     return { applied_seq: this.appliedSeq(deviceId) };
   }
 
-  /** Resume an unfinished upload for the same object, if one is still staged. */
+  /**
+   * Resume an unfinished upload for the same object, if one is still staged.
+   * One directory lookup — never a scan of the whole `.staging` tree.
+   */
   findOpenStaging(
     deviceId: string,
     space: string,
     path: string,
   ): { uploadId: string; received: number; size: number; sha256: string } | null {
-    const root = join(this.root, '.staging', deviceId);
-    if (!existsSync(root)) return null;
-    let names: string[];
+    const uploadId = stagingKey(space, path);
+    const metaPath = join(this.root, '.staging', deviceId, uploadId, 'meta.json');
+    if (!existsSync(metaPath)) return null;
     try {
-      names = readdirSync(root);
+      const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
+      if (meta.space !== space || meta.path !== path || meta.deviceId !== deviceId) {
+        return null;
+      }
+      return {
+        uploadId,
+        received: meta.received,
+        size: meta.size,
+        sha256: meta.sha256,
+      };
     } catch {
       return null;
     }
-    for (const uploadId of names) {
-      const metaPath = join(root, uploadId, 'meta.json');
-      if (!existsSync(metaPath)) continue;
-      try {
-        const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
-        if (meta.space === space && meta.path === path && meta.deviceId === deviceId) {
-          return {
-            uploadId,
-            received: meta.received,
-            size: meta.size,
-            sha256: meta.sha256,
-          };
-        }
-      } catch {
-        continue;
-      }
-    }
-    return null;
   }
 
   /** Master fingerprint announced by this device, or null when it has not chosen one. */
@@ -888,12 +914,32 @@ export class PeerLocalStore {
     return join(this.root, '.masters', `${id}.json`);
   }
 
-  /** Drop abandoned uploads so a failed transfer cannot fill the disk. */
-  gcStaging(maxAgeMs = 24 * 60 * 60 * 1000): number {
+  /**
+   * Drop abandoned uploads so a failed transfer cannot fill the disk.
+   *
+   * Bounded on purpose, by both `maxScan` uploads and `maxMs` elapsed, so a
+   * `.staging` that has grown huge cannot block the event loop for seconds —
+   * each device directory is streamed rather than read whole, and the time
+   * budget ends the pass even when unlinking is what is slow. Callers that
+   * need to drain a large pile call this again.
+   *
+   * `emptyAgeMs` only ever shortens the life of an upload: one that never
+   * received a byte cannot still be in flight, so it is not worth keeping for
+   * the full `maxAgeMs`.
+   */
+  gcStaging(
+    maxAgeMs = STAGING_MAX_AGE_MS,
+    maxScan = STAGING_GC_SCAN,
+    emptyAgeMs = STAGING_EMPTY_AGE_MS,
+    maxMs = STAGING_GC_BUDGET_MS,
+  ): number {
     const root = join(this.root, '.staging');
-    if (!existsSync(root)) return 0;
+    // One clock for the whole pass: ages are judged against its start, and the
+    // same reference ends the pass once the budget is gone.
     const now = Date.now();
     let removed = 0;
+    let scanned = 0;
+    const spent = (): boolean => scanned >= maxScan || Date.now() - now >= maxMs;
     let devices: string[];
     try {
       devices = readdirSync(root);
@@ -901,26 +947,46 @@ export class PeerLocalStore {
       return 0;
     }
     for (const device of devices) {
+      if (spent()) break;
       const deviceDir = join(root, device);
-      let uploads: string[];
+      let dir;
       try {
         if (!statSync(deviceDir).isDirectory()) continue;
-        uploads = readdirSync(deviceDir);
+        dir = opendirSync(deviceDir);
       } catch {
         continue;
       }
-      for (const uploadId of uploads) {
-        const dir = join(deviceDir, uploadId);
-        let mtime = 0;
-        try {
-          const meta = join(dir, 'meta.json');
-          mtime = statSync(existsSync(meta) ? meta : dir).mtimeMs;
-        } catch {
-          continue;
+      try {
+        for (let entry = dir.readSync(); entry !== null; entry = dir.readSync()) {
+          if (spent()) return removed;
+          scanned += 1;
+          if (!entry.isDirectory()) continue;
+          const uploadDir = join(deviceDir, entry.name);
+          const metaPath = join(uploadDir, 'meta.json');
+          let mtime = 0;
+          let received = 0;
+          try {
+            if (existsSync(metaPath)) {
+              mtime = statSync(metaPath).mtimeMs;
+              const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as StagingMeta;
+              received = typeof meta.received === 'number' ? meta.received : 0;
+            } else {
+              mtime = statSync(uploadDir).mtimeMs;
+            }
+          } catch {
+            continue;
+          }
+          const limit = received > 0 ? maxAgeMs : Math.min(maxAgeMs, emptyAgeMs);
+          if (now - mtime < limit) continue;
+          rmSync(uploadDir, { recursive: true, force: true });
+          removed += 1;
         }
-        if (now - mtime < maxAgeMs) continue;
-        rmSync(dir, { recursive: true, force: true });
-        removed += 1;
+      } finally {
+        try {
+          dir.closeSync();
+        } catch {
+          /* ignore */
+        }
       }
     }
     return removed;

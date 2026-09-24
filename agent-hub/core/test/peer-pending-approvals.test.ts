@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  APPROVAL_RETENTION_MS,
   expireStalePendingApprovals,
   getPendingApproval,
   listPendingApprovalsForPeer,
@@ -69,5 +70,48 @@ describe('peer-pending-approvals', () => {
     });
     expireStalePendingApprovals();
     expect(getPendingApproval('conf-old')?.status).toBe('expired');
+  });
+
+  it('drops records past the retention window instead of growing forever', () => {
+    const now = Date.now();
+    const base = {
+      peerId: 'peer-4',
+      requestId: 'req-4',
+      agentId: 'agent-d',
+      taskId: 'task-4',
+      prompt: 'p',
+      actions: [] as const,
+      status: 'submitted' as const,
+      createdAt: now,
+    };
+    savePendingApproval({
+      ...base,
+      approvalId: 'conf-ancient',
+      expiresAt: now - APPROVAL_RETENTION_MS - 1,
+    });
+    savePendingApproval({
+      ...base,
+      approvalId: 'conf-recent',
+      // Expired, but still inside the retention window: a late response can
+      // still be relayed, so it must survive.
+      expiresAt: now - 1,
+    });
+    // Any write re-persists the whole file, which is where the pruning lands.
+    markPendingApprovalSubmitted('conf-recent', 'allow');
+    expect(getPendingApproval('conf-ancient')).toBeUndefined();
+    expect(getPendingApproval('conf-recent')?.status).toBe('submitted');
+  });
+
+  it('leaves no fixed-name temp file behind after a write', () => {
+    savePendingApproval(
+      pendingApprovalFromRequest('peer-5', 'req-5', 'agent-e', {
+        confirmationId: 'conf-5',
+        taskId: 'task-5',
+        prompt: 'Allow?',
+        actions: [{ id: 'allow' }],
+      }),
+    );
+    expect(existsSync(join(hubHome, 'peer-pending-approvals.json.tmp'))).toBe(false);
+    expect(readdirSync(hubHome).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
   });
 });

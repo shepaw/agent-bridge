@@ -47,6 +47,9 @@ import { handleStoreHttp } from './peer-store-http.js';
 import { getPeerLocalStore } from './peer-local-store.js';
 import { ensureAllAgentStoreMappings } from './agent-store-mapping.js';
 
+/** How often the abandoned-upload sweep runs once `.staging` is settled. */
+const STAGING_GC_INTERVAL_MS = 5 * 60 * 1000;
+
 export interface PeerServerOptions {
   host?: string;
   port?: number;
@@ -70,6 +73,8 @@ export class PeerServer {
   private readonly log: (line: string) => void;
   private httpServer: Server | undefined;
   private wss: WebSocketServer | undefined;
+  private stagingGcTimer: ReturnType<typeof setTimeout> | undefined;
+  private stagingGcActive = false;
 
   constructor(opts: PeerServerOptions = {}) {
     this.identity = loadOrCreatePeerIdentity();
@@ -131,6 +136,7 @@ export class PeerServer {
       server.once('error', onError);
       server.listen(this.port, this.host, onListening);
     });
+    this.startStagingGc();
     try {
       const { instanceIds } = authorizePeerServiceOnAllInstances();
       if (instanceIds.length > 0) {
@@ -142,6 +148,11 @@ export class PeerServer {
   }
 
   async stop(): Promise<void> {
+    this.stagingGcActive = false;
+    if (this.stagingGcTimer !== undefined) {
+      clearTimeout(this.stagingGcTimer);
+      this.stagingGcTimer = undefined;
+    }
     if (this.wss !== undefined) {
       for (const client of this.wss.clients) client.close();
     }
@@ -149,6 +160,37 @@ export class PeerServer {
       if (this.httpServer !== undefined) this.httpServer.close(() => resolve());
       else resolve();
     });
+  }
+
+  /**
+   * Reclaim abandoned uploads on a timer.
+   *
+   * Without this, `.staging` only shrinks when a peer that named this hub
+   * master happens to finish a pull — so an unattended hub accumulates
+   * abandoned uploads until writes start timing out. Each pass is bounded in
+   * both work and wall-clock time and yields to the event loop before the next
+   * one, so the sweep never becomes the stall it is meant to prevent.
+   */
+  private startStagingGc(): void {
+    this.stagingGcActive = true;
+    const drain = (): void => {
+      if (!this.stagingGcActive) return;
+      let removed = 0;
+      try {
+        removed = getPeerLocalStore().gcStaging();
+      } catch {
+        removed = 0; // housekeeping must never take the server down
+      }
+      if (!this.stagingGcActive) return;
+      // Reclaiming anything at all means there is more to reclaim: yield to the
+      // event loop and take another pass. A pass that found nothing means
+      // `.staging` is settled, so wait out the interval.
+      const delay = removed > 0 ? 0 : STAGING_GC_INTERVAL_MS;
+      this.stagingGcTimer = setTimeout(drain, delay);
+      this.stagingGcTimer.unref?.();
+    };
+    this.stagingGcTimer = setTimeout(drain, STAGING_GC_INTERVAL_MS);
+    this.stagingGcTimer.unref?.();
   }
 
   /** List currently-paired devices (from the persistent store). */

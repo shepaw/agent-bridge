@@ -8,6 +8,14 @@
 import { resolveHubStoreBase } from './hub-store-env.js';
 import { resolveStoreWriteScope } from './store-write-context.js';
 
+/**
+ * A local hub that stops answering must fail the shim with an error.
+ * Otherwise the CLI invocation never returns and the agent looks hung.
+ */
+const HUB_HTTP_TIMEOUT_MS = 30_000;
+/** Probes are best-effort — they must not add a stall of their own. */
+const HUB_PROBE_TIMEOUT_MS = 5_000;
+
 export function hubForwardEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const flag = (env.SHEPAW_HUB_CLI_FORWARD ?? '').trim().toLowerCase();
   if (flag === '0' || flag === 'false' || flag === 'off') return false;
@@ -28,7 +36,9 @@ export async function resolveHubDeviceId(
   const hubBase = resolveHubStoreBase(env);
   if (!hubBase) return '';
   try {
-    const res = await fetchImpl(`${hubBase}/api/v1/health`);
+    const res = await fetchImpl(`${hubBase}/api/v1/health`, {
+      signal: AbortSignal.timeout(HUB_PROBE_TIMEOUT_MS),
+    });
     if (res.ok) {
       const body = (await res.json()) as { device?: string };
       if (body.device) return body.device.trim().toLowerCase();
@@ -106,11 +116,24 @@ export async function postCliExecute(
     'Content-Type': 'application/json',
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetchImpl(`${hubBase}/api/v1/cli/execute`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  let res: Awaited<ReturnType<typeof fetchImpl>>;
+  try {
+    res = await fetchImpl(`${hubBase}/api/v1/cli/execute`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(HUB_HTTP_TIMEOUT_MS),
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : '';
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      return {
+        ok: false,
+        error: `Hub did not answer within ${HUB_HTTP_TIMEOUT_MS / 1000}s`,
+      };
+    }
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
   const text = await res.text();
   try {
     const parsed = JSON.parse(text) as unknown;

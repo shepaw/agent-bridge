@@ -5,12 +5,21 @@
  * to the local agent via `agent.submitResponse`.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { peerPendingApprovalsPath } from '../paths.js';
+import { atomicWriteFile } from './atomic-write.js';
 import type { ApprovalRequest } from './peer-acp-client.js';
 
 export const DEFAULT_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long a record is kept past its own expiry.
+ *
+ * Once an approval is expired nothing can act on it — the phone cannot answer
+ * and a late `agent_approval_resp` is only meaningful while the request is
+ * still live — so keeping the record past that only grows the file that every
+ * approval event has to parse and rewrite whole.
+ */
+export const APPROVAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export interface PendingApprovalRecord {
   readonly approvalId: string;
@@ -47,13 +56,12 @@ function loadAll(): PendingApprovalRecord[] {
 }
 
 function persist(approvals: PendingApprovalRecord[]): void {
-  const path = peerPendingApprovalsPath();
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp`;
-  const data: StoreShape = { version: 1, approvals };
-  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  if (process.platform !== 'win32') chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  const cutoff = Date.now() - APPROVAL_RETENTION_MS;
+  const data: StoreShape = {
+    version: 1,
+    approvals: approvals.filter((a) => a.expiresAt > cutoff),
+  };
+  atomicWriteFile(peerPendingApprovalsPath(), JSON.stringify(data, null, 2));
 }
 
 export function savePendingApproval(record: PendingApprovalRecord): void {

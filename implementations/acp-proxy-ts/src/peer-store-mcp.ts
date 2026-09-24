@@ -31,6 +31,15 @@ import {
   writeGroupInbox,
 } from './group-store-tools.js';
 
+/**
+ * The startup device lookup is best-effort (a fallback id is used when it
+ * fails), so it must never be able to block startup. A hub that is busy or
+ * stalled would otherwise leave this MCP server mute before it ever answers
+ * `initialize` — the agent then waits on a tool server that never speaks, which
+ * looks exactly like the agent itself hanging.
+ */
+const HUB_PROBE_TIMEOUT_MS = 5_000;
+
 type JsonRpcReq = {
   jsonrpc?: string;
   id?: number | string;
@@ -57,7 +66,9 @@ async function resolveDevice(
   const explicit = (env.SHEPAW_HUB_STORE_DEVICE ?? env.NEXUSPOUCH_DEVICE ?? '').trim();
   if (explicit) return explicit;
   try {
-    const res = await fetch(`${base}/api/v1/health`);
+    const res = await fetch(`${base}/api/v1/health`, {
+      signal: AbortSignal.timeout(HUB_PROBE_TIMEOUT_MS),
+    });
     if (res.ok) {
       const body = (await res.json()) as { device?: string };
       if (body.device) return body.device;
