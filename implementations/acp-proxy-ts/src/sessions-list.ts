@@ -89,6 +89,37 @@ export function dropManagedCliSessions<T extends { sessionId: string }>(
   return sessions.filter((s) => !managedIds.has(s.sessionId));
 }
 
+/**
+ * Order sessions newest-first — the order every Shepaw surface renders.
+ *
+ * Both list sources (live `session/list` and disk discovery) arrive already
+ * sorted, but appending one to the other puts the newest IDE-synced
+ * conversations *below* much older ACP ones. Sessions with no `updatedAt` keep
+ * their relative order and sink to the end, matching what the app does for its
+ * own lists.
+ */
+export function sortSessionsByRecency<T extends { updatedAt?: string | null }>(
+  sessions: readonly T[],
+): T[] {
+  return sessions
+    .map((session, index) => ({ session, index, at: recencyOf(session.updatedAt) }))
+    .sort((a, b) => {
+      if (a.at === b.at) return a.index - b.index;
+      if (a.at === undefined) return 1;
+      if (b.at === undefined) return -1;
+      return b.at - a.at;
+    })
+    .map((entry) => entry.session);
+}
+
+/** Epoch ms for an ISO stamp; undefined when absent, blank, or unparseable. */
+function recencyOf(raw: string | null | undefined): number | undefined {
+  const text = (raw ?? '').trim();
+  if (text.length === 0) return undefined;
+  const ms = Date.parse(text);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
 export async function listUpstreamAcpSessions(
   spec: AcpEngineSpec,
   cwd: string,

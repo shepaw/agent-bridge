@@ -86,6 +86,7 @@ import {
 } from './openclaw-sync.js';
 import { ensureHistoryCreatedAt } from './history-created-at.js';
 import { SessionHistoryCache } from './session-history-cache.js';
+import { sortSessionsByRecency } from './sessions-list.js';
 import {
   resolveEngineSpec,
   type AcpEngineSpec,
@@ -151,7 +152,9 @@ const GATEWAY_DIR_NAME = 'shepaw-acp-proxy-gateway';
  * Combine upstream `session/list` entries with sessions discovered on disk.
  * Entries are keyed by session id; an upstream entry wins for any field it
  * populates, while disk-derived `title`/`updatedAt` backfill the empty slots
- * upstream engines (e.g. CodeBuddy) leave blank.
+ * upstream engines (e.g. CodeBuddy) leave blank. The merged list is re-sorted
+ * by recency — concatenating the two sources would otherwise leave the newest
+ * IDE-synced conversations below older ACP ones.
  */
 function mergeListedSessions(
   upstream: ReadonlyArray<acp.SessionInfo>,
@@ -172,7 +175,7 @@ function mergeListedSessions(
       existing.updatedAt = d.updatedAt;
     }
   }
-  return [...byId.values()];
+  return sortSessionsByRecency([...byId.values()]);
 }
 
 export interface AcpProxyAgentOptions {
