@@ -194,6 +194,33 @@ function routeToPeer(peerSession: PeerSessionState, obj: Record<string, unknown>
   peerSession.liveRoutes.at(-1)?.send(obj);
 }
 
+/** Frames for turns that already finished. A dropped `agent_done` is not
+ * recovered by the phone's idle clock while this hub keeps the socket up
+ * (keepalive resets it) or while the turn is suspended across a flap.
+ * Pushing the buffered result on every new live route closes that hole. */
+export function terminalFramesForTurns(
+  turns: Iterable<[string, Pick<TurnEntry, 'status' | 'done' | 'error'>]>,
+): Record<string, unknown>[] {
+  const frames: Record<string, unknown>[] = [];
+  for (const [requestId, entry] of turns) {
+    if (entry.status === 'done' && entry.done !== undefined) {
+      frames.push({
+        type: 'agent_done',
+        request_id: requestId,
+        content: entry.done.content,
+        ...(entry.done.metadata !== undefined ? { metadata: entry.done.metadata } : {}),
+      });
+    } else if (entry.status === 'error') {
+      frames.push({
+        type: 'agent_error',
+        request_id: requestId,
+        message: entry.error ?? 'agent error',
+      });
+    }
+  }
+  return frames;
+}
+
 /** Public send helper for store.* outbound RPC (and other control frames). */
 export function sendToPeer(peerId: string, obj: Record<string, unknown>): boolean {
   const s = peerSessions.get(peerId);
@@ -581,6 +608,11 @@ export async function drivePeerConnection(opts: {
     send,
     approvalHandler: (requestId, agentId, a) => requestApproval(requestId, agentId, a),
   });
+  const terminal = terminalFramesForTurns(peerSession.turns);
+  for (const frame of terminal) send(frame);
+  if (terminal.length > 0) {
+    log(`re-sent ${terminal.length} terminal turn(s) to peer ${peerId}`);
+  }
 
   /** App requests the slash-command palette for an agent. */
   const handleAgentCommandsReq = async (params: Record<string, unknown>): Promise<void> => {

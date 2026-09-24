@@ -41,6 +41,12 @@ import {
 import { log } from './debug.js';
 import { flushAgentMessage, mapSessionUpdate } from './session-mapper.js';
 import {
+  applyToolActivity,
+  PROMPT_QUIET_CANCEL_GRACE_MS,
+  PROMPT_QUIET_SETTLE_MS,
+  quietSettleReady,
+} from './prompt-quiet-settle.js';
+import {
   attachActiveSession,
   canRestorePersistedSession,
   discardLoadReplayUpdates,
@@ -87,7 +93,7 @@ import {
 import { PermissionPolicy } from './permission/policy.js';
 
 type DrainTurnResult =
-  | { readonly kind: 'ok' }
+  | { readonly kind: 'ok'; readonly quietSettled?: boolean }
   | { readonly kind: 'stale_auth'; readonly text: string };
 
 /**
@@ -255,6 +261,9 @@ export class AcpSubprocess {
    * answer nobody could see.
    */
   private readonly turnsByUpstreamSession = new Map<string, TurnContext>();
+
+  /** In-flight `request_permission` waits. A quiet settle must not cancel one. */
+  private permissionWaits = 0;
 
   /** Cached slash commands from the latest available_commands_update. */
   private cachedCommands: acp.AvailableCommand[] = [];
@@ -999,7 +1008,25 @@ export class AcpSubprocess {
         );
       });
 
-      const run = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
+      // A quiet settle closes the turn from text already streamed, without
+      // waiting for a `result`/`idle` the CLI may never emit. The prompt
+      // promise is left to reject or resolve after session/cancel.
+      const run = (async (): Promise<DrainTurnResult> => {
+        const both = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
+        const drain = await updatesLoop.then((result) => {
+          if (result.kind === 'ok' && result.quietSettled) return result;
+          return both;
+        });
+        if (drain.kind === 'ok' && drain.quietSettled) {
+          void promptPromise.catch((err: unknown) => {
+            log(
+              'session.prompt ended after quiet settle: %s',
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+        }
+        return drain;
+      })();
       return await Promise.race([run, abortPromise]);
     } finally {
       // Only drop our own entry — a concurrent turn on the same upstream
@@ -1613,13 +1640,60 @@ export class AcpSubprocess {
     // reply so we can restart without leaking "Please sign in…" to the UI.
     let agentTextBuffer = '';
     let agentStreaming = false;
+    const openTools = new Set<string>();
+    let pending = session.nextUpdate();
+    let cancelSent = false;
+
+    const finishOk = (quietSettled: boolean): DrainTurnResult => {
+      if (agentTextBuffer.trim().length > 0 && !isStaleAuthMessage(agentTextBuffer)) {
+        this.transcriptSink?.append(shepawSessionId, 'assistant', agentTextBuffer);
+      }
+      void this.transcriptSink?.flush(shepawSessionId);
+      return quietSettled ? { kind: 'ok', quietSettled: true } : { kind: 'ok' };
+    };
 
     for (;;) {
       if (turn.signal.aborted) {
         throw new TaskCancelledError();
       }
 
-      const msg = await session.nextUpdate();
+      const waitMs = cancelSent ? PROMPT_QUIET_CANCEL_GRACE_MS : PROMPT_QUIET_SETTLE_MS;
+      const quiet = new Promise<'quiet'>((resolve) => {
+        const timer = setTimeout(() => resolve('quiet'), waitMs);
+        timer.unref?.();
+      });
+      const winner = await Promise.race([
+        pending.then((msg) => ({ kind: 'msg' as const, msg })),
+        quiet.then(() => ({ kind: 'quiet' as const })),
+      ]);
+
+      if (winner.kind === 'quiet') {
+        const ready = quietSettleReady({
+          assistantChars: agentTextBuffer.trim().length,
+          streamed: agentStreaming,
+          openTools: openTools.size,
+          permissionWaits: this.permissionWaits,
+        });
+        if (!cancelSent && ready) {
+          log(
+            'prompt quiet for %dms with assistant text and no open tool; cancelling session %s',
+            PROMPT_QUIET_SETTLE_MS,
+            session.sessionId,
+          );
+          cancelSent = true;
+          await this.cancelSession(session.sessionId);
+          continue;
+        }
+        if (cancelSent) {
+          log('prompt did not stop after cancel; settling from streamed text session=%s', session.sessionId);
+          void this.consumeUntilStop(session, pending);
+          return finishOk(true);
+        }
+        continue;
+      }
+
+      const msg = winner.msg;
+      pending = session.nextUpdate();
       if (msg.kind === 'stop') {
         log('prompt stopped: %s', msg.stopReason);
         if (!agentStreaming && isStaleAuthMessage(agentTextBuffer)) {
@@ -1634,14 +1708,19 @@ export class AcpSubprocess {
           await flushAgentMessage(turn.taskCtx, agentTextBuffer);
         }
         // Capture full assistant turn (buffered + already-streamed pieces via buffer).
-        if (agentTextBuffer.trim().length > 0 && !isStaleAuthMessage(agentTextBuffer)) {
-          this.transcriptSink?.append(shepawSessionId, 'assistant', agentTextBuffer);
-        }
-        void this.transcriptSink?.flush(shepawSessionId);
-        return { kind: 'ok' };
+        return finishOk(false);
       }
 
       const update = msg.update;
+      applyToolActivity(openTools, {
+        sessionUpdate: update.sessionUpdate,
+        toolCallId: 'toolCallId' in update && typeof update.toolCallId === 'string'
+          ? update.toolCallId
+          : undefined,
+        status: 'status' in update && typeof update.status === 'string'
+          ? update.status
+          : undefined,
+      });
       if (update.sessionUpdate === 'available_commands_update') {
         this.cachedCommands = update.availableCommands ?? [];
       } else if (update.sessionUpdate === 'config_option_update') {
@@ -1672,6 +1751,30 @@ export class AcpSubprocess {
       }
 
       await mapSessionUpdate(update, turn.taskCtx);
+    }
+  }
+
+  /**
+   * After a quiet settle returns, keep pulling updates until `stop` so the
+   * next prompt's drain does not observe this turn's trailing stop.
+   */
+  private async consumeUntilStop(
+    session: acp.ActiveSession,
+    first: Promise<acp.ActiveSessionMessage>,
+  ): Promise<void> {
+    let pending = first;
+    const deadline = Date.now() + PROMPT_QUIET_CANCEL_GRACE_MS;
+    while (Date.now() < deadline) {
+      const msg = await Promise.race([
+        pending,
+        new Promise<undefined>((resolve) => {
+          const timer = setTimeout(() => resolve(undefined), 1_000);
+          timer.unref?.();
+        }),
+      ]);
+      if (msg === undefined) continue;
+      if (msg.kind === 'stop') return;
+      pending = session.nextUpdate();
     }
   }
 
@@ -1778,6 +1881,7 @@ export class AcpSubprocess {
       toolCall.kind ?? 'other',
     );
 
+    this.permissionWaits += 1;
     try {
       const response = await responsePromise;
 
@@ -1812,6 +1916,8 @@ export class AcpSubprocess {
         err instanceof Error ? err.message : String(err),
       );
       return { outcome: { outcome: 'cancelled' } };
+    } finally {
+      this.permissionWaits = Math.max(0, this.permissionWaits - 1);
     }
   }
 
