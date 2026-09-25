@@ -43,6 +43,32 @@ describe('shouldForwardToApp', () => {
     ).toBe(true);
   });
 
+  it('forwards slip to the paired App', () => {
+    expect(
+      shouldForwardToApp({
+        namespace: 'slip',
+        subcommand: 'list',
+        flags: {},
+        hubDeviceId: 'aaaaaaaaaaaaaaaa',
+        hubForwardEnabled: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('forwards a tools-space read that belongs to another device', () => {
+    expect(
+      shouldForwardToApp({
+        namespace: 'store',
+        subcommand: 'read',
+        flags: {
+          uri: 'store://tools/bbbbbbbbbbbbbbbb/skills/shepaw-system/SKILL.md',
+        },
+        hubDeviceId: 'aaaaaaaaaaaaaaaa',
+        hubForwardEnabled: true,
+      }),
+    ).toBe(true);
+  });
+
   it('keeps local store on hub', () => {
     expect(
       shouldForwardToApp({

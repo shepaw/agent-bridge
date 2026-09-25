@@ -177,7 +177,15 @@ shepaw chat — new session with handoff (forwarded to the paired App)
       Does not auto-switch. Channel / agent id fall back to SHEPAW_STORE_* /
       store-context.json. Discover via /session-new or /group-session-new.
 
-Other namespaces (os, memory, …) and store:// URIs belonging to another
+shepaw slip — jade slips (玉简), forwarded to the paired App
+
+  shepaw slip
+      Lists subcommands. Do not invent flags. Checking an item submits it;
+      the person accepts. The system skill is
+      store://tools/<app-device>/skills/shepaw-system/SKILL.md — read it with
+      shepaw store read --uri (a URI for another device is forwarded).
+
+Other namespaces (os, slip, …) and store:// URIs belonging to another
 device are forwarded to the paired App, which runs them through the same
 gate as the built-in CLI. Hub-native (group, resume) and this Hub's own
 pouch stay local.
