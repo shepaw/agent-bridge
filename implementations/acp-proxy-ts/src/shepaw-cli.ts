@@ -351,7 +351,16 @@ async function runForwardedCli(
 ): Promise<number> {
   const built = buildCliExecutePayload({ namespace, subcommand, flags, env });
   if (!built.ok) {
-    return emit(io, { success: false, error: built.error });
+    return emit(io, {
+      success: false,
+      error: built.error,
+      ...(built.warnings.length > 0 ? { warnings: built.warnings } : {}),
+    });
+  }
+  for (const warning of built.warnings) {
+    (io.stderr ?? ((t: string) => process.stderr.write(t + '\n')))(
+      `warning: ${warning}`,
+    );
   }
   try {
     const out = await postCliExecute(built.payload, {

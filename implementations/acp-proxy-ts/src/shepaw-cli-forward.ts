@@ -6,7 +6,7 @@
  */
 
 import { resolveHubStoreBase } from './hub-store-env.js';
-import { resolveStoreWriteScope } from './store-write-context.js';
+import { defaultStoreContextPath, resolveStoreWriteScope } from './store-write-context.js';
 
 /**
  * A local hub that stops answering must fail the shim with an error.
@@ -54,14 +54,37 @@ export async function resolveHubDeviceId(
  * before scope resolution too, so `--agent_id forged` cannot pick which Hub
  * engine row the App authenticates as.
  */
-const IGNORED_IDENTITY_FLAGS = ['agent_id', 'agent', 'owner', 'owner_id', 'channel_id', 'channel'];
+export const IGNORED_IDENTITY_FLAGS = [
+  'agent_id',
+  'agent',
+  'owner',
+  'owner_id',
+  'channel_id',
+  'channel',
+];
+
+export type CliExecuteBuild =
+  | { ok: true; payload: Record<string, unknown>; warnings: string[] }
+  | { ok: false; error: string; warnings: string[] };
 
 export function buildCliExecutePayload(opts: {
   namespace: string;
   subcommand: string;
   flags: Record<string, string>;
   env?: NodeJS.ProcessEnv;
-}): { ok: true; payload: Record<string, unknown> } | { ok: false; error: string } {
+}): CliExecuteBuild {
+  const env = opts.env ?? process.env;
+  const dropped = Object.keys(opts.flags).filter((key) =>
+    IGNORED_IDENTITY_FLAGS.includes(key),
+  );
+  const contextPath = defaultStoreContextPath(env);
+  const warnings = dropped.length
+    ? [
+        `ignoring ${dropped
+          .map((key) => `--${key}`)
+          .join(', ')}: executor identity is never taken from caller flags - it comes from SHEPAW_STORE_AGENT_ID or ${contextPath}`,
+      ]
+    : [];
   const scope = resolveStoreWriteScope({
     flags: Object.fromEntries(
       Object.entries(opts.flags).filter(
@@ -75,7 +98,11 @@ export function buildCliExecutePayload(opts: {
     return {
       ok: false,
       error:
-        'Missing executor agent id (--agent_id or SHEPAW_STORE_AGENT_ID / store-context.json)',
+        `Missing executor agent id. Caller flags cannot set it (${IGNORED_IDENTITY_FLAGS.map(
+          (key) => `--${key}`,
+        ).join(', ')} are dropped by design); ` +
+          `set SHEPAW_STORE_AGENT_ID, or run through the ACP gateway which writes ${contextPath} each turn.`,
+      warnings,
     };
   }
   const payload: Record<string, unknown> = {
@@ -86,7 +113,7 @@ export function buildCliExecutePayload(opts: {
   };
   const sessionId = (scope.channel ?? '').trim();
   if (sessionId) payload.session_id = sessionId;
-  return { ok: true, payload };
+  return { ok: true, payload, warnings };
 }
 
 export async function postCliExecute(

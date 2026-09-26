@@ -80,6 +80,7 @@ describe('buildCliExecutePayload', () => {
         flags: { path: '/tmp/a.txt' },
         session_id: 'dm_abc',
       },
+      warnings: [],
     });
   });
 
@@ -100,6 +101,22 @@ describe('buildCliExecutePayload', () => {
     expect(out.payload.session_id).toBeUndefined();
   });
 
+  it('warns when caller identity flags are dropped', () => {
+    const out = buildCliExecutePayload({
+      namespace: 'store',
+      subcommand: 'read',
+      flags: {
+        uri: 'store://runtime/bbbbbbbbbbbbbbbb/x/y.md',
+        agent_id: 'forged',
+        owner: 'someone-else',
+      },
+      env: { ...ISOLATED_ENV, SHEPAW_STORE_AGENT_ID: 'cursor-1' },
+    });
+    expect(out.warnings).toEqual([
+      'ignoring --agent_id, --owner: executor identity is never taken from caller flags - it comes from SHEPAW_STORE_AGENT_ID or /tmp/shepaw-test-no-store-context.json',
+    ]);
+  });
+
   it('fails when no executor agent id is known', () => {
     const out = buildCliExecutePayload({
       namespace: 'os',
@@ -108,6 +125,9 @@ describe('buildCliExecutePayload', () => {
       env: ISOLATED_ENV,
     });
     expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.error).toContain('SHEPAW_STORE_AGENT_ID');
+    expect(out.error).toContain('/tmp/shepaw-test-no-store-context.json');
   });
 });
 
