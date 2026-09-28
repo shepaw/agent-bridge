@@ -72,7 +72,7 @@ export function buildStorePouchCard(opts: {
     : '- device: 以 store 工具返回值为准，禁止编造或拼接';
   const workspace = opts.workspaceUri?.trim();
   const workspaceLine = workspace
-    ? `- 工作区已挂载：\`${workspace}\`（软链接挂载：改磁盘即改袋；相对路径如 \`docs/good.md\` = 挂载根下；URI 里的绝对路径只在本机有效，不要跨设备引用；不要用 \`..\`）`
+    ? `- 工作区已挂载：\`${workspace}\`（挂载视图：与磁盘同一份，改磁盘即改袋；相对路径如 \`docs/good.md\` = 挂载根下；不版本、不镜像、不跨设备；不要用 \`..\`）`
     : '';
   const resume = opts.resumeUri?.trim();
   const resumeLine = resume
