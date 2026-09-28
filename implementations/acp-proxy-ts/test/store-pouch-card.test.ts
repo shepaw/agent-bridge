@@ -79,6 +79,7 @@ describe('buildStorePouchCard', () => {
     });
     expect(card).toContain('store://workspaces/352821253aefdfba/Users/foo/proj/');
     expect(card).toContain('docs/good.md');
+    expect(card).toContain('改磁盘即改袋');
   });
 
   it('does not invent a device id when unknown', () => {
@@ -94,6 +95,31 @@ describe('buildStorePouchCard', () => {
     });
     expect(card).toContain('from host');
     expect(card).not.toContain('352821253aefdfba');
+  });
+
+  it('states the real write targets and the files-space trap', () => {
+    const card = buildStorePouchCard({ deviceId: '352821253aefdfba' });
+    expect(card).toContain('`runtime`');
+    expect(card).toContain('artifacts/<task>/');
+    expect(card).toContain('`--space public`');
+    expect(card).toContain('`--space workspaces --group <gid>`');
+    expect(card).toContain('`--space files` 会静默落到 `runtime`');
+    expect(card).not.toContain('长期文件');
+  });
+
+  it('teaches search / recursion / binary write instead of guessing URIs', () => {
+    const card = buildStorePouchCard({ deviceId: '352821253aefdfba' });
+    expect(card).toContain('shepaw store search --query');
+    expect(card).toContain('--depth 0');
+    expect(card).toContain('--file <path>');
+    expect(card).toContain('--content-base64');
+    expect(card).toContain('不要猜 URI');
+  });
+
+  it('exposes version pinning on store URIs', () => {
+    const card = buildStorePouchCard({ deviceId: '352821253aefdfba' });
+    expect(card).toContain('@v<n>');
+    expect(card).toContain('@<hash>');
   });
 });
 

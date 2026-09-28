@@ -10,7 +10,10 @@ import type {
   SessionHistoryMetadata,
 } from 'shepaw-acp-sdk';
 
-import { SCOPE_CARD_STABLE_HEADER } from './store-pouch-card.js';
+import {
+  SCOPE_CARD_LAST_BULLET,
+  SCOPE_CARD_STABLE_HEADER,
+} from './store-pouch-card.js';
 
 /** Volatile per-turn scope section (shepaw ScopeCard.toVolatileMarkdown). */
 export const SCOPE_CARD_VOLATILE_HEADER = `${SCOPE_CARD_STABLE_HEADER} · 本轮`;
@@ -23,10 +26,6 @@ export const INTERNAL_PROMPT_SECTION_HEADERS = [
   SCOPE_CARD_STABLE_HEADER,
   GROUP_TASK_CONTEXT_HEADER,
 ] as const;
-
-/** Last stable Scope Card bullet; user text may be glued when blocks are joined. */
-const SCOPE_CARD_LAST_BULLET =
-  '- 未指定分区时：长期文件 → `files`；本轮中间产物 → `runtime`';
 
 type StripMode = 'normal' | 'scope' | 'group';
 

@@ -9,7 +9,11 @@ import {
   stripInternalPromptForTranscript,
 } from '../src/internal-prompt-strip.js';
 import { buildGroupTaskContextBlock } from '../src/group-context.js';
-import { buildStorePouchCard, prependStorePouchCard } from '../src/store-pouch-card.js';
+import {
+  buildStorePouchCard,
+  prependStorePouchCard,
+  SCOPE_CARD_LAST_BULLET,
+} from '../src/store-pouch-card.js';
 import { promptToPlainText } from '../src/session-transcript-sink.js';
 
 describe('stripInternalPromptForTranscript', () => {
@@ -29,8 +33,8 @@ describe('stripInternalPromptForTranscript', () => {
   it('peels user suffix glued to the last Scope Card bullet', () => {
     const card = buildStorePouchCard({ deviceId: 'abc' });
     const glued = card.replace(
-      /- 未指定分区时：.*$/,
-      '- 未指定分区时：长期文件 → `files`；本轮中间产物 → `runtime`放到储物袋',
+      SCOPE_CARD_LAST_BULLET,
+      `${SCOPE_CARD_LAST_BULLET}放到储物袋`,
     );
     expect(stripInternalPromptForTranscript(glued)).toBe('放到储物袋');
   });
