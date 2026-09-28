@@ -11,6 +11,8 @@ import {
   workspaceLinkPath,
   workspaceStoreUri,
   agentPrivateStoreUri,
+  readWorkspaceMounts,
+  removeWorkspaceMountRecord,
 } from '../src/peer/agent-store-mapping.js';
 import { PeerLocalStore } from '../src/peer/peer-local-store.js';
 
@@ -84,6 +86,30 @@ describe('agent-store-mapping', () => {
     expect(resolveWorkspaceFileUri(root, 'store://workspaces/aaaaaaaaaaaaaaaa/other.md')).toBe(
       'store://workspaces/aaaaaaaaaaaaaaaa/other.md',
     );
+  });
+
+  it('writes a portable mount record next to the symlink', () => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-map-'));
+    const cwd = join(dir, 'project');
+    mkdirSync(cwd);
+    const storeRoot = join(dir, 'store');
+    const store = new PeerLocalStore(storeRoot);
+    const device = 'dddddddddddddddd';
+    const agentId = '99999999-8888-7777-6666-555555555555';
+
+    ensureAgentStoreMappings({ agentId, cwd, deviceId: device, store });
+
+    const mounts = readWorkspaceMounts(store);
+    const mount = mounts.find((m) => m.space === 'workspaces');
+    expect(mount).toBeDefined();
+    expect(mount!.path).toBe(encodeWorkspaceStorePath(cwd));
+    expect(mount!.external).toBe(cwd);
+    // 同一挂载点重复注册不产生重复条目
+    ensureAgentStoreMappings({ agentId, cwd, deviceId: device, store });
+    expect(readWorkspaceMounts(store).filter((m) => m.path === mount!.path)).toHaveLength(1);
+
+    removeWorkspaceMountRecord({ store, space: 'workspaces', rel: mount!.path });
+    expect(readWorkspaceMounts(store).some((m) => m.path === mount!.path)).toBe(false);
   });
 
   it('skips rewriting an already-correct workspace symlink', () => {

@@ -10,7 +10,7 @@
  *   <store>/<device-id>/agents/<agent-uuid>/              → private dir
  */
 
-import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { loadOrCreatePeerIdentity } from './peer-identity.js';
 import { getPeerLocalStore, type PeerLocalStore } from './peer-local-store.js';
@@ -99,6 +99,80 @@ export function hubStoreDeviceId(): string {
   return loadOrCreatePeerIdentity().fingerprint;
 }
 
+/**
+ * Workspace mount registry (`<store>/.system/mounts.json`).
+ *
+ * The symlink is the live view for tools that need a real path; the registry is
+ * the portable description of the same mount (see
+ * `../../../../shepaw/docs/workspace_mount_decision.md`): no symlink semantics,
+ * no platform dependency, and mirror/export can skip mounts explicitly.
+ */
+export interface WorkspaceMountRecord {
+  readonly id: string;
+  readonly space: string;
+  /** Store-relative path inside [space] (no leading /). */
+  readonly path: string;
+  readonly external: string;
+  readonly created_at: string;
+}
+
+function mountRegistryFile(store: PeerLocalStore): string {
+  return join(store.root, '.system', 'mounts.json');
+}
+
+export function readWorkspaceMounts(store: PeerLocalStore): WorkspaceMountRecord[] {
+  const file = mountRegistryFile(store);
+  if (!existsSync(file)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { mounts?: unknown };
+    return Array.isArray(parsed.mounts) ? (parsed.mounts as WorkspaceMountRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeWorkspaceMounts(store: PeerLocalStore, mounts: WorkspaceMountRecord[]): void {
+  const file = mountRegistryFile(store);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ mounts }, null, 2)}\n`);
+}
+
+/** Upsert the mount record for [space]/[rel]; keeps the symlink and registry in step. */
+export function ensureWorkspaceMountRecord(opts: {
+  store: PeerLocalStore;
+  space: string;
+  rel: string;
+  external: string;
+}): WorkspaceMountRecord {
+  const { store, space, rel, external } = opts;
+  const record: WorkspaceMountRecord = {
+    id: `m-${space}-${rel}`,
+    space,
+    path: rel,
+    external,
+    created_at: new Date().toISOString(),
+  };
+  const mounts = readWorkspaceMounts(store).filter(
+    (m) => !(m.space === space && m.path === rel),
+  );
+  mounts.push(record);
+  writeWorkspaceMounts(store, mounts);
+  return record;
+}
+
+/** Drop a mount record (used when the Working Directory is re-pointed). */
+export function removeWorkspaceMountRecord(opts: {
+  store: PeerLocalStore;
+  space: string;
+  rel: string;
+}): void {
+  const { store, space, rel } = opts;
+  const mounts = readWorkspaceMounts(store).filter(
+    (m) => !(m.space === space && m.path === rel),
+  );
+  writeWorkspaceMounts(store, mounts);
+}
+
 function ensureWorkspaceRootSymlink(
   store: PeerLocalStore,
   deviceId: string,
@@ -109,6 +183,12 @@ function ensureWorkspaceRootSymlink(
   const workspaceAbs = join(store.root, deviceId, WORKSPACES_SPACE, ...workspaceRel.split('/'));
   mkdirSync(dirname(workspaceAbs), { recursive: true });
   ensureWorkspaceSymlink(workspaceAbs, cwd);
+  ensureWorkspaceMountRecord({
+    store,
+    space: WORKSPACES_SPACE,
+    rel: workspaceRel,
+    external: cwd,
+  });
   return workspaceStoreUri(deviceId, cwd);
 }
 
@@ -173,6 +253,7 @@ export function remapAgentWorkspace(opts: {
     const prevRel = encodeWorkspaceStorePath(prev);
     const prevAbs = join(store.root, deviceId, WORKSPACES_SPACE, ...prevRel.split('/'));
     removeSymlinkIfPresent(prevAbs);
+    removeWorkspaceMountRecord({ store, space: WORKSPACES_SPACE, rel: prevRel });
   }
 
   return ensureAgentStoreMappings({
