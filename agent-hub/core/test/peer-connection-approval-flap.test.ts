@@ -8,8 +8,8 @@
  *    after a reconnect `agent_turn_resume_req` replays exactly the suffix the
  *    phone missed — and terminal results stay replayable within their TTL.
  * 3. Approvals raised while NO connection is live are parked (detached), not
- *    registered on a dead connection (whose 20-min timeout would relay a
- *    spurious deny).
+ *    registered on a dead connection, and are never denied just because the
+ *    phone is away — only the approval deadline ends the turn.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -228,7 +228,8 @@ vi.mock('../src/peer/peer-acp-client.js', () => ({
   PeerAcpClient: FakePeerAcpClient,
 }));
 
-import { drivePeerConnection, getPeerSessionsForTest, reapIdlePeerSessions, resetPeerSessionsForTest } from '../src/peer/peer-connection.js';
+import { APPROVAL_EXPIRED_MESSAGE, drivePeerConnection, getPeerSessionsForTest, reapIdlePeerSessions, resetPeerSessionsForTest, TURN_SILENT_MESSAGE } from '../src/peer/peer-connection.js';
+import { DEFAULT_APPROVAL_TTL_MS } from '../src/peer/peer-pending-approvals.js';
 
 // ── Test harness ────────────────────────────────────────────────────
 
@@ -332,6 +333,20 @@ async function connectPhone(peerId: string, logLines: string[]): Promise<PhoneLi
       try { phoneWs.close(); } catch { /* ignore */ }
     },
   };
+}
+
+/** Next frame of [type]; earlier frames (e.g. the terminal result the hub
+ * pushes on every reconnect) are collected into [skipped]. */
+async function nextOfType(
+  link: PhoneLink,
+  type: string,
+  skipped: Record<string, unknown>[] = [],
+): Promise<Record<string, unknown>> {
+  for (;;) {
+    const m = await link.nextMessage();
+    if (m.type === type) return m;
+    skipped.push(m);
+  }
 }
 
 async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -476,6 +491,137 @@ describe('peer flap mid-approval', () => {
     reapIdlePeerSessions();
     expect(client.closed).toBe(false);
   });
+
+  it('keeps a turn running while the phone stays away (no abandon on disconnect)', async () => {
+    const logLines: string[] = [];
+    const link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    link.close();
+    await waitFor(() => logLines.some((l) => l.includes('disconnected')));
+
+    // Long after the phone left, a quiet agent is still given its full window.
+    reapIdlePeerSessions(Date.now() + DEFAULT_APPROVAL_TTL_MS - 60_000);
+    expect(client.turns.get(taskId)?.cancelRequested).toBe(false);
+    expect(getPeerSessionsForTest().get('peer1')?.turns.get('r1')?.status).toBe('streaming');
+  });
+
+  it('ends a turn whose agent stays silent past the limit (keepalives do not count)', async () => {
+    const link = await connectPhone('peer1', []);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    reapIdlePeerSessions(Date.now() + 5 * 60 * 1000);
+    expect(await link.nextMessage()).toMatchObject({ type: 'agent_metadata', metadata: { keepalive: true } });
+
+    reapIdlePeerSessions(Date.now() + DEFAULT_APPROVAL_TTL_MS + 1000);
+    const err = await nextOfType(link, 'agent_error');
+    expect(err).toMatchObject({ request_id: 'r1', message: TURN_SILENT_MESSAGE });
+    expect(client.turns.get(taskId)?.cancelRequested).toBe(true);
+    link.close();
+  });
+
+  it('does not end a silent turn that is waiting on an open card', async () => {
+    const link = await connectPhone('peer1', []);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+    void client.emitApproval(taskId, 'perm_open');
+    await nextOfType(link, 'agent_approval_req');
+
+    const entry = getPeerSessionsForTest().get('peer1')!.turns.get('r1')!;
+    entry.lastUpstreamAt = Date.now() - DEFAULT_APPROVAL_TTL_MS - 5000;
+    reapIdlePeerSessions();
+    expect(entry.status).toBe('streaming');
+    expect(client.turns.get(taskId)?.cancelRequested).toBe(false);
+    expect(Date.now() - entry.lastUpstreamAt!).toBeLessThan(1000);
+    link.close();
+  });
+
+  it('does not deny a card raised while the phone is away before the deadline', async () => {
+    const logLines: string[] = [];
+    const link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    link.close();
+    await waitFor(() => logLines.some((l) => l.includes('disconnected')));
+    let settled = false;
+    void client.emitApproval(taskId, 'perm_away').then(() => { settled = true; });
+    await waitFor(() => logLines.some((l) => l.includes('detached approval parked')));
+
+    // 30 minutes of absence used to deny at 20; now the card simply waits.
+    reapIdlePeerSessions(Date.now() + 30 * 60 * 1000);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(settled).toBe(false);
+    expect(getPendingApproval('perm_away')?.status).toBe('pending');
+    expect(client.turns.get(taskId)?.cancelRequested).toBe(false);
+  });
+
+  it('ends the turn once when a card nobody answered passes the deadline', async () => {
+    const logLines: string[] = [];
+    let link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    link.close();
+    await waitFor(() => logLines.some((l) => l.includes('disconnected')));
+    const approvalPromise = client.emitApproval(taskId, 'perm_gone');
+    await waitFor(() => logLines.some((l) => l.includes('detached approval parked')));
+
+    reapIdlePeerSessions(Date.now() + DEFAULT_APPROVAL_TTL_MS + 1000);
+
+    // The parked waiter unwinds without a bare deny; the hub ends the turn.
+    await expect(approvalPromise).resolves.toMatchObject({ id: '', migrated: true });
+    expect(client.deferred.length).toBe(0);
+    expect(client.turns.get(taskId)?.cancelRequested).toBe(true);
+    expect(getPendingApproval('perm_gone')?.status).toBe('expired');
+    const entry = getPeerSessionsForTest().get('peer1')?.turns.get('r1');
+    expect(entry).toMatchObject({ status: 'error', error: APPROVAL_EXPIRED_MESSAGE });
+
+    // The proxy's follow-up cancel error must not overwrite the outcome.
+    client.emitError(taskId, 'Task cancelled');
+    expect(entry?.error).toBe(APPROVAL_EXPIRED_MESSAGE);
+
+    // Phone comes back: it gets the recorded outcome, not a dead card.
+    link = await connectPhone('peer1', logLines);
+    const msgs = await link.drain(200);
+    expect(msgs.filter((m) => m.type === 'agent_approval_req')).toHaveLength(0);
+    expect(msgs).toContainEqual(
+      expect.objectContaining({ type: 'agent_error', request_id: 'r1', message: APPROVAL_EXPIRED_MESSAGE }),
+    );
+    link.close();
+  });
+
+  it('ends the turn when a delivered card is ignored past the deadline', async () => {
+    const logLines: string[] = [];
+    const link = await connectPhone('peer1', logLines);
+    link.send({ type: 'agent_chat', request_id: 'r1', agent_id: 'alpha', message: 'hi' });
+    await waitFor(() => FakePeerAcpClient.instances.length === 1);
+    const client = FakePeerAcpClient.instances[0];
+    const taskId = client.firstTaskId();
+
+    void client.emitApproval(taskId, 'perm_ignored');
+    const card = await link.nextMessage();
+    expect(card).toMatchObject({ type: 'agent_approval_req', approval_id: 'perm_ignored' });
+
+    reapIdlePeerSessions(Date.now() + DEFAULT_APPROVAL_TTL_MS + 1000);
+    const err = await link.nextMessage();
+    expect(err).toMatchObject({ type: 'agent_error', request_id: 'r1', message: APPROVAL_EXPIRED_MESSAGE });
+    expect(client.turns.get(taskId)?.cancelRequested).toBe(true);
+    expect(client.deferred.length).toBe(0);
+    link.close();
+  });
 });
 
 // ── Turn resume tests ───────────────────────────────────────────────
@@ -539,14 +685,18 @@ describe('turn resume after peer flap', () => {
 
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 6 });
-    const resp = await link.nextMessage();
+    const pushed: Record<string, unknown>[] = [];
+    const resp = await nextOfType(link, 'agent_turn_resume_resp', pushed);
     expect(resp).toMatchObject({
-      type: 'agent_turn_resume_resp',
       request_id: 'r1',
       status: 'done',
       delta: 'world',
       content: 'Hello world',
     });
+    // The reconnect alone already delivered the result.
+    expect(pushed).toContainEqual(
+      expect.objectContaining({ type: 'agent_done', request_id: 'r1', content: 'Hello world' }),
+    );
     link.close();
   });
 
@@ -567,9 +717,8 @@ describe('turn resume after peer flap', () => {
 
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 7 });
-    const resp = await link.nextMessage();
+    const resp = await nextOfType(link, 'agent_turn_resume_resp');
     expect(resp).toMatchObject({
-      type: 'agent_turn_resume_resp',
       request_id: 'r1',
       status: 'error',
       delta: '',
@@ -667,7 +816,7 @@ describe('turn resume after peer flap', () => {
     await waitFor(() => logLines.some((l) => l.includes('disconnected')));
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 4 });
-    const resp = await link.nextMessage();
+    const resp = await nextOfType(link, 'agent_turn_resume_resp');
     expect(resp).toMatchObject({ status: 'done', delta: '', content: 'full' });
     link.close();
   });
@@ -756,7 +905,7 @@ describe('turn resume after peer flap', () => {
     expect(client.closed).toBe(false);
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 0 });
-    const resp = await link.nextMessage();
+    const resp = await nextOfType(link, 'agent_turn_resume_resp');
     expect(resp).toMatchObject({ status: 'done', delta: 'data', content: 'data' });
 
     // Age the entry past the TTL → the reaper sweeps it. The persisted
@@ -764,15 +913,16 @@ describe('turn resume after peer flap', () => {
     // otherwise the rebuild path resurrects the turn from the proxy.
     const entry = getPeerSessionsForTest().get('peer1')?.turns.get('r1');
     expect(entry).toBeDefined();
-    entry!.terminalAt = Date.now() - 26 * 60 * 1000;
+    const aged = Date.now() - DEFAULT_APPROVAL_TTL_MS - 60_000;
+    entry!.terminalAt = aged;
     link.close();
     reapIdlePeerSessions();
     expect(getPeerSessionsForTest().get('peer1')?.turns.has('r1') ?? false).toBe(false);
-    markPeerTurnTerminal('r1', Date.now() - 26 * 60 * 1000);
+    markPeerTurnTerminal('r1', aged);
 
     link = await connectPhone('peer1', logLines);
     link.send({ type: 'agent_turn_resume_req', request_id: 'r1', known_content_length: 0 });
-    const lost = await link.nextMessage();
+    const lost = await nextOfType(link, 'agent_turn_resume_resp');
     expect(lost).toMatchObject({ status: 'lost' });
     link.close();
   });

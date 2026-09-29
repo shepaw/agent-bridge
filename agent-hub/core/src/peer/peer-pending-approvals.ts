@@ -10,7 +10,19 @@ import { peerPendingApprovalsPath } from '../paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import type { ApprovalRequest } from './peer-acp-client.js';
 
-export const DEFAULT_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long one tool approval may block its turn, whether or not the card ever
+ * reached the phone. There is no short clock: a phone that is offline must not
+ * have tools denied behind its back. Past this the hub ends the turn (see
+ * expireOverdueApprovals) so the agent is never parked on a card nobody can
+ * answer. Override with SHEPAW_PEER_APPROVAL_WAIT_MS.
+ */
+export const DEFAULT_APPROVAL_TTL_MS = approvalWaitFromEnv(process.env.SHEPAW_PEER_APPROVAL_WAIT_MS);
+
+export function approvalWaitFromEnv(raw: string | undefined): number {
+  const parsed = raw === undefined ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2 * 60 * 60 * 1000;
+}
 /**
  * How long a record is kept past its own expiry.
  *
@@ -99,11 +111,20 @@ export function markPendingApprovalSubmitted(
 }
 
 export function expireStalePendingApprovals(): void {
-  const now = Date.now();
-  const next = loadAll().map((a) =>
-    a.status === 'pending' && a.expiresAt <= now ? { ...a, status: 'expired' as const } : a,
+  takeOverduePendingApprovals();
+}
+
+/** Mark every pending record past its deadline expired and return them. */
+export function takeOverduePendingApprovals(now = Date.now()): PendingApprovalRecord[] {
+  const all = loadAll();
+  const overdue = all.filter((a) => a.status === 'pending' && a.expiresAt <= now);
+  if (overdue.length === 0) return [];
+  persist(
+    all.map((a) =>
+      a.status === 'pending' && a.expiresAt <= now ? { ...a, status: 'expired' as const } : a,
+    ),
   );
-  persist(next);
+  return overdue;
 }
 
 export function pendingApprovalFromRequest(

@@ -11,9 +11,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { peerTurnMapPath } from '../paths.js';
 import { atomicWriteFile } from './atomic-write.js';
+import { DEFAULT_APPROVAL_TTL_MS } from './peer-pending-approvals.js';
 
-/** Terminal entries stay resumable as long as the proxy keeps its replay buffer. */
-export const PEER_TURN_TERMINAL_TTL_MS = 25 * 60 * 1000;
+/** Terminal entries stay resumable as long as the in-memory result does
+ * (peer-connection TURN_RESULT_TTL_MS); the proxy's replay buffer outlives both. */
+export const PEER_TURN_TERMINAL_TTL_MS = DEFAULT_APPROVAL_TTL_MS;
 /** A still-running turn's mapping lives this long (pathological-runtime cap). */
 export const PEER_TURN_LIVE_TTL_MS = 24 * 60 * 60 * 1000;
 

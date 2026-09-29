@@ -52,12 +52,13 @@ import {
   type StoredPeerFile,
 } from './peer-file-store.js';
 import {
-  expireStalePendingApprovals,
+  DEFAULT_APPROVAL_TTL_MS,
   getPendingApproval,
   listPendingApprovalsForPeer,
   markPendingApprovalSubmitted,
   pendingApprovalFromRequest,
   savePendingApproval,
+  takeOverduePendingApprovals,
 } from './peer-pending-approvals.js';
 import { loadPairedPeers } from './peer-store.js';
 import { handleInboundStoreFrame } from './peer-store-protocol.js';
@@ -65,16 +66,20 @@ import { cancelPeerBackupRetries, onPeerConnectedForBackup } from './peer-store-
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
-// In-memory wait must match Cursor's waitForResponse (20 min), not the 24h
-// persistence TTL. A lost verdict otherwise leaves the turn hung for a day.
-const APPROVAL_TIMEOUT_MS = 20 * 60 * 1000;
-// Terminal turn results (done/error) stay replayable this long. Aligned with
-// the app's approvalWaitHardCap (25 min): a phone that flapped right as the
-// turn ended can still resume and collect the result instead of a false
-// 'lost' (which would fail an already-computed turn).
-const TURN_RESULT_TTL_MS = 25 * 60 * 1000;
+// Terminal turn results (done/error) stay replayable this long, so a phone
+// that was away for the whole approval window still collects the outcome on
+// reconnect instead of a false 'lost'. Must stay below the app's
+// suspendWaitHardCap and the proxy's TASK_REPLAY_TTL_MS.
+const TURN_RESULT_TTL_MS = DEFAULT_APPROVAL_TTL_MS;
 /** Streaming turn with no chunk/metadata this long → send keepalive to the app. */
 const TURN_KEEPALIVE_IDLE_MS = 90 * 1000;
+/** Keepalives stop the app from failing a silent turn, so the hub must be the
+ * one to give up on an agent that went quiet without an open approval card. */
+const TURN_SILENT_LIMIT_MS = DEFAULT_APPROVAL_TTL_MS;
+export const TURN_SILENT_MESSAGE = 'agent 长时间无任何输出，本轮已结束';
+/** The reaper sweeps overdue approvals; a live waiter's own timer is only a
+ * backstop and must not beat it to a bare deny. */
+const REAPER_INTERVAL_MS = 60_000;
 
 function parsePeerChatHistory(
   raw: unknown,
@@ -123,6 +128,9 @@ interface TurnEntry {
   /** Last chunk/metadata routed to the phone (ms) — drives keepalive while
    * upstream is silent so the app idle watchdog does not hit 30min. */
   lastOutputAt?: number;
+  /** Last real upstream sign of life (chunk, metadata, approval card) —
+   * keepalives do not count. Drives [TURN_SILENT_LIMIT_MS]. */
+  lastUpstreamAt?: number;
 }
 
 /** One live connection's routing endpoints. Turn output and approval cards
@@ -161,13 +169,16 @@ export interface PeerSessionState {
   liveRoutes: LiveRoute[];
   /** Approvals raised while NO connection was live. The card is persisted and
    * re-sent on reconnect; the verdict comes back through the deferred relay,
-   * which resolves the parked waiter with {migrated:true}. */
+   * which resolves the parked waiter with {migrated:true}. No timer of its
+   * own — the phone being away is not a reason to deny; only the approval
+   * deadline (expireOverdueApprovals) retires it. */
   detachedApprovals: Map<string, {
     resolve: (selected: ApprovalVerdict) => void;
-    timer: NodeJS.Timeout;
   }>;
   /** request_ids currently being rebuilt from the proxy (double-resume guard). */
   rebuildingTurns: Set<string>;
+  /** Peer-daemon logger, so the reaper can record an expiry. */
+  log?: (line: string) => void;
 }
 const peerSessions = new Map<string, PeerSessionState>();
 
@@ -259,21 +270,108 @@ export function findLivePeerId(agentId?: string): string | undefined {
  * errors, chat-start failures, or hub shutdown.
  * Exported for tests.
  */
-export function reapIdlePeerSessions(): void {
-  const now = Date.now();
+export function reapIdlePeerSessions(now = Date.now()): void {
   reapPeerTurns();
+  expireOverdueApprovals(now);
   for (const [peerId, s] of peerSessions) {
     for (const [rid, entry] of s.turns) {
       if (entry.terminalAt !== undefined && now - entry.terminalAt > TURN_RESULT_TTL_MS) {
         s.turns.delete(rid);
       }
     }
+    endSilentTurns(peerId, s, now);
     tickTurnKeepalives(s, now);
     // Only drop sessions that never got going — anything with a live acp
     // client stays so the next reconnect reuses it.
     if (s.acpClients.size === 0 && s.turns.size === 0 && s.detachedApprovals.size === 0) {
       peerSessions.delete(peerId);
     }
+  }
+}
+
+export const APPROVAL_EXPIRED_MESSAGE =
+  '工具审核长时间未处理，本轮已结束（该工具未执行）';
+
+/**
+ * Retire approvals past their deadline. Ending the whole turn — not relaying
+ * a bare deny — is deliberate: a deny lets the agent immediately raise the
+ * next card, which nobody is there to answer either. The outcome is recorded
+ * as the turn's terminal error, so a phone that comes back later still
+ * collects it (terminalFramesForTurns / resume) instead of a live-looking card.
+ */
+export function expireOverdueApprovals(now = Date.now()): void {
+  let overdue: ReturnType<typeof takeOverduePendingApprovals>;
+  try {
+    overdue = takeOverduePendingApprovals(now);
+  } catch {
+    return;
+  }
+  for (const record of overdue) {
+    const s = peerSessions.get(record.peerId);
+    if (s === undefined) continue;
+    const parked = s.detachedApprovals.get(record.approvalId);
+    if (parked !== undefined) {
+      s.detachedApprovals.delete(record.approvalId);
+      try { parked.resolve({ id: '', migrated: true }); } catch { /* ignore */ }
+    }
+    s.log?.(
+      `approval ${record.approvalId} expired req=${record.requestId} task=${record.taskId} — ending turn`,
+    );
+    const entry = s.turns.get(record.requestId);
+    if (entry !== undefined) {
+      if (entry.status === 'streaming') {
+        endTurn(s, record.requestId, entry, APPROVAL_EXPIRED_MESSAGE, now);
+      }
+      continue;
+    }
+    // Registry lost (hub restart) but the proxy still runs the task.
+    try {
+      s.acpClients.get(record.agentId)?.cancelTurn(record.taskId);
+    } catch { /* ignore */ }
+  }
+}
+
+/** Terminate a streaming turn from the hub side and tell the phone once. */
+function endTurn(
+  s: PeerSessionState,
+  requestId: string,
+  entry: TurnEntry,
+  message: string,
+  now: number,
+): void {
+  entry.status = 'error';
+  entry.error = message;
+  entry.terminalAt = now;
+  try {
+    markPeerTurnTerminal(requestId, now);
+  } catch { /* non-fatal */ }
+  routeToPeer(s, { type: 'agent_error', request_id: requestId, message });
+  try {
+    s.acpClients.get(entry.agentId)?.cancelTurn(entry.taskId);
+  } catch { /* ignore */ }
+}
+
+/** An open card is governed by the approval deadline, not by silence; the
+ * silence clock restarts once it is answered. */
+function endSilentTurns(peerId: string, s: PeerSessionState, now: number): void {
+  let awaitingCard: Set<string> | undefined;
+  for (const [requestId, entry] of s.turns) {
+    if (entry.status !== 'streaming') continue;
+    const last = entry.lastUpstreamAt;
+    if (last === undefined || now - last <= TURN_SILENT_LIMIT_MS) continue;
+    if (awaitingCard === undefined) {
+      try {
+        awaitingCard = new Set(listPendingApprovalsForPeer(peerId).map((a) => a.requestId));
+      } catch {
+        awaitingCard = new Set();
+      }
+    }
+    if (awaitingCard.has(requestId)) {
+      entry.lastUpstreamAt = now;
+      continue;
+    }
+    s.log?.(`turn req=${requestId} task=${entry.taskId} silent ${Math.round((now - last) / 60_000)}min — ending turn`);
+    endTurn(s, requestId, entry, TURN_SILENT_MESSAGE, now);
   }
 }
 
@@ -292,7 +390,7 @@ function tickTurnKeepalives(peerSession: PeerSessionState, now: number): void {
   }
 }
 
-const reapTimer = setInterval(reapIdlePeerSessions, 60_000);
+const reapTimer = setInterval(reapIdlePeerSessions, REAPER_INTERVAL_MS);
 reapTimer.unref();
 
 /** Test-only: close every peer session and clear the registry. */
@@ -303,9 +401,6 @@ export function resetPeerSessionsForTest(): void {
     }
     s.acpClients.clear();
     s.turns.clear();
-    for (const parked of s.detachedApprovals.values()) {
-      clearTimeout(parked.timer);
-    }
     s.detachedApprovals.clear();
     s.rebuildingTurns.clear();
     s.liveRoutes.length = 0;
@@ -352,13 +447,14 @@ export async function drivePeerConnection(opts: {
   // reused across chat turns AND across peer reconnects (see peerSessions), so
   // a peer flap does not abort in-flight agent turns.
   const peerSession = getPeerSession(peerId);
+  peerSession.log = log;
   peerSession.liveConnections += 1;
   const pairedNow = loadPairedPeers().find((p) => p.id === peerId);
   const backupDevice = pairedNow?.fingerprint ?? '';
   const acpClients = peerSession.acpClients;
   // Pending tool-call approvals: confirmationId → waiter. The phone replies
   // with agent_approval_resp; a peer disconnect MIGRATES the waiter (kept
-  // pending for reconnect) — only the 20-min timeout resolves with deny.
+  // pending for reconnect). Only the approval deadline ends it.
   const pendingApprovals = new Map<string, {
     resolve: (selected: ApprovalVerdict) => void;
     timer: NodeJS.Timeout;
@@ -440,15 +536,14 @@ export async function drivePeerConnection(opts: {
     // auto-approve paths the reply can arrive in the same tick; if we send
     // first, approval_resp hits NO MATCH and Cursor stays on [pending].
     return new Promise<ApprovalVerdict>((resolve) => {
+      // Backstop only: the reaper retires the record and ends the turn at the
+      // deadline. Unwinding as {migrated} keeps this waiter from racing it
+      // with a bare deny that would let the agent raise the next card.
       const timer = setTimeout(() => {
         pendingApprovals.delete(req.confirmationId);
-        // Mark the persisted record as resolved (deny) — otherwise a reconnect
-        // revives this card even though the agent already got the denial, and
-        // taps on it fall into the void.
-        markPendingApprovalSubmitted(req.confirmationId, '');
-        log(`approval ${req.confirmationId} timed out → deny`);
-        resolve({ id: '' }); // fail closed
-      }, APPROVAL_TIMEOUT_MS);
+        expireOverdueApprovals();
+        resolve({ id: '', migrated: true });
+      }, record.expiresAt - Date.now() + 2 * REAPER_INTERVAL_MS);
       pendingApprovals.set(req.confirmationId, {
         timer,
         resolve: (selected) => {
@@ -491,12 +586,12 @@ export async function drivePeerConnection(opts: {
   /**
    * Approval raised while NO peer connection is live (peer flap mid-turn).
    * Registering the waiter on a dead connection's map is fatal: the card can
-   * never be sent, and its 20-min timeout eventually relays a spurious DENY
-   * even if the phone already allowed via the re-sent card (deferred relay).
+   * never be sent, and a timer there would relay a spurious DENY even if the
+   * phone later allowed via the re-sent card (deferred relay).
    * Instead: persist the record (resendPendingApprovalsForPeer replays the
    * card on reconnect), park the waiter peer-level, and let the deferred
    * relay resolve it with {migrated:true} — the turn's bookkeeping unwinds
-   * without relaying anything itself. 20-min timeout = fail-closed backstop.
+   * without relaying anything itself. The approval deadline is the backstop.
    */
   const detachedApproval = (
     chatRequestId: string,
@@ -518,19 +613,7 @@ export async function drivePeerConnection(opts: {
       `task=${req.taskId} (no live connection — card replays on reconnect)`,
     );
     return new Promise<ApprovalVerdict>((resolve) => {
-      const timer = setTimeout(() => {
-        peerSession.detachedApprovals.delete(req.confirmationId);
-        markPendingApprovalSubmitted(req.confirmationId, '');
-        log(`detached approval ${req.confirmationId} timed out → deny`);
-        resolve({ id: '' }); // fail closed
-      }, APPROVAL_TIMEOUT_MS);
-      peerSession.detachedApprovals.set(req.confirmationId, {
-        timer,
-        resolve: (selected) => {
-          clearTimeout(timer);
-          resolve(selected);
-        },
-      });
+      peerSession.detachedApprovals.set(req.confirmationId, { resolve });
     });
   };
 
@@ -568,7 +651,6 @@ export async function drivePeerConnection(opts: {
       // duplicate submitResponse).
       const parked = peerSession.detachedApprovals.get(approvalId);
       if (parked !== undefined) {
-        clearTimeout(parked.timer);
         peerSession.detachedApprovals.delete(approvalId);
         parked.resolve({ id: selectedActionId, label: selectedActionLabel, migrated: true });
         log(`detached approval resolved confirmation=${approvalId} action=${selectedActionId}`);
@@ -596,7 +678,7 @@ export async function drivePeerConnection(opts: {
     }
   };
 
-  expireStalePendingApprovals();
+  expireOverdueApprovals();
   resendPendingApprovalsForPeer();
 
   // Register this connection as the peer's live route — turn output and
@@ -957,6 +1039,7 @@ export async function drivePeerConnection(opts: {
       status: 'streaming',
       accumulated: '',
       lastOutputAt: Date.now(),
+      lastUpstreamAt: Date.now(),
     };
     peerSession.turns.set(requestId, entry);
     try {
@@ -969,7 +1052,10 @@ export async function drivePeerConnection(opts: {
 
   /** Live-routing handlers shared by fresh turns and proxy-rebuilt ones. */
   const makeTurnHandlers = (requestId: string, entry: TurnEntry): AcpChatHandlers => {
+    // A turn the hub already ended (approval expiry) keeps that outcome; the
+    // proxy's follow-up "Task cancelled" must not overwrite or re-announce it.
     const finishDone = (content: string, metadata?: Record<string, unknown>): void => {
+      if (entry.status !== 'streaming') return;
       entry.status = 'done';
       entry.done = { content, metadata };
       entry.terminalAt = Date.now();
@@ -980,6 +1066,7 @@ export async function drivePeerConnection(opts: {
       routeToPeer(peerSession, { type: 'agent_done', request_id: requestId, content, ...(metadata ? { metadata } : {}) });
     };
     const finishError = (msg: string): void => {
+      if (entry.status !== 'streaming') return;
       entry.status = 'error';
       entry.error = msg;
       entry.terminalAt = Date.now();
@@ -993,11 +1080,13 @@ export async function drivePeerConnection(opts: {
       onChunk: (content) => {
         entry.accumulated += content;
         entry.lastOutputAt = Date.now();
+        entry.lastUpstreamAt = entry.lastOutputAt;
         routeToPeer(peerSession, { type: 'agent_chunk', request_id: requestId, content });
       },
       onMetadata: (metadata) => {
         entry.lastMetadata = metadata;
         entry.lastOutputAt = Date.now();
+        entry.lastUpstreamAt = entry.lastOutputAt;
         routeToPeer(peerSession, { type: 'agent_metadata', request_id: requestId, metadata });
       },
       onDone: finishDone,
@@ -1006,6 +1095,7 @@ export async function drivePeerConnection(opts: {
       // park them — a dead connection's waiter would eventually relay a
       // spurious deny (E1).
       onApproval: (a) => {
+        entry.lastUpstreamAt = Date.now();
         const live = peerSession.liveRoutes.at(-1);
         return live !== undefined
           ? live.approvalHandler(requestId, entry.agentId, a)
@@ -1168,6 +1258,7 @@ export async function drivePeerConnection(opts: {
         taskId: record.taskId,
         status: 'streaming',
         accumulated: '',
+        lastUpstreamAt: Date.now(),
       };
       const handlers = makeTurnHandlers(requestId, entry);
       let result: Awaited<ReturnType<PeerAcpClient['reattachTurn']>>;

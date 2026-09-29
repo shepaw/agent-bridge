@@ -413,8 +413,10 @@ export class ACPAgentServer {
    */
   private readonly taskReplay = new Map<string, TaskReplayEntry>();
 
-  /** Terminal (done/error) replay entries stay resumable this long. */
-  private static readonly TASK_REPLAY_TTL_MS = 25 * 60 * 1000;
+  /** Terminal (done/error) replay entries stay resumable this long. Longer
+   * than the hub's result window (2 h) so a hub restart inside that window
+   * can still rebuild the turn from here. */
+  private static readonly TASK_REPLAY_TTL_MS = 150 * 60 * 1000;
   /** Per-task accumulated-text cap; beyond it resume answers 'lost'. */
   private static readonly TASK_REPLAY_MAX_UNITS = 4_000_000;
 

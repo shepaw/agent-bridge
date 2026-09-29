@@ -120,7 +120,7 @@ export interface WaitForResponseOpts {
    * Cap on how long to block for a reply. `0` (or `Infinity`) means "no
    * artificial deadline": the waiter stays live until the reply arrives, the
    * task is cancelled (waiter rejected with TaskCancelledError), or the
-   * hard ceiling `WAIT_FOREVER_CAP_MS` (30 min) trips — a review that never
+   * hard ceiling `WAIT_FOREVER_CAP_MS` (3 h) trips — a review that never
    * comes must not park the turn on [pending] forever. Defaults to 300_000
    * (5 minutes) when omitted.
    */
@@ -132,8 +132,13 @@ export interface WaitForResponseOpts {
  * Human review legitimately takes minutes, so there is no short clock — but
  * a card that never reaches a reviewer must still fail the turn eventually
  * instead of hanging on [pending] with no way to recover.
+ *
+ * Must stay above the hub's approval deadline (SHEPAW_PEER_APPROVAL_WAIT_MS,
+ * default 2 h). The hub is the one that ends an unanswered card and records
+ * the outcome for the phone; if this cap fires first the agent silently drops
+ * the tool while the hub still replays a card that can no longer be answered.
  */
-export const WAIT_FOREVER_CAP_MS = 30 * 60 * 1000;
+export const WAIT_FOREVER_CAP_MS = 3 * 60 * 60 * 1000;
 
 export interface HubRequestOpts {
   timeoutMs?: number;
