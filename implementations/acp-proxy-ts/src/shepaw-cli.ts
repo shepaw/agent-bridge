@@ -54,6 +54,36 @@ import {
 
 const DEFAULT_NEXUSPOUCH_URL = 'http://127.0.0.1:8787';
 
+async function runStoreSearch(
+  flags: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+  io: ShepawCliIO,
+): Promise<number> {
+  const query = (flags.query ?? flags.q ?? '').trim();
+  if (!query) return emit(io, { success: false, error: 'missing --query' });
+  const client = await resolveStoreClient(env, io.fetchImpl ?? fetch);
+  if (!client) {
+    return emit(io, {
+      success: false,
+      error:
+        'no store backend configured (set NEXUSPOUCH_URL / NEXUSPOUCH_ROOT or SHEPAW_HUB_STORE_URL)',
+    });
+  }
+  const url = new URL(`${client.base.replace(/\/$/, '')}/api/v1/search`);
+  url.searchParams.set('query', query);
+  if (flags.space) url.searchParams.set('space', flags.space);
+  if (flags.uri) url.searchParams.set('uri', flags.uri);
+  const res = await (io.fetchImpl ?? fetch)(url);
+  const body = await res.json() as Record<string, unknown>;
+  if (!res.ok) {
+    return emit(io, {
+      success: false,
+      error: typeof body.error === 'string' ? body.error : `search HTTP ${res.status}`,
+    });
+  }
+  return emit(io, { success: true, ...body });
+}
+
 export interface ShepawCliIO {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
@@ -144,6 +174,7 @@ export async function resolveStoreClient(
 const USAGE = `shepaw store — read/write store:// URIs (Nexuspouch pouch)
 
   shepaw store read --uri <store://…>
+  shepaw store search --query <text> [--space <space>] [--uri <prefix>]
   shepaw store write --filename <name> --content <text>
       [--space runtime|artifacts|files|public] [--task <id>]
       [--owner <agent|group>] [--channel <session>]
@@ -170,7 +201,7 @@ shepaw context — agent self-context (resume)
       "## 自我补充 / Self Notes" section — they survive rebuilds. The gateway
       adopts the change at the end of this turn and notifies the app.
 
-shepaw chat — new session with handoff (forwarded to the paired App)
+shepaw chat — new session with handoff (created on this host)
 
   shepaw chat session create --reason <code> --summary "..."
   shepaw chat group session create --reason <code> --handoff-json '{...}'
@@ -274,6 +305,10 @@ export async function runShepawCli(
           '(enable SHEPAW_HUB_STORE_URL to forward other namespaces to the App)',
       usage: USAGE,
     });
+  }
+
+  if (command === 'search') {
+    return runStoreSearch(flags, env, io);
   }
 
   const toolName = `store_${command}`;

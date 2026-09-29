@@ -32,6 +32,8 @@ export {
   setEngineOverride,
   setHubGateway,
   setHubPeer,
+  setHubShe,
+  resolveSheModel,
   setInstanceEnvVar,
   updateCustomEngineInHub,
   updateHubMeta,
@@ -49,6 +51,7 @@ export type {
   LoadHubOptions,
   InstanceConfig,
   PeerServiceConfig,
+  SheHostConfig,
   ReverseProxyConfig,
   TunnelConfig,
 } from './config.js';

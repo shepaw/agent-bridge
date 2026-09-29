@@ -50,7 +50,7 @@ export function isHubNativeCommand(
   return false;
 }
 
-const HUB_SHIM_STORE = new Set(['read', 'write', 'list', 'meta']);
+const HUB_SHIM_STORE = new Set(['read', 'write', 'list', 'meta', 'search']);
 
 /** Store commands the Hub shim can run against this device's pouch. */
 export function keepStoreOnHub(opts: {

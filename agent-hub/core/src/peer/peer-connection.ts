@@ -11,7 +11,7 @@ import { WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { decodeFrame, encodeFrame, NoiseSession, loadOrCreateIdentity } from 'shepaw-acp-sdk';
 import type { AgentIdentity } from 'shepaw-acp-sdk';
-import { getInstance, loadOrCreateHubConfig, updateInstance } from '../config.js';
+import { getInstance, loadOrCreateHubConfig, resolveSheModel, updateInstance } from '../config.js';
 import type { InstanceConfig } from '../config.js';
 import { catalogModesWire, parseSessionMode } from '../engine-modes.js';
 import { polishInstanceResume, rebuildInstanceResume } from '../instance-acp-rpc.js';
@@ -63,6 +63,39 @@ import {
 import { loadPairedPeers } from './peer-store.js';
 import { handleInboundStoreFrame } from './peer-store-protocol.js';
 import { cancelPeerBackupRetries, onPeerConnectedForBackup } from './peer-store-backup.js';
+import {
+  SHE_AGENT_ID,
+  SHE_AGENT_NAME,
+  completeSheTurn,
+  handlePouchFrame,
+  hubPouchChat,
+  POUCH_CHAT_READ,
+  POUCH_DM_TURN,
+  POUCH_GROUP_TURN,
+  POUCH_INTERACTION_RESP,
+  POUCH_TURN_EVENT,
+} from './pouch-host.js';
+import type { MemberSpeaker } from './pouch-host.js';
+import { beginPouchApproval, settlePouchApproval } from './pouch-approval.js';
+import {
+  executeSheTool,
+  readOrchestrationInbox,
+  sheToolSpecs,
+  upsertPouchSession,
+} from './pouch-disk.js';
+
+function priorSheHistory(
+  channelId: string,
+  content: string,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const mapped = hubPouchChat.all(channelId).map((message) => ({
+    role: (message.from.type === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+    content: message.content,
+  }));
+  const last = mapped.at(-1);
+  if (last && last.role === 'user' && last.content === content) mapped.pop();
+  return mapped.slice(-16);
+}
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const LIVENESS_TIMEOUT_MS = 120_000;
@@ -1523,6 +1556,108 @@ export async function drivePeerConnection(opts: {
         case 'ack':
           // Phase 1: no chat persistence; acknowledged but ignored.
           break;
+        case POUCH_INTERACTION_RESP: {
+          const approvalId = String(obj.approval_id ?? '');
+          const selected = String(obj.selected_action_id ?? '');
+          const label = typeof obj.selected_action_label === 'string'
+            ? obj.selected_action_label
+            : undefined;
+          if (approvalId.length > 0) {
+            settlePouchApproval(approvalId, { id: selected, label });
+          }
+          break;
+        }
+        case POUCH_GROUP_TURN:
+        case POUCH_DM_TURN:
+        case POUCH_CHAT_READ: {
+          const names: Record<string, string> = { [SHE_AGENT_ID]: SHE_AGENT_NAME };
+          for (const agent of listAgents()) names[agent.id] = agent.name;
+          const channelId = String(obj.channel_id ?? '');
+          if (channelId.length > 0 && type !== POUCH_CHAT_READ) {
+            try {
+              const agentIds = Array.isArray(obj.agent_ids) ? obj.agent_ids.map(String) : [];
+              const single = String(obj.agent_id ?? '');
+              upsertPouchSession({
+                id: channelId,
+                kind: type === POUCH_GROUP_TURN ? 'group' : 'dm',
+                agentIds: agentIds.length > 0 ? agentIds : (single ? [single] : []),
+                adminAgentId: typeof obj.admin_agent_id === 'string' ? obj.admin_agent_id : undefined,
+                title: String(obj.content ?? '').slice(0, 80),
+              });
+            } catch {
+              /* session index is best-effort */
+            }
+          }
+          const turnRequestId = String(obj.request_id ?? '');
+          const she = resolveSheModel();
+          const speak: MemberSpeaker = async (req) => {
+            if (req.agentId === SHE_AGENT_ID) {
+              const text = await completeSheTurn({
+                content: req.content,
+                history: priorSheHistory(req.channelId, req.content),
+                baseUrl: she.baseUrl,
+                apiKey: she.apiKey,
+                model: she.model,
+                tools: sheToolSpecs({
+                  group: Boolean(req.groupId),
+                  memberNames: (req.members ?? []).map((member) => member.name),
+                }),
+                onTool: (name, args) => executeSheTool({
+                  name,
+                  args,
+                  groupId: req.groupId,
+                  sessionId: req.sessionId,
+                }),
+              });
+              req.onChunk(text);
+              return text;
+            }
+            const client = getAcpClient(req.agentId);
+            let full = '';
+            let failed = '';
+            await client.chat(
+              {
+                message: req.content,
+                taskId: randomUUID(),
+                sessionId: req.channelId || undefined,
+              },
+              {
+                onChunk: (chunk) => {
+                  full += chunk;
+                  req.onChunk(chunk);
+                },
+                onDone: (fullContent) => {
+                  if (fullContent.length > 0) full = fullContent;
+                },
+                onError: (message) => {
+                  failed = message;
+                },
+                onApproval: async (approvalReq) => {
+                  send({
+                    type: POUCH_TURN_EVENT,
+                    request_id: turnRequestId,
+                    kind: 'approval',
+                    approval_id: approvalReq.confirmationId,
+                    prompt: approvalReq.prompt,
+                    actions: approvalReq.actions,
+                    tool_kind: approvalReq.toolKind ?? '',
+                  });
+                  const verdict = await beginPouchApproval(approvalReq.confirmationId);
+                  return { id: verdict.id, label: verdict.label };
+                },
+              },
+            );
+            if (failed.length > 0) throw new Error(failed);
+            return full;
+          };
+          void handlePouchFrame(obj, send, {
+            speak,
+            log: hubPouchChat,
+            names,
+            readInbox: (query) => readOrchestrationInbox(query),
+          });
+          break;
+        }
         case 'store': {
           const paired = loadPairedPeers().find((p) => p.id === peerId);
           const callerDeviceId = paired?.fingerprint ?? peerId;

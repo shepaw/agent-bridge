@@ -125,6 +125,8 @@ import {
   reverseProxyWsBase,
   setHubGateway,
   setHubPeer,
+  setHubShe,
+  resolveSheModel,
   resolvePeerDeviceName,
   startGatewayRouter,
   stopGatewayRouter,
@@ -143,7 +145,7 @@ import {
 // ── multi-word dispatch ────────────────────────────────────────────
 // 'project' is kept as a backward-compat alias for 'instance' (the concept
 // was renamed); old `shepaw-hub project add ...` invocations still work.
-const multiWord = new Set(['instance', 'project', 'peers', 'peer', 'logs', 'enroll', 'gateway']);
+const multiWord = new Set(['instance', 'project', 'peers', 'peer', 'logs', 'enroll', 'gateway', 'she']);
 if (
   process.argv.length >= 4 &&
   typeof process.argv[2] === 'string' &&
@@ -1460,6 +1462,51 @@ cli
       for (const d of devices) {
         console.log(`    ${d.fingerprint}  ${d.deviceName}  (paired ${d.pairedAt})`);
       }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('she-show', 'Show 惜宝 model settings on this host (the API key is never printed)')
+  .action(() => {
+    try {
+      const cfg = loadOrCreateHubConfig();
+      const she = resolveSheModel(cfg);
+      const stored = cfg.she;
+      console.log(`base URL:  ${she.baseUrl || '(unset)'}`);
+      console.log(`model:     ${she.model}`);
+      console.log(`api key:   ${she.apiKey ? 'set' : '(unset)'}`);
+      if (!stored?.baseUrl && process.env.SHEPAW_SHE_BASE_URL) {
+        console.log('source:    SHEPAW_SHE_BASE_URL');
+      } else if (stored?.baseUrl) {
+        console.log('source:    hub.json');
+      }
+    } catch (err) {
+      exitWithError(err);
+    }
+  });
+
+cli
+  .command('she-set', 'Set 惜宝 model endpoint on this host')
+  .option('--base-url <url>', 'OpenAI-compatible base URL, including /v1')
+  .option('--model <model>', 'Model name (default gpt-4o-mini)')
+  .option('--api-key <key>', 'Bearer token stored encrypted in hub.json')
+  .action((opts: { baseUrl?: string; model?: string; apiKey?: string }) => {
+    try {
+      if (opts.baseUrl === undefined && opts.model === undefined && opts.apiKey === undefined) {
+        throw new Error('Pass --base-url, --model, or --api-key');
+      }
+      const cfg = loadOrCreateHubConfig();
+      setHubShe(cfg, {
+        ...(opts.baseUrl !== undefined && { baseUrl: opts.baseUrl }),
+        ...(opts.model !== undefined && { model: opts.model }),
+        ...(opts.apiKey !== undefined && { apiKey: opts.apiKey }),
+      });
+      const she = resolveSheModel(loadOrCreateHubConfig());
+      console.log(`惜宝 base URL: ${she.baseUrl || '(unset)'}`);
+      console.log(`惜宝 model:    ${she.model}`);
+      console.log(`惜宝 api key:  ${she.apiKey ? 'set' : '(unset)'}`);
     } catch (err) {
       exitWithError(err);
     }

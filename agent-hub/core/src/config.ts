@@ -329,6 +329,16 @@ export interface PeerServiceConfig {
   readonly masterFingerprint?: string;
 }
 
+/**
+ * 惜宝's model on this host. The API key is AES-256-GCM ciphertext.
+ * The phone does not store or supply this.
+ */
+export interface SheHostConfig {
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly apiKey?: string;
+}
+
 export interface HubConfig {
   readonly path: string;
   readonly instances: ReadonlyArray<InstanceConfig>;
@@ -338,6 +348,8 @@ export interface HubConfig {
   readonly gateway?: GatewayConfig;
   /** Device-level peer service config (host/port). */
   readonly peer?: PeerServiceConfig;
+  /** Built-in 惜宝 model. Absent until `shepaw-hub she set`. */
+  readonly she?: SheHostConfig;
   /** Per-engine overrides (disabled / displayName / envVars). */
   readonly engineOverrides?: EngineOverridesMap;
   /** Last Tunnel Server URL used — pre-filled when creating a new instance. */
@@ -395,7 +407,7 @@ function migrateLegacyInstancesDir(): void {
  * if the file's permission bits have been loosened (to catch accidental
  * `chmod -R 755 ~/.config/shepaw-hub`).
  */
-export function saveHubConfig(path: string, config: Pick<HubConfig, 'instances' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway' | 'peer' | 'engineOverrides'>): void {
+export function saveHubConfig(path: string, config: Pick<HubConfig, 'instances' | 'customEngines' | 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'gateway' | 'peer' | 'engineOverrides' | 'she'>): void {
   persist(path, config.instances, hubPersistMeta(config));
 }
 
@@ -479,6 +491,58 @@ export function setHubPeer(
   const next: HubConfig = { ...config, peer };
   persist(next.path, next.instances, hubPersistMeta(next));
   return next;
+}
+
+/** Persist 惜宝's model. `apiKey: null` clears the stored key. */
+export function setHubShe(
+  config: HubConfig,
+  patch: { baseUrl?: string; model?: string; apiKey?: string | null },
+): HubConfig {
+  const prev = config.she;
+  let apiKey = prev?.apiKey;
+  if (patch.apiKey === null) apiKey = undefined;
+  else if (typeof patch.apiKey === 'string') {
+    const trimmed = patch.apiKey.trim();
+    apiKey = trimmed.length > 0 ? encryptValue(trimmed, hubRoot()) : undefined;
+  }
+  const baseUrl = (patch.baseUrl ?? prev?.baseUrl ?? '').trim();
+  const model = (patch.model ?? prev?.model ?? 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+  const she: SheHostConfig = {
+    baseUrl,
+    model,
+    ...(apiKey !== undefined ? { apiKey } : {}),
+  };
+  const next: HubConfig = { ...config, she };
+  persist(next.path, next.instances, hubPersistMeta(next));
+  return next;
+}
+
+/**
+ * Effective 惜宝 model. Environment variables win over hub.json so a
+ * one-off shell can still point at another endpoint.
+ */
+export function resolveSheModel(config?: HubConfig): {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+} {
+  const cfg = config ?? loadOrCreateHubConfig();
+  const envUrl = process.env.SHEPAW_SHE_BASE_URL?.trim() ?? '';
+  const envKey = process.env.SHEPAW_SHE_API_KEY?.trim() ?? '';
+  const envModel = process.env.SHEPAW_SHE_MODEL?.trim() ?? '';
+  let storedKey = '';
+  if (cfg.she?.apiKey) {
+    try {
+      storedKey = decryptValue(cfg.she.apiKey, hubRoot());
+    } catch {
+      storedKey = '';
+    }
+  }
+  return {
+    baseUrl: envUrl || cfg.she?.baseUrl?.trim() || '',
+    model: envModel || cfg.she?.model?.trim() || 'gpt-4o-mini',
+    apiKey: envKey || storedKey,
+  };
 }
 
 /**
@@ -999,10 +1063,11 @@ interface OnDiskSchema {
   gateway?: GatewayConfig;
   peer?: PeerServiceConfig;
   engineOverrides?: EngineOverridesMap;
+  she?: SheHostConfig;
 }
 
 function hubPersistMeta(
-  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway' | 'peer' | 'engineOverrides'>,
+  config: Pick<HubConfig, 'lastTunnelServerUrl' | 'lastTunnelSecretHint' | 'credentialHints' | 'customEngines' | 'gateway' | 'peer' | 'engineOverrides' | 'she'>,
 ): PersistOptions {
   return {
     lastTunnelServerUrl: config.lastTunnelServerUrl,
@@ -1012,6 +1077,7 @@ function hubPersistMeta(
     gateway: config.gateway,
     peer: config.peer,
     engineOverrides: config.engineOverrides,
+    she: config.she,
   };
 }
 
@@ -1059,6 +1125,7 @@ function loadExisting(path: string): HubConfig {
 
   const customEngines = parseCustomEngines(obj.customEngines);
   const engineOverrides = parseEngineOverrides(obj.engineOverrides);
+  const she = parseSheConfig(obj.she);
 
   const instances: InstanceConfig[] = [];
   for (let i = 0; i < instancesRaw.length; i++) {
@@ -1109,7 +1176,20 @@ function loadExisting(path: string): HubConfig {
     gateway: parseGatewayConfig(obj.gateway),
     peer: parsePeerConfig(obj.peer),
     ...(engineOverrides !== undefined && { engineOverrides }),
+    ...(she !== undefined && { she }),
   };
+}
+
+function parseSheConfig(v: unknown): SheHostConfig | undefined {
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const baseUrl = typeof o.baseUrl === 'string' ? o.baseUrl.trim() : '';
+  const model = typeof o.model === 'string' && o.model.trim().length > 0
+    ? o.model.trim()
+    : 'gpt-4o-mini';
+  const apiKey = typeof o.apiKey === 'string' && o.apiKey.length > 0 ? o.apiKey : undefined;
+  if (baseUrl.length === 0 && apiKey === undefined) return undefined;
+  return { baseUrl, model, ...(apiKey !== undefined && { apiKey }) };
 }
 
 function parsePeerConfig(v: unknown): PeerServiceConfig | undefined {
@@ -1184,6 +1264,7 @@ interface PersistOptions {
   gateway?: GatewayConfig;
   peer?: PeerServiceConfig;
   engineOverrides?: EngineOverridesMap;
+  she?: SheHostConfig;
 }
 
 function persist(path: string, instances: ReadonlyArray<InstanceConfig>, opts?: PersistOptions): void {
@@ -1197,6 +1278,7 @@ function persist(path: string, instances: ReadonlyArray<InstanceConfig>, opts?: 
     ...(opts?.gateway !== undefined && { gateway: opts.gateway }),
     ...(opts?.peer !== undefined && { peer: opts.peer }),
     ...(opts?.engineOverrides !== undefined && { engineOverrides: opts.engineOverrides }),
+    ...(opts?.she !== undefined && { she: opts.she }),
   };
 
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });

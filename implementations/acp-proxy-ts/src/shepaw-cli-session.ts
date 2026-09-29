@@ -2,9 +2,8 @@
  * Hub PATH shim for `shepaw chat session create` /
  * `shepaw chat group session create`.
  *
- * Hub cannot create App channels locally. POST /api/v1/chat/session-create
- * (peer-session-create.ts) forwards to the paired phone, which runs the same
- * services as the in-process Dart CLI and attaches the switch card.
+ * POST /api/v1/chat/session-create records the channel on this host's pouch.
+ * The phone displays the new id; it does not mint the session.
  */
 
 import { resolveHubStoreBase } from './hub-store-env.js';

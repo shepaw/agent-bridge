@@ -1,15 +1,15 @@
 /**
- * Hub → App RPC for `shepaw chat session create` / group session create.
+ * `shepaw chat session create` lands on this host.
  *
- * The engine's PATH shim cannot create App channels (Hub session/new is a
- * different namespace). This posts a control frame to the paired phone, which
- * runs DmSessionCreateService / GroupSessionCreateService and returns the
- * switch-card payload.
+ * The new channel id is recorded in the pouch session registry. The phone
+ * only displays it. `requestAppSessionCreate` remains for a caller that
+ * still needs the phone to mint an App-side card.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { findLivePeerId, sendToPeer } from './peer-connection.js';
+import { createLocalPouchSession } from './pouch-disk.js';
 
 const CALL_TIMEOUT_MS = 20_000;
 
@@ -105,9 +105,13 @@ export async function handleSessionCreateHttp(
     sendJson(res, 400, { error: 'invalid json' });
     return true;
   }
-  const out = await requestAppSessionCreate(payload);
-  const failed = typeof out.error === 'string' && out.error.length > 0;
-  sendJson(res, failed ? 200 : 200, out);
+  let out: Record<string, unknown>;
+  try {
+    out = createLocalPouchSession(payload);
+  } catch (err) {
+    out = { error: err instanceof Error ? err.message : String(err) };
+  }
+  sendJson(res, 200, out);
   return true;
 }
 

@@ -8,7 +8,8 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isInstanceEnabled, loadOrCreateHubConfig } from '../config.js';
+import { isInstanceEnabled, loadOrCreateHubConfig, resolveSheModel } from '../config.js';
+import { SHE_AGENT_ID, SHE_AGENT_NAME } from './pouch-host.js';
 import {
   GENERIC_DEFAULT_AVATAR,
   defaultAvatarForEngine,
@@ -59,7 +60,7 @@ export interface AgentListEntry {
   readonly running: boolean;
   readonly enabled: boolean;
   /** Paired apps may start/stop/enable this instance from device details. */
-  readonly manageable: true;
+  readonly manageable: boolean;
   /** Advertised to the Shepaw app (peer_agent_client_service.dart). */
   readonly capabilities: readonly string[];
   readonly bio?: string;
@@ -84,7 +85,21 @@ function isInstanceRunning(instanceId: string): boolean {
 
 export { isInstanceRunning };
 
-/** List managed instances as `agent_list_resp` entries. */
+function sheAgentEntry(): AgentListEntry {
+  const she = resolveSheModel();
+  return {
+    id: SHE_AGENT_ID,
+    name: SHE_AGENT_NAME,
+    engine: 'she',
+    running: she.baseUrl.length > 0,
+    enabled: true,
+    manageable: false,
+    capabilities: ['chat', 'group', 'store'],
+    bio: '跑在这台主机上的内置助手',
+  };
+}
+
+/** List managed instances as `agent_list_resp` entries, plus built-in 惜宝. */
 export function listAgents(): AgentListEntry[] {
   const cfg = loadOrCreateHubConfig();
   let workspaceDeviceId: string | undefined;
@@ -93,7 +108,7 @@ export function listAgents(): AgentListEntry[] {
   } catch {
     workspaceDeviceId = undefined;
   }
-  return cfg.instances.map((i) => {
+  const instances = cfg.instances.map((i) => {
     const payload = loadEngineAvatarPayload(i.engine);
     const extras = i.additionalDirectories ?? [];
     const workspaceUris =
@@ -129,4 +144,6 @@ export function listAgents(): AgentListEntry[] {
         : {}),
     };
   });
+  if (instances.some((agent) => agent.id === SHE_AGENT_ID)) return instances;
+  return [...instances, sheAgentEntry()];
 }

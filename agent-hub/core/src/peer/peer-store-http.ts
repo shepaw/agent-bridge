@@ -11,6 +11,7 @@ import {
   parseStoreUri,
 } from './peer-store-protocol.js';
 import { getPeerLocalStore } from './peer-local-store.js';
+import { searchLocalStore } from './pouch-disk.js';
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -286,6 +287,28 @@ export async function handleStoreHttp(
       'Content-Length': out.bytes.length,
     });
     res.end(out.bytes);
+    return true;
+  }
+
+  if (req.method === 'GET' && path === '/api/v1/search') {
+    const query = url.searchParams.get('query') ?? url.searchParams.get('q') ?? '';
+    if (query.trim().length === 0) {
+      sendJson(res, 400, { error: 'missing query' });
+      return true;
+    }
+    try {
+      const found = searchLocalStore({
+        query,
+        space: url.searchParams.get('space') ?? undefined,
+        uri: url.searchParams.get('uri') ?? undefined,
+        deviceId: self,
+      });
+      sendJson(res, 200, found);
+    } catch (err) {
+      sendJson(res, 500, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return true;
   }
 
