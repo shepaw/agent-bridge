@@ -101,9 +101,10 @@ describe('buildStorePouchCard', () => {
     const card = buildStorePouchCard({ deviceId: '352821253aefdfba' });
     expect(card).toContain('`runtime`');
     expect(card).toContain('artifacts/<task>/');
-    expect(card).toContain('`--space public`');
+    expect(card).toContain('用途未定，不要写入');
+    expect(card).not.toContain('`--space public`');
     expect(card).toContain('`--space workspaces --group <gid>`');
-    expect(card).toContain('`--space files` 会静默落到 `runtime`');
+    expect(card).toContain('`--space files` 会报错');
     expect(card).not.toContain('长期文件');
   });
 

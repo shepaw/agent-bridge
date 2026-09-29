@@ -81,8 +81,8 @@ v1 卡面有 5 处「教了但做不到 / 教错了」的规则，会直接导�
   明确禁止 store 树内 symlink，且 `folder_binding_service.dart` 的目录绑定是
   **copy 摄取 + watcher 对账**（单向，外部 → `files/`）。两侧对「工作区文件是不是
   同一份」的语义不一致，仍是待办（见 §4-2）。
-- **11 public**：待用户确认（见下）。
-- **13 简历**：待用户确认（见下）。
+- **11 public**（2026-09-28）：用途未定。分区和 `--space public` 仍可用，卡面与系统技能改为「不要写入」，不再当成推荐落点。
+- **13 简历**（2026-09-28）：不迁 `cognition`。跨端读取走现有 `store read`：属主在线时在属主本机读 `files/<device>/<agentId>/resume.md`，属主离线才回退 master 镜像。不另开简历 RPC。
 5. **工作区挂载 vs 摄取** —— 已定「两档保证」：挂载视图（`workspaces`，权威在用户磁盘，
    不版本/不镜像/不跨设备）＋ 摄取产物（`files`/`public`/`runtime`，享受全部能力）。
    实现方式选**挂载注册表**而非放宽 symlink（App 侧 LocalStore 明确禁 symlink，
