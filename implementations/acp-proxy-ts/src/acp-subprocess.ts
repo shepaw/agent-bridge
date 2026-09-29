@@ -1011,8 +1011,14 @@ export class AcpSubprocess {
       // A quiet settle closes the turn from text already streamed, without
       // waiting for a `result`/`idle` the CLI may never emit. The prompt
       // promise is left to reject or resolve after session/cancel.
+      //
+      // Cancel rejects BOTH the update loop and abortPromise. Promise.race
+      // only observes the first; the sibling rejection used to be unhandled
+      // and Node exited the gateway (dashboard task stuck, or the process
+      // gone) instead of finishing the turn.
       const run = (async (): Promise<DrainTurnResult> => {
         const both = Promise.all([promptPromise, updatesLoop]).then(([, drain]) => drain);
+        void both.catch(() => undefined);
         const drain = await updatesLoop.then((result) => {
           if (result.kind === 'ok' && result.quietSettled) return result;
           return both;
@@ -1027,6 +1033,8 @@ export class AcpSubprocess {
         }
         return drain;
       })();
+      void run.catch(() => undefined);
+      void abortPromise.catch(() => undefined);
       return await Promise.race([run, abortPromise]);
     } finally {
       // Only drop our own entry — a concurrent turn on the same upstream
