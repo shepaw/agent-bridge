@@ -14,6 +14,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import {
   cursorIdeCwdMatches,
+  cursorIdeTranscriptMtimeIso,
   listCursorIdeDiskSessions,
   type CursorIdeSessionSummary,
 } from './disk-history/cursor-ide.js';
@@ -167,6 +168,24 @@ export async function runCursorIdeSync(opts: {
   return { cwd, added, updated, total: sessions.length, sessions };
 }
 
+/**
+ * Stamp sent to the app for incremental sync.
+ *
+ * Message time wins. When the transcript has none, file mtime (stable until
+ * the file is written) then the original sync click time. An empty stamp makes
+ * the app treat the session as dirty on every open and re-anchor it to "now".
+ */
+export function cursorIdeListedUpdatedAt(
+  meta: { updatedAt: string; syncedAt: string },
+  fileMtimeIso?: string,
+): string {
+  const fromMessages = meta.updatedAt.trim();
+  if (fromMessages.length > 0) return fromMessages;
+  const mtime = (fileMtimeIso ?? '').trim();
+  if (mtime.length > 0) return mtime;
+  return meta.syncedAt.trim();
+}
+
 /** Summaries for agent.sessions.list — only manifest entries, scoped to cwd. */
 export async function listSyncedCursorIdeSessions(opts: {
   cwd: string;
@@ -177,11 +196,16 @@ export async function listSyncedCursorIdeSessions(opts: {
   if (manifest === null) return [];
   if (resolve(manifest.cwd) !== cwd) return [];
 
-  return Object.entries(manifest.sessions).map(([sessionId, meta]) => ({
-    sessionId,
-    title: meta.title,
-    updatedAt: meta.updatedAt,
-    cwd,
+  return Promise.all(Object.entries(manifest.sessions).map(async ([sessionId, meta]) => {
+    const fileMtime = meta.updatedAt.trim().length > 0
+      ? undefined
+      : await cursorIdeTranscriptMtimeIso(cwd, sessionId);
+    return {
+      sessionId,
+      title: meta.title,
+      updatedAt: cursorIdeListedUpdatedAt(meta, fileMtime),
+      cwd,
+    };
   }));
 }
 

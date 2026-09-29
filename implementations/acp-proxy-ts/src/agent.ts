@@ -759,7 +759,14 @@ export class AcpProxyAgent extends ACPAgentServer {
       if (isCursorIdeSessionSynced(manifest, upstreamId, this.cwd)) {
         const fromIde = await loadCursorIdeHistory(upstreamId, this.cwd);
         if (fromIde !== null && fromIde.length > 0) {
-          const messages = ensureHistoryCreatedAt(fromIde);
+          const entry = manifest?.sessions[upstreamId];
+          const anchor = entry?.updatedAt?.trim() || entry?.syncedAt?.trim() || undefined;
+          // Anchor unstamped turns to the transcript time, not Date.now().
+          // A fresh "now" on every read makes the app sort this historical
+          // session above conversations created later on the device.
+          const messages = ensureHistoryCreatedAt(fromIde, {
+            sessionUpdatedAt: anchor,
+          });
           log(
             'session history from cursor IDE disk session=%s messages=%d',
             upstreamId,

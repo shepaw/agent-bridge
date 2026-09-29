@@ -13,6 +13,7 @@ import {
   runCursorIdeSync,
   loadCursorIdeSyncManifest,
   shouldBindListedSessionAsAcp,
+  cursorIdeListedUpdatedAt,
 } from '../src/cursor-ide-sync.js';
 import { claudeProjectSlug, cursorProjectSlug } from '../src/disk-history/util.js';
 
@@ -106,6 +107,22 @@ describe('cursor IDE disk history', () => {
     );
 
     expect(await listCursorIdeDiskSessions(cwd)).toEqual([]);
+  });
+});
+
+describe('cursorIdeListedUpdatedAt', () => {
+  it('prefers message time, then file mtime, then the original sync click', () => {
+    expect(cursorIdeListedUpdatedAt(
+      { updatedAt: '2026-07-18T15:53:00.000Z', syncedAt: '2026-09-29T01:00:00.000Z' },
+      '2026-09-29T02:00:00.000Z',
+    )).toBe('2026-07-18T15:53:00.000Z');
+    expect(cursorIdeListedUpdatedAt(
+      { updatedAt: '  ', syncedAt: '2026-09-29T01:00:00.000Z' },
+      '2026-08-01T00:00:00.000Z',
+    )).toBe('2026-08-01T00:00:00.000Z');
+    expect(cursorIdeListedUpdatedAt(
+      { updatedAt: '', syncedAt: '2026-09-29T01:00:00.000Z' },
+    )).toBe('2026-09-29T01:00:00.000Z');
   });
 });
 

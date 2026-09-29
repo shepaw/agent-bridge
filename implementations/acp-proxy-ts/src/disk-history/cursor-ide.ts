@@ -123,6 +123,19 @@ export async function loadCursorIdeHistory(
   return parseCursorIdeJsonl(transcriptPath(cwd, sessionId));
 }
 
+/** File mtime of a Cursor IDE transcript, used when message stamps are missing. */
+export async function cursorIdeTranscriptMtimeIso(
+  cwd: string,
+  sessionId: string,
+): Promise<string | undefined> {
+  try {
+    const info = await stat(transcriptPath(cwd, sessionId));
+    return info.mtime.toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * List Cursor IDE conversations persisted for `cwd`. Skips subagent transcripts
  * and sessions with no readable user/agent turns.
