@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { describe, expect, it, afterEach } from 'vitest';
-import { PeerLocalStore } from '../src/peer/peer-local-store.js';
+import { ALL_SPACES, PeerLocalStore, SHARED_SPACES } from '../src/peer/peer-local-store.js';
 import { handleInboundStoreFrame } from '../src/peer/peer-store-protocol.js';
 
 describe('PeerLocalStore', () => {
@@ -923,5 +923,15 @@ describe('PeerLocalStore', () => {
     });
     expect(again.upload_id).toBe(begin.upload_id);
     expect(again.received).toBe(3);
+  });
+
+  it('accepts the app-side spaces and shares them across paired devices', () => {
+    // slips / instructions / tools exist in Dart StoreSpace.all and Go
+    // BuiltinSpaces(); a name missing from ALL_SPACES fails every op bad_op.
+    for (const space of ['slips', 'instructions', 'tools']) {
+      expect(ALL_SPACES.has(space)).toBe(true);
+      expect(SHARED_SPACES.has(space)).toBe(true);
+    }
+    for (const space of SHARED_SPACES) expect(ALL_SPACES.has(space)).toBe(true);
   });
 });

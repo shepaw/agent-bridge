@@ -36,6 +36,9 @@ const LOCAL_BROWSER_SPACES = [
   'public',
   'memory',
   'artifacts',
+  'slips',
+  'instructions',
+  'tools',
   'agents',
 ] as const;
 

@@ -39,7 +39,31 @@ import {
 import { basename, dirname, join, normalize, relative, sep } from 'node:path';
 import { peerStoreRoot } from '../paths.js';
 
-export const SHARED_SPACES = new Set(['artifacts', 'files', 'workspaces', 'public']);
+/**
+ * Spaces a paired device may read without a master claim.
+ *
+ * Mirrors Dart `StoreSpace.sharedReadable` (shepaw/lib/storage/store_protocol.dart)
+ * and Go `SharedReadable` (storage-node/internal/protocol/protocol.go).
+ * Adding a space here silently widens cross-device read.
+ */
+export const SHARED_SPACES = new Set([
+  'artifacts',
+  'files',
+  'workspaces',
+  'public',
+  'slips',
+  'instructions',
+  'tools',
+]);
+
+/**
+ * Every space the local store accepts.
+ *
+ * Mirrors Dart `StoreSpace.all` + Go `BuiltinSpaces()`, plus `sessions` /
+ * `agents`, which are hub-only. Keep in sync when either side adds a space —
+ * a name missing here fails every op with `bad_op` before the filesystem is
+ * even consulted.
+ */
 export const ALL_SPACES = new Set([
   'runtime',
   'artifacts',
@@ -54,6 +78,11 @@ export const ALL_SPACES = new Set([
   'sessions',
   'workspaces',
   'agents',
+  // Jade slips (user todos) and instruction sets have dedicated app screens;
+  // `tools` carries the system skill the scope card points agents at.
+  'slips',
+  'instructions',
+  'tools',
 ]);
 export const MAX_CHUNK = 64 * 1024;
 
